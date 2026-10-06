@@ -225,7 +225,7 @@
   .m-button,
   .m-feature-card { transition: none; }
 }
-/* Browser history controls shared by every page shell. */
+/* Browser history controls, used on the authentication screens. */
 .history-controls {
   --history-color: var(--foreground);
   --history-surface: var(--surface);
@@ -252,51 +252,19 @@
   background: transparent;
   font-size: .72rem;
   font-weight: 800;
+  cursor: pointer;
   transition: background .2s, color .2s;
 }
 .history-controls button:not(:disabled):hover { background: rgba(67, 179, 205, .15); }
 .history-controls button:disabled { opacity: .42; cursor: not-allowed; }
 .history-controls-divider { width: 1px; height: 18px; background: var(--history-border); }
-.m-page-history {
-  position: sticky;
-  top: 80px;
-  z-index: 49;
-  background: #0a2033;
-  border-bottom: 1px solid rgba(121, 226, 240, .17);
-}
-.m-page-history .m-container {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  min-height: 49px;
-}
-.m-page-history .history-controls {
-  --history-color: #d9f5fa;
-  --history-surface: rgba(121, 226, 240, .07);
-  --history-border: rgba(121, 226, 240, .23);
-}
-.app-page-history {
-  position: sticky;
-  top: 76px;
-  z-index: 19;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  min-height: 51px;
-  padding: 6px 34px;
-  background: var(--card);
-  border-bottom: 1px solid var(--border);
-}
-.auth-history-row { display: flex; justify-content: flex-end; margin: -12px -12px 13px 0; }
+.auth-history-row { display: flex; justify-content: flex-start; margin: 0 0 18px; }
 .m-human-image img { object-position: 51% center; }
-.m-solution-story .m-page-image img { object-position: 57% center; }
+.m-solution-story .m-page-image img { object-position: 53% center; }
 .m-about-hero .m-page-image img { object-position: 53% center; }
+.m-about-photo img { object-position: 51% 46%; }
 @media (max-width: 760px) {
-  .app-page-history { padding-inline: 15px; }
-  .m-page-history .m-container { min-height: 46px; }
   .history-controls button { min-height: 36px; }
-  .auth-history-row { margin: -4px -4px 12px 0; }
+  .auth-history-row { margin-bottom: 14px; }
 }
 
-@media (max-width: 900px) { .m-page-history { top: 66px; } }
-@media (max-width: 760px) { .app-page-history { top: 64px; } }
