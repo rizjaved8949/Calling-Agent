@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.DS_Store
+.chrome-qa/
+.qa-chrome-*/
+.cdp-qa/
