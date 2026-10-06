@@ -225,3 +225,78 @@
   .m-button,
   .m-feature-card { transition: none; }
 }
+/* Browser history controls shared by every page shell. */
+.history-controls {
+  --history-color: var(--foreground);
+  --history-surface: var(--surface);
+  --history-border: var(--border);
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--history-border);
+  border-radius: 10px;
+  color: var(--history-color);
+  background: var(--history-surface);
+}
+.history-controls button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 6px 11px;
+  border: 0;
+  border-radius: 7px;
+  color: inherit;
+  background: transparent;
+  font-size: .72rem;
+  font-weight: 800;
+  transition: background .2s, color .2s;
+}
+.history-controls button:not(:disabled):hover { background: rgba(67, 179, 205, .15); }
+.history-controls button:disabled { opacity: .42; cursor: not-allowed; }
+.history-controls-divider { width: 1px; height: 18px; background: var(--history-border); }
+.m-page-history {
+  position: sticky;
+  top: 80px;
+  z-index: 49;
+  background: #0a2033;
+  border-bottom: 1px solid rgba(121, 226, 240, .17);
+}
+.m-page-history .m-container {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 49px;
+}
+.m-page-history .history-controls {
+  --history-color: #d9f5fa;
+  --history-surface: rgba(121, 226, 240, .07);
+  --history-border: rgba(121, 226, 240, .23);
+}
+.app-page-history {
+  position: sticky;
+  top: 76px;
+  z-index: 19;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 51px;
+  padding: 6px 34px;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+}
+.auth-history-row { display: flex; justify-content: flex-end; margin: -12px -12px 13px 0; }
+.m-human-image img { object-position: 51% center; }
+.m-solution-story .m-page-image img { object-position: 57% center; }
+.m-about-hero .m-page-image img { object-position: 53% center; }
+@media (max-width: 760px) {
+  .app-page-history { padding-inline: 15px; }
+  .m-page-history .m-container { min-height: 46px; }
+  .history-controls button { min-height: 36px; }
+  .auth-history-row { margin: -4px -4px 12px 0; }
+}
+
+@media (max-width: 900px) { .m-page-history { top: 66px; } }
+@media (max-width: 760px) { .app-page-history { top: 64px; } }
