@@ -18,7 +18,7 @@
 .app .button{border-radius:7px}
 .app .tabs{gap:14px}
 .app .table th{background:var(--surface)}
-.dashboard-page .dash-hero{min-height:287px;border-radius:15px;position:relative;overflow:hidden;background:oklch(.18 .035 260) url('/hero-operations.png?v=4') center 44%/cover;margin-bottom:22px;color:white}
+.dashboard-page .dash-hero{min-height:287px;border-radius:15px;position:relative;overflow:hidden;background:oklch(.18 .035 260) url('/ai-voice-hero.png') center 44%/cover;margin-bottom:22px;color:white}
 .dashboard-page .dash-hero-shade{position:absolute;inset:0;background:linear-gradient(90deg,oklch(.15 .034 260 / .96) 0%,oklch(.17 .035 260 / .88) 43%,oklch(.2 .035 260 / .13) 100%)}
 .dashboard-page .dash-hero-content{position:relative;padding:36px 39px;max-width:760px}
 .dashboard-page .dash-hero-kicker{display:flex;align-items:center;gap:9px;color:var(--platform);font-size:.65rem;font-weight:800;letter-spacing:.16em}
@@ -35,7 +35,7 @@
 .dashboard-page .split>.card{min-height:330px}
 .dashboard-page .split>.card h2,.dashboard-page>.card h2{font-size:1rem}
 .dashboard-page .split .chart{height:245px}
-.auth-page{background:linear-gradient(90deg,oklch(.18 .034 260 / .8),oklch(.18 .034 260 / .45)),url('/hero-operations.png?v=4') center/cover}
+.auth-page{background:linear-gradient(90deg,oklch(.18 .034 260 / .8),oklch(.18 .034 260 / .45)),url('/ai-voice-hero.png') center/cover}
 .auth-card{--foreground:oklch(.22 .035 259);--muted:oklch(.5 .015 260);--card:oklch(.995 .002 90);--surface:oklch(.96 .008 90);--border:oklch(.88 .012 90);--primary:oklch(.25 .06 260);--primary-foreground:white;color:var(--foreground);background:var(--card);box-shadow:0 25px 70px oklch(.1 .02 260 / .34);border:0;padding:42px}
 .auth-card .brand{font-size:1.55rem}
 .auth-card h1{margin-bottom:7px}
