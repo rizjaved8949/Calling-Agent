@@ -80,9 +80,9 @@
   isolation: isolate;
 }
 .m-hero-photo { inset: 0; }
-.m-hero-photo img { object-position: center center; }
+.m-hero-photo img { object-position: 64% 40%; opacity: .34; filter: saturate(.7) contrast(1.04); }
 .m-hero-shade {
-  background: linear-gradient(90deg, #061626 0%, rgba(6, 22, 38, .96) 25%, rgba(6, 22, 38, .71) 48%, rgba(6, 22, 38, .08) 75%), linear-gradient(0deg, rgba(6, 22, 38, .52), transparent 45%);
+  background: linear-gradient(90deg, #061626 0%, rgba(6, 22, 38, .97) 32%, rgba(6, 22, 38, .88) 60%, rgba(6, 22, 38, .8) 100%), linear-gradient(0deg, rgba(6, 22, 38, .6), transparent 50%);
 }
 .m-hero:after {
   content: "";
@@ -92,8 +92,18 @@
   z-index: 0;
   background: repeating-linear-gradient(90deg, transparent 0 89px, rgba(121, 226, 240, .025) 90px 91px);
 }
-.m-hero-inner { z-index: 1; }
-.m-hero-copy { width: min(650px, 58%); }
+.m-hero-inner {
+  z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1.02fr) minmax(0, .98fr);
+  align-items: center;
+  gap: 54px;
+}
+.m-hero-art { position: relative; padding: 46px 0; }
+.m-hero-art .m-app-preview { transform: rotate(-1.1deg) scale(.97); box-shadow: 0 34px 80px rgba(2, 12, 24, .55); }
+/* The strip that stops the hero ending in a hard horizontal cut. */
+.m-hero-fade { position: absolute; inset-inline: 0; bottom: 0; height: 150px; z-index: 1; pointer-events: none; background: linear-gradient(0deg, #061626 6%, rgba(6, 22, 38, 0) 100%); }
+.m-hero-copy { width: 100%; max-width: 560px; }
 .m-hero h1 { max-width: 700px; }
 .m-hero p { color: #d0e2ed; }
 .m-hero .m-button-gold,
@@ -101,13 +111,13 @@
 .m-hero-foot svg { color: var(--m-gold); }
 .m-hero-hud {
   position: absolute;
-  right: max(4vw, 35px);
-  bottom: 35px;
+  right: -14px;
+  bottom: 10px;
   z-index: 2;
   display: grid;
-  gap: 11px;
-  width: 250px;
-  padding: 18px 20px;
+  gap: 5px;
+  width: 210px;
+  padding: 13px 16px;
   border: 1px solid rgba(121, 226, 240, .38);
   border-radius: 13px;
   background: rgba(5, 23, 39, .76);
@@ -118,8 +128,10 @@
 .m-hud-status { display: flex; align-items: center; gap: 10px; font: 700 .65rem "JetBrains Mono", monospace; letter-spacing: .08em; }
 .m-hud-dot { display: inline-block; flex: none; width: 7px; height: 7px; border-radius: 50%; }
 .m-hud-wave { color: #79e2f0; font: 700 1.5rem "JetBrains Mono", monospace; letter-spacing: -.11em; white-space: nowrap; line-height: 1; }
-.m-hud-caption { font: 600 .55rem "JetBrains Mono", monospace; letter-spacing: .12em; color: #a7c3d3; }
+.m-hud-caption { font: 600 .62rem "JetBrains Mono", monospace; letter-spacing: .07em; color: #a7c3d3; }
 .m-proof { background: #eaf4f9; }
+.m-proof-inner { justify-content: flex-start; gap: 36px; flex-wrap: wrap; min-height: 76px; }
+.m-proof-inner > span { padding-inline-end: 36px; border-inline-end: 1px solid rgba(7, 40, 64, .14); }
 .m-feature-card,
 .m-solution-card,
 .m-resource-card,
@@ -208,14 +220,17 @@
   .m-hero-photo img { object-position: 62% center; }
   .m-hero-shade { background: linear-gradient(90deg, rgba(6, 22, 38, .94), rgba(6, 22, 38, .68)), linear-gradient(0deg, #061626, transparent 70%); }
   .m-hero-hud { display: none; }
-  .m-hero-copy { width: 100%; }
+  .m-hero-copy { width: 100%; max-width: none; }
+  .m-hero-inner { grid-template-columns: 1fr; gap: 0; }
+  .m-hero-art { padding: 0 0 54px; }
+  .m-hero-art .m-app-preview { transform: none; }
 }
 @media (max-width: 600px) {
-  .m-hero { min-height: 720px; }
-  .m-hero-inner { min-height: 720px; align-items: flex-end; }
+  .m-hero { min-height: 0; }
+  .m-hero-inner { min-height: 0; align-items: stretch; }
   .m-hero-photo img { object-position: 64% top; }
-  .m-hero-shade { background: linear-gradient(0deg, #061626 2%, rgba(6, 22, 38, .96) 35%, rgba(6, 22, 38, .35) 100%); }
-  .m-hero-copy { padding-top: 245px; padding-bottom: 38px; }
+  .m-hero-shade { background: linear-gradient(0deg, #061626 2%, rgba(6, 22, 38, .95) 45%, rgba(6, 22, 38, .82) 100%); }
+  .m-hero-copy { padding-top: 48px; padding-bottom: 30px; }
   .m-hero h1 { font-size: clamp(2.7rem, 10vw, 4rem); }
   .m-hero p { font-size: .94rem; }
   .dashboard-page .dash-hero { background-position: 64% center; }
