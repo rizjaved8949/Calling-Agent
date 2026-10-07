@@ -84,10 +84,11 @@ export function PlatformCompanyDetail(){
     <div className="card stack">
       <h2>{t('Numbers and setup')}</h2>
       <div className="table-wrap"><table className="table">
-        <thead><tr><th>{t('Channel')}</th><th>{t('Number')}</th><th>{t('Provider')}</th><th>{t('Company sees')}</th><th>{t('Raw status')}</th></tr></thead>
+        <thead><tr><th>{t('Purpose')}</th><th>{t('Channel')}</th><th>{t('Number')}</th><th>{t('Provider')}</th><th>{t('Company sees')}</th><th>{t('Raw status')}</th></tr></thead>
         <tbody>{channels.map(ch=>{
-          const task=tasks.find(x=>x.kind===ch.type);
+          const task=tasks.find(x=>x.channelId===ch.id);
           return <tr key={ch.id}>
+            <td><strong>{ch.label}</strong>{ch.isPrimary&&<span className="small muted"> · main</span>}</td>
             <td>{t(CHANNEL_LABEL[ch.type])}</td>
             <td className="mono">{ch.displayNumber||'—'}</td>
             <td className="small muted">{ch.provider}</td>
@@ -102,7 +103,7 @@ export function PlatformCompanyDetail(){
       <h2>{t('Credentials')}</h2>
       <p className="small muted">{t('Entered by us on the company’s behalf. The value is discarded on save; only the last four characters are kept.')}</p>
       <div className="field-grid">
-        <div className="field"><label>{t('Channel')}</label><select className="select" value={channelId} onChange={e=>setChannelId(e.target.value)}>{channels.map(c=><option key={c.id} value={c.id}>{t(CHANNEL_LABEL[c.type])}</option>)}</select></div>
+        <div className="field"><label>{t('Number')}</label><select className="select" value={channelId} onChange={e=>setChannelId(e.target.value)}>{channels.map(c=><option key={c.id} value={c.id}>{c.label} — {t(CHANNEL_LABEL[c.type])}</option>)}</select></div>
         <div className="field"><label>{t('Credential')}</label><select className="select" value={keyName} onChange={e=>setKeyName(e.target.value)}>
           {['apiKey','accessToken','appSecret','phoneNumberId','businessAccountId','sipTrunkId','webhookVerifyToken'].map(k=><option key={k} value={k}>{k}</option>)}
         </select></div>
@@ -144,16 +145,16 @@ export function PlatformProvisioning(){
     {sorted.length===0?<Empty icon={ServerCog} title="Nothing waiting" body="New requests appear here as companies sign up."/>:
     <div className="stack">{sorted.map(task=>{
       const org=store.organizations.find(x=>x.id===task.orgId);
-      const channel=store.channels.find(c=>c.orgId===task.orgId&&c.type===task.kind);
+      const channel=store.channels.find(c=>c.id===task.channelId);
       return <div className="card stack" key={task.id}>
         <div className="row between">
-          <div><strong>{org?.name}</strong> <span className="small muted">· {t(CHANNEL_LABEL[task.kind])}</span></div>
+          <div><strong>{org?.name}</strong> <span className="small muted">· {channel?.label||t(CHANNEL_LABEL[task.kind])} · {t(CHANNEL_LABEL[task.kind])}</span></div>
           <Badge tone={STATE_TONE[task.state]}>{t(STATE_LABEL[task.state])}</Badge>
         </div>
         {task.note&&<div className="small muted">{task.note}</div>}
         <div className="row">
           <input className="input" placeholder={t('Assign a number, e.g. +92 42 111 000 222')} value={numberDraft[task.id]??channel?.displayNumber??''} onChange={e=>setNumberDraft(d=>({...d,[task.id]:e.target.value}))}/>
-          <Button small variant="outline" onClick={()=>run(()=>api.assignNumber(task.orgId,task.kind,numberDraft[task.id]||''),'Number assigned.')} disabled={!(numberDraft[task.id]||'').trim()}>Assign</Button>
+          <Button small variant="outline" onClick={()=>run(()=>api.assignNumber(task.orgId,task.channelId,numberDraft[task.id]||''),'Number assigned.')} disabled={!(numberDraft[task.id]||'').trim()}>Assign</Button>
         </div>
         <div className="row wrap">
           {order.map(state=><Button key={state} small variant={task.state===state?'':'outline'} onClick={()=>run(()=>api.updateProvisioning(task.id,{state}),'Setup moved to '+STATE_LABEL[state]+'.')}>{t(STATE_LABEL[state])}</Button>)}
@@ -268,7 +269,7 @@ export function PlatformHealth(){
       <div className="table-wrap"><table className="table">
         <thead><tr><th>{t('Company')}</th><th>{t('Channel')}</th><th>{t('Code shown')}</th><th>{t('Raw provider error')}</th></tr></thead>
         <tbody>{failedChannels.map(c=><tr key={c.id}>
-          <td>{orgName(c.orgId)}</td><td>{t(CHANNEL_LABEL[c.type])}</td>
+          <td>{orgName(c.orgId)}</td><td>{c.label} · {t(CHANNEL_LABEL[c.type])}</td>
           <td className="mono small">{c.errorCode||'—'}</td>
           <td className="mono small danger">{c.errorDetail}</td>
         </tr>)}</tbody>
@@ -288,7 +289,7 @@ export function PlatformHealth(){
     {blocked.length>0&&<div className="card stack">
       <h2>{t('Blocked setups')}</h2>
       {blocked.map(b=><div className="row between" key={b.id}>
-        <span><AlertTriangle size={14}/> {orgName(b.orgId)} · {t(CHANNEL_LABEL[b.kind])}</span>
+        <span><AlertTriangle size={14}/> {orgName(b.orgId)} · {store.channels.find(c=>c.id===b.channelId)?.label||t(CHANNEL_LABEL[b.kind])}</span>
         <span className="small muted">{b.note}</span>
       </div>)}
     </div>}

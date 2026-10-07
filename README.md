@@ -48,6 +48,27 @@ Credentials are entered by the platform operator on the company's behalf, in
 **Platform → company detail**. The input is write-only: the value is discarded on
 submit and only the last four characters plus audit metadata are kept.
 
+## Many numbers per company
+
+A company holds as many numbers as it needs, of each kind, each with a purpose rather
+than just a type — "Main admissions line", "Fee office line", "Alumni WhatsApp". One
+per kind is marked **main** and is the fallback.
+
+- **Numbers** (`/app/channels`) groups them by kind, shows which agent answers each,
+  the call count, and the setup state. **Add another** raises a request; we provision
+  it in the platform portal and the company watches it move Requested, Being set up,
+  Testing, Active.
+- A number's own page names what happens when it rings — which agents answer it and
+  which rules target it — and warns, before removal, what depends on it.
+- **Agent, Where it answers** ticks individual numbers, grouped by kind, and says when
+  another agent already answers one.
+- A routing rule can match **one of your numbers** by name. Campaigns and test calls
+  choose which number to dial out from, so the right caller ID shows.
+- History filters by number called, and the export names it.
+
+The seeded demo company holds three phone lines, two WhatsApp calling numbers and one
+messaging number, with the 400 calls spread across them.
+
 ## Many knowledge bases, chosen per call
 
 A company has several knowledge bases, each for a subject. A call resolves which one to
@@ -61,8 +82,8 @@ use in this order, first match wins:
 The resolved base and the reason are recorded on the call and shown on call detail, so
 "why did it answer that way" is always answerable.
 
-- **Routing** (`/app/routing`) — rules read top to bottom, reorderable, matching on the
-  number dialled, the channel, a number prefix, a contact list or business hours. A
+- **Routing** (`/app/routing`) — rules read top to bottom, reorderable, matching on one
+  of your numbers, the channel, the caller's prefix, a contact list or business hours. A
   permanent last row catches everything else. Each rule shows its 30-day match count,
   and **Try a call** shows which rule would win before a real caller finds out.
 - **Campaigns** (`/app/campaigns`) — outbound lists with their own agent and knowledge

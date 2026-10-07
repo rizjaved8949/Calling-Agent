@@ -86,12 +86,14 @@ function Provider({children}:{children:React.ReactNode}){
   const readOnly=!!sessionState?.impersonating;
   const canManage=!readOnly&&(role==='owner'||role==='admin');
   useEffect(()=>{
-    const lang=org.defaultLanguage;
-    document.documentElement.lang=lang;
-    document.documentElement.dir=lang==='ur'?'rtl':'ltr';
+    // The interface copy is English, so the document stays left to right.
+    // org.defaultLanguage is the language the agent SPEAKS on a call, which is
+    // a different thing; Urdu strings carry their own font and direction.
+    document.documentElement.lang='en';
+    document.documentElement.dir='ltr';
     document.documentElement.setAttribute('data-theme',theme);
     document.documentElement.style.setProperty('--accent',org.accentColor);
-  },[theme,org.accentColor,org.defaultLanguage]);
+  },[theme,org.accentColor]);
   const setSession=(s:Session|null)=>{setSessionState(s);if(s)localStorage.setItem('ca-session',JSON.stringify(s));else localStorage.removeItem('ca-session')};
   const setOrg=(id:string)=>setSession(sessionState?{...sessionState,orgId:id}:null);
   const setTheme=(v:'light'|'dark')=>{setThemeState(v);localStorage.setItem('ca-theme',v)};
@@ -252,7 +254,7 @@ function AppRoutes(){
     <Route path="/app/campaigns/:id" element={<Protected manage><CampaignDetail/></Protected>}/>
     <Route path="/app/unanswered" element={<Protected manage><Unanswered/></Protected>}/>
     <Route path="/app/channels" element={<Protected manage><Channels/></Protected>}/>
-    <Route path="/app/channels/:type" element={<Protected manage><ChannelDetail/></Protected>}/>
+    <Route path="/app/channels/:id" element={<Protected manage><ChannelDetail/></Protected>}/>
     <Route path="/app/messages" element={<Protected manage><Messages/></Protected>}/>
     <Route path="/app/team" element={<Protected manage><Team/></Protected>}/>
     <Route path="/app/usage" element={<Protected manage><Usage/></Protected>}/>

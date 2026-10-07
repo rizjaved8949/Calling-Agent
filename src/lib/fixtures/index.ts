@@ -55,6 +55,11 @@ const chunks: KbChunk[] = docSeed
   })));
 
 /** Spread the seeded calls across the knowledge bases, with a plausible reason. */
+/** Which of the company's numbers a seeded call came in on. */
+const channelForCall = (i: number): [string, 'sim'|'whatsapp_call'] => {
+  if (i % 3 === 0) return i % 9 === 0 ? ['ch-fee-line', 'sim'] : ['ch-main-line', 'sim'];
+  return i % 8 === 0 ? ['ch-wa-alumni', 'whatsapp_call'] : ['ch-wa-main', 'whatsapp_call'];
+};
 const kbForCall = (i: number): [string, string, Call['resolvedBy']] => {
   if (i % 5 === 0) return ['kb-fees', 'Fees and scholarships', 'rule'];
   if (i % 7 === 0) return ['kb-campus', 'Hostel and transport', 'rule'];
@@ -68,13 +73,15 @@ const calls: Call[] = Array.from({ length: 400 }, (_, i) => {
   const duration = 44 + ((i * 73) % 620);
   const state = i % 43 === 0 ? 'NONE' : i % 31 === 0 ? 'PENDING' : 'READY';
   const [knowledgeBaseId, knowledgeBaseName, resolvedBy] = kbForCall(i);
+  const [channelId, channelType] = channelForCall(i);
   const failed = i !== 0 && i % 23 === 0;
   return {
     id: 'call-' + String(i + 1).padStart(4, '0'), orgId, agentId: 'agent-' + (i % 3 + 1),
-    channelType: i % 3 === 0 ? 'sim' : 'whatsapp_call',
+    channelId, channelType,
     direction: i % 5 === 0 ? 'OUTBOUND' : 'INBOUND',
     phoneNumber: '+92 3' + String(100000000 + ((i * 7919) % 899999999)).slice(0, 9),
-    fromNumber: '+92 300 123 4567', toNumber: '+92 21 555 0142',
+    fromNumber: '+92 300 123 4567',
+    toNumber: channelId === 'ch-fee-line' ? '+92 21 555 0188' : channelId === 'ch-wa-alumni' ? '+92 300 555 0174' : channelId === 'ch-main-line' ? '+92 21 555 0142' : '+92 300 555 0129',
     status: i === 0 ? 'active' : failed ? 'failed' : 'completed',
     mode: i % 11 === 0 ? 'operator' : 'agent', startedAt: start, answeredAt: start,
     endedAt: i === 0 ? undefined : new Date(new Date(start).getTime() + duration * 1000).toISOString(),
@@ -160,34 +167,37 @@ export const initialStore: Store = {
   ],
   invitations: [{ id: 'inv-1', orgId, email: 'ops@northstar.edu', role: 'staff', expiresAt: date(-4), status: 'pending' }],
   agents: [
-    { id: 'agent-1', orgId, name: 'Aisha Admissions', status: 'live', personaId: 'persona-1', defaultKnowledgeBaseId: 'kb-admissions', knowledgeBaseIds: ['kb-admissions', 'kb-fees'], voiceId: 'voice-1', channels: ['sim', 'whatsapp_call'], createdAt: date(65) },
-    { id: 'agent-2', orgId, name: 'Nora Support', status: 'paused', personaId: 'persona-2', defaultKnowledgeBaseId: 'kb-campus', knowledgeBaseIds: ['kb-campus', 'kb-admissions'], voiceId: 'voice-2', channels: ['whatsapp_call'], createdAt: date(43) },
-    { id: 'agent-3', orgId, name: 'Zara Outreach', status: 'draft', personaId: 'persona-3', defaultKnowledgeBaseId: 'kb-fees', knowledgeBaseIds: ['kb-fees'], voiceId: 'voice-3', channels: ['sim'], createdAt: date(12) },
+    { id: 'agent-1', orgId, name: 'Aisha Admissions', status: 'live', personaId: 'persona-1', defaultKnowledgeBaseId: 'kb-admissions', knowledgeBaseIds: ['kb-admissions', 'kb-fees'], voiceId: 'voice-1', channelIds: ['ch-main-line', 'ch-wa-main'], createdAt: date(65) },
+    { id: 'agent-2', orgId, name: 'Nora Support', status: 'paused', personaId: 'persona-2', defaultKnowledgeBaseId: 'kb-campus', knowledgeBaseIds: ['kb-campus', 'kb-admissions'], voiceId: 'voice-2', channelIds: ['ch-hostel-line', 'ch-wa-alumni'], createdAt: date(43) },
+    { id: 'agent-3', orgId, name: 'Zara Outreach', status: 'draft', personaId: 'persona-3', defaultKnowledgeBaseId: 'kb-fees', knowledgeBaseIds: ['kb-fees'], voiceId: 'voice-3', channelIds: ['ch-fee-line'], createdAt: date(12) },
   ],
   personas: names.map((name, i) => ({ id: 'persona-' + (i + 1), orgId, agentName: name, gender: 'female', greeting: 'Assalam o alaikum, main ' + name + ' bol rahi hoon. Main aap ki kya madad kar sakti hoon?', roleDescription: 'Help callers with admissions and student services using the material provided.', languagePolicy: 'Reply in whatever language the caller uses, Urdu or English.', toneNotes: 'Warm, concise and clear.', forbiddenPhrases: ['I guarantee admission'], escalationRules: 'Hand fee disputes and complaints to a person.', closingBehaviour: 'Summarise next steps and thank the caller.', compiledPrompt: '' })),
   voices: names.map((_, i) => ({ id: 'voice-' + (i + 1), orgId, voiceName: i === 0 ? 'Alloy' : 'Shimmer', speed: 0.95, language: 'ur-PK', sttModel: 'gpt-4o-transcribe', noiseReduction: true, turnDetection: 'server_vad', vadThreshold: 0.5, vadSilenceMs: 600, vadPrefixPaddingMs: 300, vadEagerness: 'medium', interruptionEnabled: true, greetingDelaySeconds: 0.4 })),
   presets: defaultPresets,
   knowledgeBases, documents, chunks,
   channels: [
-    { id: 'channel-phone', orgId, type: 'sim', status: 'connected', displayNumber: '+92 21 555 0142', provider: 'Infobip', lastCheckedAt: date(0.04), config: { maxCallDurationSeconds: 900, callConnectTimeoutSeconds: 30, wrapUpWarningSeconds: 30, hangupGraceSeconds: 10 } },
-    { id: 'channel-wa-call', orgId, type: 'whatsapp_call', status: 'connected', displayNumber: '+92 300 555 0129', provider: 'Meta', lastCheckedAt: date(0.1), config: { callingEnabled: true, callingAutoAccept: true, preAcceptCalls: false, mediaRelayEnabled: true, outboundEnabled: true, operatorCallingEnabled: true, recordTwoWay: true, recordAgentAudio: true, mediaSampleRate: 24000 } },
-    { id: 'channel-wa-msg', orgId, type: 'whatsapp_message', status: 'error', displayNumber: '+92 300 555 0129', provider: 'Meta', lastCheckedAt: date(0.3), errorCode: 'E-TEMPLATE', errorDetail: 'Template namespace not verified (code 132001).', config: { inboundEnabled: false, topicMaxChars: 180, detailsMaxChars: 600 } },
-    { id: 'channel-harbor-phone', orgId: 'org-harbor', type: 'sim', status: 'pending', provider: 'Infobip', config: {} },
-    { id: 'channel-harbor-call', orgId: 'org-harbor', type: 'whatsapp_call', status: 'verifying', provider: 'Meta', config: {} },
-    { id: 'channel-harbor-message', orgId: 'org-harbor', type: 'whatsapp_message', status: 'disconnected', provider: 'Meta', config: {} },
+    { id: 'ch-main-line', orgId, type: 'sim', label: 'Main admissions line', isPrimary: true, status: 'connected', displayNumber: '+92 21 555 0142', provider: 'Infobip', lastCheckedAt: date(0.04), config: { maxCallDurationSeconds: 900, callConnectTimeoutSeconds: 30, wrapUpWarningSeconds: 30, hangupGraceSeconds: 10 } },
+    { id: 'ch-fee-line', orgId, type: 'sim', label: 'Fee office line', isPrimary: false, status: 'connected', displayNumber: '+92 21 555 0188', provider: 'Infobip', lastCheckedAt: date(0.2), config: { maxCallDurationSeconds: 900, callConnectTimeoutSeconds: 30 } },
+    { id: 'ch-hostel-line', orgId, type: 'sim', label: 'Hostel and transport', isPrimary: false, status: 'verifying', displayNumber: '+92 21 555 0193', provider: 'Infobip', lastCheckedAt: date(0.5), config: {} },
+    { id: 'ch-wa-main', orgId, type: 'whatsapp_call', label: 'Admissions WhatsApp', isPrimary: true, status: 'connected', displayNumber: '+92 300 555 0129', provider: 'Meta', lastCheckedAt: date(0.1), config: { callingEnabled: true, callingAutoAccept: true, preAcceptCalls: false, mediaRelayEnabled: true, outboundEnabled: true, operatorCallingEnabled: true, recordTwoWay: true, recordAgentAudio: true, mediaSampleRate: 24000 } },
+    { id: 'ch-wa-alumni', orgId, type: 'whatsapp_call', label: 'Alumni WhatsApp', isPrimary: false, status: 'pending', displayNumber: '+92 300 555 0174', provider: 'Meta', lastCheckedAt: date(1.2), config: { callingEnabled: false } },
+    { id: 'ch-wa-msg', orgId, type: 'whatsapp_message', label: 'Admissions messages', isPrimary: true, status: 'error', displayNumber: '+92 300 555 0129', provider: 'Meta', lastCheckedAt: date(0.3), errorCode: 'E-TEMPLATE', errorDetail: 'Template namespace not verified (code 132001).', config: { inboundEnabled: false, topicMaxChars: 180, detailsMaxChars: 600 } },
+    { id: 'ch-harbor-line', orgId: 'org-harbor', type: 'sim', label: 'Main line', isPrimary: true, status: 'pending', provider: 'Infobip', config: {} },
+    { id: 'ch-harbor-wa', orgId: 'org-harbor', type: 'whatsapp_call', label: 'Patient WhatsApp', isPrimary: true, status: 'verifying', provider: 'Meta', config: {} },
+    { id: 'ch-harbor-msg', orgId: 'org-harbor', type: 'whatsapp_message', label: 'Appointment reminders', isPrimary: true, status: 'disconnected', provider: 'Meta', config: {} },
   ],
-  credentials: [{ id: 'cred-1', orgId, channelId: 'channel-phone', keyName: 'apiKey', lastFour: '7f3a', setBy: 'Platform Operations', setAt: date(9) }],
+  credentials: [{ id: 'cred-1', orgId, channelId: 'ch-main-line', keyName: 'apiKey', lastFour: '7f3a', setBy: 'Platform Operations', setAt: date(9) }],
   calls, transcripts, ragQueries,
   routingRules: [
-    { id: 'rule-1', orgId, name: 'Fee questions line', order: 0, enabled: true, isFallback: false, condition: { kind: 'number', value: '+92 21 555 0142' }, outcome: { agentId: 'agent-1', knowledgeBaseIds: ['kb-fees', 'kb-admissions'] }, matchCount30d: 212 },
-    { id: 'rule-2', orgId, name: 'WhatsApp goes to Nora', order: 1, enabled: true, isFallback: false, condition: { kind: 'channel', value: 'whatsapp_call' }, outcome: { agentId: 'agent-2', knowledgeBaseIds: ['kb-campus'] }, matchCount30d: 148 },
+    { id: 'rule-1', orgId, name: 'Fee office line', order: 0, enabled: true, isFallback: false, condition: { kind: 'number', value: 'ch-fee-line' }, outcome: { agentId: 'agent-1', knowledgeBaseIds: ['kb-fees', 'kb-admissions'] }, matchCount30d: 212 },
+    { id: 'rule-2', orgId, name: 'Alumni WhatsApp goes to Nora', order: 1, enabled: true, isFallback: false, condition: { kind: 'number', value: 'ch-wa-alumni' }, outcome: { agentId: 'agent-2', knowledgeBaseIds: ['kb-campus'] }, matchCount30d: 148 },
     { id: 'rule-3', orgId, name: 'Out of hours to a person', order: 2, enabled: false, isFallback: false, condition: { kind: 'hours', value: 'outside' }, outcome: { assignToUserId: 'user-2' }, matchCount30d: 0 },
     { id: 'rule-fallback', orgId, name: 'Everything else', order: 99, enabled: true, isFallback: true, condition: { kind: 'channel', value: 'any' }, outcome: { agentId: 'agent-1', knowledgeBaseIds: ['kb-admissions'] }, matchCount30d: 496 },
   ],
   campaigns: [
-    { id: 'camp-1', orgId, name: 'Merit list follow-up', agentId: 'agent-1', knowledgeBaseIds: ['kb-admissions', 'kb-fees'], status: 'running', total: 420, attempted: 268, connected: 173, unanswered: 95, windowStart: '10:00', windowEnd: '18:00', maxAttempts: 3, retryAfterMinutes: 240, createdAt: date(6) },
-    { id: 'camp-2', orgId, name: 'Scholarship reminder', agentId: 'agent-3', knowledgeBaseIds: ['kb-fees'], status: 'paused', total: 180, attempted: 54, connected: 31, unanswered: 23, windowStart: '11:00', windowEnd: '17:00', maxAttempts: 2, retryAfterMinutes: 1440, createdAt: date(14) },
-    { id: 'camp-3', orgId, name: 'Open day invites', agentId: 'agent-1', knowledgeBaseIds: ['kb-admissions'], status: 'draft', total: 96, attempted: 0, connected: 0, unanswered: 0, windowStart: '09:00', windowEnd: '17:00', maxAttempts: 2, retryAfterMinutes: 720, createdAt: date(1) },
+    { id: 'camp-1', orgId, name: 'Merit list follow-up', agentId: 'agent-1', fromChannelId: 'ch-main-line', knowledgeBaseIds: ['kb-admissions', 'kb-fees'], status: 'running', total: 420, attempted: 268, connected: 173, unanswered: 95, windowStart: '10:00', windowEnd: '18:00', maxAttempts: 3, retryAfterMinutes: 240, createdAt: date(6) },
+    { id: 'camp-2', orgId, name: 'Scholarship reminder', agentId: 'agent-3', fromChannelId: 'ch-fee-line', knowledgeBaseIds: ['kb-fees'], status: 'paused', total: 180, attempted: 54, connected: 31, unanswered: 23, windowStart: '11:00', windowEnd: '17:00', maxAttempts: 2, retryAfterMinutes: 1440, createdAt: date(14) },
+    { id: 'camp-3', orgId, name: 'Open day invites', agentId: 'agent-1', fromChannelId: 'ch-wa-main', knowledgeBaseIds: ['kb-admissions'], status: 'draft', total: 96, attempted: 0, connected: 0, unanswered: 0, windowStart: '09:00', windowEnd: '17:00', maxAttempts: 2, retryAfterMinutes: 720, createdAt: date(1) },
   ],
   campaignContacts: Array.from({ length: 24 }, (_, i) => ({ id: 'cc-' + i, campaignId: i < 16 ? 'camp-1' : 'camp-2', number: calls[i + 40].phoneNumber, name: ['Hamza', 'Fatima', 'Bilal', 'Ayesha'][i % 4] + ' ' + ['Ali', 'Khan', 'Sheikh'][i % 3], attempts: i % 3, lastOutcome: i % 4 === 0 ? 'No answer' : 'Connected', callIds: [] })),
   unanswered,
@@ -208,10 +218,10 @@ export const initialStore: Store = {
   audit: [{ id: 'audit-1', orgId, actorName: 'Samira Khan', action: 'Changed answer strictness to Balanced', targetType: 'Setting', targetId: 'strictnessPreset', createdAt: date(9) }],
   guides,
   provisioning: [
-    { id: 'prov-1', orgId: 'org-harbor', kind: 'sim', state: 'setting_up', note: 'Number reserved with carrier, awaiting trunk assignment.', updatedAt: date(1) },
-    { id: 'prov-2', orgId: 'org-harbor', kind: 'whatsapp_call', state: 'testing', note: 'Placing test calls; media connecting cleanly.', updatedAt: date(0.4) },
-    { id: 'prov-3', orgId: 'org-harbor', kind: 'whatsapp_message', state: 'requested', note: '', updatedAt: date(3) },
-    { id: 'prov-4', orgId, kind: 'whatsapp_message', state: 'blocked', note: 'Template namespace not verified on the business account.', updatedAt: date(0.3) },
+    { id: 'prov-1', orgId: 'org-harbor', channelId: 'ch-harbor-line', kind: 'sim', state: 'setting_up', note: 'Number reserved with carrier, awaiting trunk assignment.', updatedAt: date(1) },
+    { id: 'prov-2', orgId: 'org-harbor', channelId: 'ch-harbor-wa', kind: 'whatsapp_call', state: 'testing', note: 'Placing test calls; media connecting cleanly.', updatedAt: date(0.4) },
+    { id: 'prov-3', orgId: 'org-harbor', channelId: 'ch-harbor-msg', kind: 'whatsapp_message', state: 'requested', note: '', updatedAt: date(3) },
+    { id: 'prov-4', orgId, channelId: 'ch-wa-msg', kind: 'whatsapp_message', state: 'blocked', note: 'Template namespace not verified on the business account.', updatedAt: date(0.3) },
   ],
   platformAudit: [
     { id: 'pa-1', actorEmail: 'ops@platform.internal', action: 'Assigned number', orgId: 'org-harbor', detail: 'Reserved +92 42 111 000 222 for Harbor Health.', createdAt: date(1) },

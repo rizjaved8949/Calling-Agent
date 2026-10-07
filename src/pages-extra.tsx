@@ -122,7 +122,7 @@ export function KnowledgeDetail(){
 // ------------------------------------------------------------------ routing --
 
 const CONDITION_LABEL:Record<RuleConditionKind,string>={
-  number:'The call came in on this number',
+  number:'The call came in on one of your numbers',
   channel:'The call came in on this channel',
   prefix:'The caller’s number starts with',
   contactList:'The caller is in this list',
@@ -135,8 +135,9 @@ export function Routing(){
   const bases=store.knowledgeBases.filter(x=>x.orgId===org.id);
   const agents=store.agents.filter(x=>x.orgId===org.id);
   const [editing,setEditing]=useState<RoutingRule|null>(null);
-  const [testNumber,setTestNumber]=useState('+92 21 555 0142');
-  const [testChannel,setTestChannel]=useState<'sim'|'whatsapp_call'|'whatsapp_message'>('sim');
+  const numbers=store.channels.filter(x=>x.orgId===org.id);
+  const [testChannelId,setTestChannelId]=useState(numbers[0]?.id||'');
+  const [testCaller,setTestCaller]=useState('+92 300 123 4567');
   const [testOutside,setTestOutside]=useState(false);
   const [testResult,setTestResult]=useState<Awaited<ReturnType<typeof api.testRoute>>|null>(null);
 
@@ -171,7 +172,10 @@ export function Routing(){
             <div className="small muted">
               {rule.isFallback
                 ?t('Every call that no rule above has matched')
-                :<>{t(CONDITION_LABEL[rule.condition.kind])} <strong className="mono">{rule.condition.kind==='channel'?CHANNEL_LABEL[rule.condition.value]:rule.condition.value}</strong></>}
+                :<>{t(CONDITION_LABEL[rule.condition.kind])} <strong>{
+                  rule.condition.kind==='channel'?t(CHANNEL_LABEL[rule.condition.value])
+                  :rule.condition.kind==='number'?(store.channels.find(c=>c.id===rule.condition.value)?.label||t('a number that no longer exists'))
+                  :rule.condition.value}</strong></>}
             </div>
             <div className="small">
               {agentName&&<>{t('Answered by')} <strong>{agentName}</strong>{' '}</>}
@@ -195,18 +199,18 @@ export function Routing(){
       <h2>{t('Try a call')}</h2>
       <p className="small muted">{t('See which rule would win before a real caller finds out.')}</p>
       <div className="field-grid">
-        <Field label="Number dialled" value={testNumber} onChange={setTestNumber}/>
-        <div className="field"><label>{t('Channel')}</label>
-          <select className="select" value={testChannel} onChange={e=>setTestChannel(e.target.value as typeof testChannel)}>
-            {Object.entries(CHANNEL_LABEL).map(([k,v])=><option key={k} value={k}>{t(v)}</option>)}
+        <div className="field"><label>{t('Which of your numbers they call')}</label>
+          <select className="select" value={testChannelId} onChange={e=>setTestChannelId(e.target.value)}>
+            {numbers.map(c=><option key={c.id} value={c.id}>{c.label} — {c.displayNumber||t('not assigned')}</option>)}
           </select></div>
+        <Field label="Caller's number" value={testCaller} onChange={setTestCaller}/>
         <div className="field"><label>{t('Time of day')}</label>
           <select className="select" value={testOutside?'outside':'inside'} onChange={e=>setTestOutside(e.target.value==='outside')}>
             <option value="inside">{t('Inside business hours')}</option>
             <option value="outside">{t('Outside business hours')}</option>
           </select></div>
       </div>
-      <div className="row"><Button onClick={async()=>setTestResult(await api.testRoute(org.id,testNumber,testChannel,testOutside))}>Try it</Button></div>
+      <div className="row"><Button onClick={async()=>setTestResult(await api.testRoute(org.id,testChannelId,testCaller,testOutside))}>Try it</Button></div>
       {testResult&&<div className="result-card">
         <strong>{t('This call would match')} “{testResult.rule.name}”</strong>
         <div className="small">
@@ -224,6 +228,7 @@ export function Routing(){
 function RuleEditor({rule,onClose}:{rule:RoutingRule;onClose:()=>void}){
   const {store,org,run,t}=useApp();
   const [draft,setDraft]=useState<RoutingRule>(rule);
+  const numbers=store.channels.filter(x=>x.orgId===org.id);
   const bases=store.knowledgeBases.filter(x=>x.orgId===org.id);
   const agents=store.agents.filter(x=>x.orgId===org.id);
   const staff=store.memberships.filter(m=>m.orgId===org.id).map(m=>store.profiles.find(p=>p.id===m.userId)).filter(Boolean);
@@ -242,7 +247,12 @@ function RuleEditor({rule,onClose}:{rule:RoutingRule;onClose:()=>void}){
           {Object.entries(CONDITION_LABEL).map(([k,v])=><option key={k} value={k}>{t(v)}</option>)}
         </select></div>
       <div className="field"><label>{t('Matches')}</label>
-        {draft.condition.kind==='channel'
+        {draft.condition.kind==='number'
+          ?<select className="select" value={draft.condition.value} onChange={e=>setDraft(d=>({...d,condition:{...d.condition,value:e.target.value}}))}>
+            <option value="">{t('Choose one of your numbers')}</option>
+            {numbers.map(c=><option key={c.id} value={c.id}>{c.label} — {c.displayNumber||t('not assigned')}</option>)}
+          </select>
+          :draft.condition.kind==='channel'
           ?<select className="select" value={draft.condition.value} onChange={e=>setDraft(d=>({...d,condition:{...d.condition,value:e.target.value}}))}>
             <option value="">{t('Choose a channel')}</option>
             {Object.entries(CHANNEL_LABEL).map(([k,v])=><option key={k} value={k}>{t(v)}</option>)}
@@ -291,8 +301,10 @@ export function Campaigns(){
   const [name,setName]=useState('');
   const [agentId,setAgentId]=useState(agents[0]?.id||'');
   const [kbIds,setKbIds]=useState<string[]>(bases[0]?[bases[0].id]:[]);
+  const numbers=store.channels.filter(x=>x.orgId===org.id&&x.status==='connected');
+  const [fromChannelId,setFromChannelId]=useState(numbers.find(n=>n.isPrimary)?.id||numbers[0]?.id||'');
   const create=async()=>{
-    await run(()=>api.createCampaign(org.id,{name,agentId,knowledgeBaseIds:kbIds,total:0}),'Campaign created as a draft.');
+    await run(()=>api.createCampaign(org.id,{name,agentId,fromChannelId,knowledgeBaseIds:kbIds,total:0}),'Campaign created as a draft.');
     setCreating(false);setName('');
   };
   return <div className="stack">
@@ -313,6 +325,8 @@ export function Campaigns(){
       <div className="row between"><h2>{t('New campaign')}</h2><button className="icon-btn" onClick={()=>setCreating(false)}><X size={18}/></button></div>
       <Field label="Campaign name" value={name} onChange={setName} placeholder="Merit list follow-up"/>
       <div className="field"><label>{t('Agent')}</label><select className="select" value={agentId} onChange={e=>setAgentId(e.target.value)}>{agents.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select></div>
+      <div className="field"><label>{t('Call from')}</label><select className="select" value={fromChannelId} onChange={e=>setFromChannelId(e.target.value)}>{numbers.map(c=><option key={c.id} value={c.id}>{c.label} — {c.displayNumber}</option>)}</select>
+        <div className="help">{t('This is the number people will see calling them.')}</div></div>
       <div className="field"><label>{t('Knowledge it should use')}</label>
         <div className="chip-row">{bases.map(b=><button type="button" key={b.id} className={'chip '+(kbIds.includes(b.id)?'on':'')} onClick={()=>setKbIds(x=>x.includes(b.id)?x.filter(y=>y!==b.id):[...x,b.id])}>{kbIds.includes(b.id)&&<CheckCircle2 size={14}/>}{b.name}</button>)}</div>
         {kbIds.length>1&&<div className="help">{t('The agent looks in')} <strong>{kbIds.map(id=>bases.find(b=>b.id===id)?.name).join(t(' first, then '))}</strong>.</div>}
@@ -333,7 +347,7 @@ export function CampaignDetail(){
   const progress=campaign.total?Math.round(campaign.attempted/campaign.total*100):0;
   return <div className="stack">
     <PageHead eyebrow="Campaign" title={campaign.name}
-      description={'Calling with '+(agent?.name||'an agent')+', using '+campaign.knowledgeBaseIds.map(k=>bases.find(b=>b.id===k)?.name).filter(Boolean).join(' then ')}
+      description={'Calling from '+(store.channels.find(c=>c.id===campaign.fromChannelId)?.label||'your main number')+' with '+(agent?.name||'an agent')+', using '+campaign.knowledgeBaseIds.map(k=>bases.find(b=>b.id===k)?.name).filter(Boolean).join(' then ')}
       action={canManage&&<div className="row">
         {campaign.status!=='running'&&<Button onClick={()=>run(()=>api.setCampaignStatus(campaign.id,'running'),'Campaign started.')}><Play size={15}/> Start</Button>}
         {campaign.status==='running'&&<Button variant="outline" onClick={()=>run(()=>api.setCampaignStatus(campaign.id,'paused'),'Campaign paused.')}><Pause size={15}/> Pause</Button>}

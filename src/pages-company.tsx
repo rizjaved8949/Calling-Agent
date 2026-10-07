@@ -1,6 +1,6 @@
 import {useEffect,useMemo,useState} from 'react';
 import {Link,useNavigate,useParams} from 'react-router-dom';
-import {Activity,AlertTriangle,BrainCircuit,CheckCircle2,Clock,FileText,ListChecks,MessageSquare,Mic2,Phone,PhoneOutgoing,Plus,Radio,Route as RouteIcon,Sparkles,X} from 'lucide-react';
+import {Activity,AlertTriangle,BrainCircuit,CheckCircle2,Clock,FileText,ListChecks,MessageSquare,Mic2,Phone,PhoneOutgoing,Plus,Radio,Route as RouteIcon,Sparkles,Trash2,X} from 'lucide-react';
 import {Area,AreaChart,CartesianGrid,ResponsiveContainer,Tooltip,XAxis,YAxis} from 'recharts';
 import {Badge,Button,Empty,Field,PageHead,PresetPicker,Tabs,useApp,formatDate,formatDuration} from './app';
 import {api} from './lib/api';
@@ -194,6 +194,7 @@ export function AgentDetail(){
   const [saved,setSaved]=useState('');
   const [testNumber,setTestNumber]=useState('');
   const [testKb,setTestKb]=useState('');
+  const [testFrom,setTestFrom]=useState('');
   if(!agent)return <Empty icon={Mic2} title="Agent not found" body="It may have been deleted." action={<Button to="/app/agents">Back to agents</Button>}/>;
   const persona=store.personas.find(x=>x.id===agent.personaId)!;
   const bases=store.knowledgeBases.filter(x=>x.orgId===org.id);
@@ -214,9 +215,9 @@ export function AgentDetail(){
     const list=agent.knowledgeBaseIds.includes(kbId)?agent.knowledgeBaseIds.filter(x=>x!==kbId):[...agent.knowledgeBaseIds,kbId];
     run(()=>api.updateAgent(agent.id,{knowledgeBaseIds:list}),'Saved');
   };
-  const toggleChannel=(type:ChannelType)=>{
-    const list=agent.channels.includes(type)?agent.channels.filter(x=>x!==type):[...agent.channels,type];
-    run(()=>api.updateAgent(agent.id,{channels:list}),'Saved');
+  const toggleChannel=(channelId:string)=>{
+    const list=agent.channelIds.includes(channelId)?agent.channelIds.filter(x=>x!==channelId):[...agent.channelIds,channelId];
+    run(()=>api.updateAgent(agent.id,{channelIds:list}),'Saved');
   };
 
   return <div className="stack">
@@ -281,15 +282,28 @@ export function AgentDetail(){
 
     {tab==='Where it answers'&&<div className="card stack">
       <h2>{t('Which numbers this agent answers on')}</h2>
-      {(['sim','whatsapp_call','whatsapp_message'] as ChannelType[]).map(type=>{
-        const ch=channels.find(c=>c.type===type);
-        const ready=ch?.status==='connected';
-        return <div className="row between kb-pick" key={type}>
-          <label className="row"><input type="checkbox" checked={agent.channels.includes(type)} disabled={!canManage||!ready} onChange={()=>toggleChannel(type)}/>
-            <span><strong>{t(CHANNEL_LABEL[type])}</strong><div className="small muted">{ch?.displayNumber||t(CHANNEL_BLURB[type])}</div></span></label>
-          {!ready&&<span className="small muted">{t('Not active yet')}</span>}
-        </div>;
-      })}
+      <p className="small muted">{t('Tick every number this agent should pick up. Other agents can answer the rest.')}</p>
+      {channels.length===0
+        ?<Empty icon={Radio} title="No numbers yet" body="Ask us for a number and it will appear here." action={<Button to="/app/channels">Your numbers</Button>}/>
+        :(['sim','whatsapp_call','whatsapp_message'] as ChannelType[]).map(type=>{
+          const group=channels.filter(c=>c.type===type);
+          if(!group.length)return null;
+          return <div className="stack" key={type}>
+            <div className="nav-group">{t(CHANNEL_LABEL[type])}</div>
+            {group.map(ch=>{
+              const ready=ch.status==='connected';
+              const takenBy=store.agents.filter(a=>a.id!==agent.id&&a.channelIds.includes(ch.id)).map(a=>a.name);
+              return <div className="row between kb-pick" key={ch.id}>
+                <label className="row"><input type="checkbox" checked={agent.channelIds.includes(ch.id)} disabled={!canManage||!ready} onChange={()=>toggleChannel(ch.id)}/>
+                  <span><strong>{ch.label}</strong><div className="small muted mono">{ch.displayNumber||t('Number not assigned yet')}</div></span></label>
+                <span className="small muted">
+                  {!ready&&t('Not active yet')}
+                  {ready&&takenBy.length>0&&t('Also answered by')+' '+takenBy.join(', ')}
+                </span>
+              </div>;
+            })}
+          </div>;
+        })}
     </div>}
 
     {tab==='Try it'&&<div className="card stack">
@@ -297,6 +311,10 @@ export function AgentDetail(){
       <p className="small muted">{t('We will call the number you enter and your agent will answer it.')}</p>
       <div className="field-grid">
         <Field label="Number to call" value={testNumber} onChange={setTestNumber} placeholder="+92 300 123 4567"/>
+        <div className="field"><label>{t('Call from')}</label>
+          <select className="select" value={testFrom} onChange={e=>setTestFrom(e.target.value)}>
+            {channels.filter(c=>c.status==='connected').map(c=><option key={c.id} value={c.id}>{c.label} — {c.displayNumber}</option>)}
+          </select></div>
         <div className="field"><label>{t('Knowledge to use')}</label>
           <select className="select" value={testKb} onChange={e=>setTestKb(e.target.value)}>
             <option value="">{t('The agent default')} — {bases.find(b=>b.id===agent.defaultKnowledgeBaseId)?.name}</option>
@@ -304,7 +322,7 @@ export function AgentDetail(){
           </select>
           <div className="help">{t('Choosing here overrides every rule, just for this call.')}</div></div>
       </div>
-      <div className="row"><Button disabled={!canManage||!testNumber.trim()} onClick={()=>run(()=>api.createTestCall(org.id,agent.id,testNumber,testKb||undefined),'Calling now. Watch it on the Live screen.')}><Phone size={15}/> Call now</Button>
+      <div className="row"><Button disabled={!canManage||!testNumber.trim()} onClick={()=>run(()=>api.createTestCall(org.id,agent.id,testNumber,testKb||undefined,testFrom||undefined),'Calling now. Watch it on the Live screen.')}><Phone size={15}/> Call now</Button>
         <Button variant="outline" to="/app/live">Open live</Button></div>
     </div>}
   </div>;
@@ -326,55 +344,140 @@ function PresetGroup({kind}:{kind:PresetKind}){
 // ---------------------------------------------------------------- channels --
 
 export function Channels(){
-  const {store,org,t}=useApp();
+  const {store,org,run,canManage,t}=useApp();
   const channels=store.channels.filter(x=>x.orgId===org.id);
   const tasks=store.provisioning.filter(x=>x.orgId===org.id);
+  const [adding,setAdding]=useState<ChannelType|null>(null);
+  const [label,setLabel]=useState('');
+  const viewFor=(ch:typeof channels[number])=>{
+    const task=tasks.find(x=>x.channelId===ch.id);
+    const key=task&&task.state!=='active'
+      ?(task.state==='blocked'?'error':task.state==='testing'?'verifying':task.state==='requested'?'disconnected':'pending')
+      :ch.status;
+    return STATUS_VIEW[key]||STATUS_VIEW.disconnected;
+  };
+  const add=async()=>{
+    if(!adding||!label.trim())return;
+    await run(()=>api.addChannel(org.id,adding,label),'Requested. We will set it up and let you know.');
+    setAdding(null);setLabel('');
+  };
   return <div className="stack">
     <PageHead eyebrow="Numbers" title="Your numbers"
-      description="We set these up and look after them for you. There is nothing technical for you to enter."/>
-    <div className="grid cols-3">{channels.map(ch=>{
-      const task=tasks.find(x=>x.kind===ch.type);
-      const key=task&&task.state!=='active'
-        ?(task.state==='blocked'?'error':task.state==='testing'?'verifying':task.state==='requested'?'disconnected':'pending')
-        :ch.status;
-      const [tone,label,blurb]=STATUS_VIEW[key]||STATUS_VIEW.disconnected;
-      return <Link className="card lift stack" to={'/app/channels/'+ch.type} key={ch.id}>
-        <div className="row between"><strong>{t(CHANNEL_LABEL[ch.type])}</strong><Badge tone={tone}>{t(label)}</Badge></div>
-        <div className="mono">{ch.displayNumber||'—'}</div>
-        <p className="small muted">{t(blurb)}</p>
-        {ch.lastCheckedAt&&<div className="small muted">{t('Last checked')} {formatDate(ch.lastCheckedAt)}</div>}
-      </Link>;
-    })}</div>
-    <div className="notice"><Radio size={15}/> {t('Need another number, or a number in a different country? Ask us and we will add it.')}</div>
+      description="Hold as many as you need. Give each one a purpose, then send its calls wherever you like."/>
+
+    {(['sim','whatsapp_call','whatsapp_message'] as ChannelType[]).map(type=>{
+      const group=channels.filter(c=>c.type===type);
+      return <div className="card stack" key={type}>
+        <div className="row between">
+          <div><h2>{t(CHANNEL_LABEL[type])}</h2><p className="small muted">{t(CHANNEL_BLURB[type])}</p></div>
+          {canManage&&<Button small variant="outline" onClick={()=>{setAdding(type);setLabel('')}}><Plus size={14}/> Add another</Button>}
+        </div>
+        {group.length===0
+          ?<Empty icon={Radio} title={'No '+t(CHANNEL_LABEL[type]).toLowerCase()+' yet'} body="Ask us for one and we will set it up for you." action={canManage&&<Button small onClick={()=>{setAdding(type);setLabel('')}}>Request one</Button>}/>
+          :<div className="stack">{group.map(ch=>{
+            const [tone,statusLabel,blurb]=viewFor(ch);
+            const agents=store.agents.filter(a=>a.orgId===org.id&&a.channelIds.includes(ch.id));
+            const calls=store.calls.filter(c=>c.channelId===ch.id).length;
+            return <div className="row between number-row" key={ch.id}>
+              <div className="number-main">
+                <Link to={'/app/channels/'+ch.id}><strong>{ch.label}</strong></Link>
+                {ch.isPrimary&&<span className="small muted"> · {t('main')}</span>}
+                <div className="mono">{ch.displayNumber||t('Number not assigned yet')}</div>
+                <div className="small muted">
+                  {agents.length?t('Answered by')+' '+agents.map(a=>a.name).join(', '):t('No agent answers this yet')}
+                  {calls>0&&' · '+calls+' '+t('calls')}
+                </div>
+              </div>
+              <div className="number-side">
+                <Badge tone={tone}>{t(statusLabel)}</Badge>
+                <div className="small muted">{t(blurb)}</div>
+                {canManage&&!ch.isPrimary&&<button className="link-btn small" onClick={()=>run(()=>api.setPrimaryChannel(org.id,ch.id),'Set as the main number.')}>{t('Make main')}</button>}
+              </div>
+            </div>;
+          })}</div>}
+      </div>;
+    })}
+
+    {adding&&<div className="modal-backdrop" onClick={()=>setAdding(null)}><div className="modal" onClick={e=>e.stopPropagation()}>
+      <div className="row between"><h2>{t('Request another')} {t(CHANNEL_LABEL[adding]).toLowerCase()}</h2><button className="icon-btn" onClick={()=>setAdding(null)}><X size={18}/></button></div>
+      <Field label="What is this number for?" value={label} onChange={setLabel} placeholder="Fee office line"
+        help="A name your team will recognise. You can change it later."/>
+      <div className="notice">{t('We will get the number, set it up and test it. You will see its progress here and we will email you when it is live.')}</div>
+      <div className="row"><Button variant="outline" onClick={()=>setAdding(null)}>Cancel</Button><Button onClick={add} disabled={!label.trim()}>Request it</Button></div>
+    </div></div>}
   </div>;
 }
 
 export function ChannelDetail(){
-  const {store,org,t}=useApp();
-  const {type}=useParams();
-  const channel=store.channels.find(x=>x.orgId===org.id&&x.type===type);
-  const task=store.provisioning.find(x=>x.orgId===org.id&&x.kind===type);
-  const calls=store.calls.filter(c=>c.orgId===org.id&&c.channelType===type);
-  if(!channel)return <Empty icon={Radio} title="Number not found" body="Ask us to add this channel." action={<Button to="/app/channels">Back</Button>}/>;
+  const {store,org,run,canManage,t}=useApp();
+  const {id}=useParams();
+  const navigate=useNavigate();
+  const channel=store.channels.find(x=>x.orgId===org.id&&x.id===id);
+  const task=store.provisioning.find(x=>x.channelId===id);
+  const calls=store.calls.filter(c=>c.channelId===id);
+  const [usage,setUsage]=useState<{agents:string[];rules:string[];campaigns:string[]}|null>(null);
+  const [confirmRemove,setConfirmRemove]=useState(false);
+  useEffect(()=>{if(id)api.channelUsage(id).then(setUsage)},[id,store.agents,store.routingRules,store.campaigns]);
+  if(!channel)return <Empty icon={Radio} title="Number not found" body="It may have been removed." action={<Button to="/app/channels">Your numbers</Button>}/>;
   const steps:[string,string][]=[['requested','Requested'],['setting_up','Being set up'],['testing','Testing'],['active','Active']];
   const currentStep=task?steps.findIndex(s=>s[0]===task.state):(channel.status==='connected'?3:0);
+  const [tone,statusLabel,blurb]=STATUS_VIEW[channel.status]||STATUS_VIEW.disconnected;
+  const agents=store.agents.filter(a=>a.orgId===org.id&&a.channelIds.includes(channel.id));
+  const rules=store.routingRules.filter(r=>r.orgId===org.id&&r.condition.kind==='number'&&r.condition.value===channel.id);
+  const inUse=(usage?.agents.length||0)+(usage?.rules.length||0)+(usage?.campaigns.length||0);
+  const remove=async()=>{await run(()=>api.removeChannel(channel.id),'Number removed.');navigate('/app/channels')};
+
   return <div className="stack">
-    <PageHead eyebrow="Number" title={t(CHANNEL_LABEL[channel.type as ChannelType])} description={t(CHANNEL_BLURB[channel.type as ChannelType])}/>
+    <PageHead eyebrow={t(CHANNEL_LABEL[channel.type])} title={channel.label} description={t(CHANNEL_BLURB[channel.type])}
+      action={canManage&&<div className="row">
+        {!channel.isPrimary&&<Button variant="outline" onClick={()=>run(()=>api.setPrimaryChannel(org.id,channel.id),'Set as the main number.')}>Make main</Button>}
+        <Button variant="outline" onClick={()=>setConfirmRemove(true)}><Trash2 size={15}/> Remove</Button>
+      </div>}/>
+
     <div className="card stack">
-      <div className="row between"><div><div className="stat-label">{t('Your number')}</div><div className="stat-number mono">{channel.displayNumber||'—'}</div></div>
-        <Badge tone={(STATUS_VIEW[channel.status]||STATUS_VIEW.disconnected)[0]}>{t((STATUS_VIEW[channel.status]||STATUS_VIEW.disconnected)[1])}</Badge></div>
-      <div className="setup-steps">{steps.map(([key,label],i)=>
+      <div className="row between">
+        <div><div className="stat-label">{t('Your number')}</div><div className="stat-number mono">{channel.displayNumber||'—'}</div></div>
+        <Badge tone={tone}>{t(statusLabel)}</Badge>
+      </div>
+      <div className="setup-steps">{steps.map(([key,stepLabel],i)=>
         <div className={'setup-step '+(i<=currentStep?'done':'')} key={key}>
-          <span className="setup-dot">{i<=currentStep?<CheckCircle2 size={14}/>:i+1}</span>{t(label)}
+          <span className="setup-dot">{i<=currentStep?<CheckCircle2 size={14}/>:i+1}</span>{t(stepLabel)}
         </div>)}</div>
-      <p className="small muted">{t((STATUS_VIEW[channel.status]||STATUS_VIEW.disconnected)[2])}</p>
+      <p className="small muted">{t(blurb)}</p>
       {channel.status==='error'&&<div className="notice warning"><AlertTriangle size={15}/> {t('We have been notified and are working on it. You do not need to do anything.')}</div>}
+      {canManage&&<Field label="What this number is for" value={channel.label} onChange={v=>run(()=>api.renameChannel(channel.id,v))}/>}
     </div>
+
     <div className="grid cols-3">
       <div className="card"><div className="stat-label">{t('Calls on this number')}</div><div className="stat-number mono">{calls.length}</div></div>
       <div className="card"><div className="stat-label">{t('Last 7 days')}</div><div className="stat-number mono">{calls.filter(c=>Date.now()-new Date(c.startedAt).getTime()<7*86400000).length}</div></div>
       <div className="card"><div className="stat-label">{t('Last checked')}</div><div>{formatDate(channel.lastCheckedAt)}</div></div>
     </div>
+
+    <div className="card stack">
+      <h2>{t('What happens when this number rings')}</h2>
+      {agents.length===0&&rules.length===0
+        ?<div className="notice"><AlertTriangle size={15}/> {t('No agent answers this number yet, so calls fall through to your default agent.')} <Link to="/app/agents">{t('Assign an agent')}</Link></div>
+        :<div className="stack">
+          {agents.map(a=><div className="row between" key={a.id}>
+            <span>{t('Answered by')} <strong>{a.name}</strong></span>
+            <Link className="small" to={'/app/agents/'+a.id}>{t('Open agent')}</Link>
+          </div>)}
+          {rules.map(r=><div className="row between" key={r.id}>
+            <span>{t('Routing rule')} <strong>{r.name}</strong></span>
+            <Link className="small" to="/app/routing">{t('Open routing')}</Link>
+          </div>)}
+        </div>}
+    </div>
+
+    {confirmRemove&&<div className="modal-backdrop" onClick={()=>setConfirmRemove(false)}><div className="modal" onClick={e=>e.stopPropagation()}>
+      <div className="row between"><h2>{t('Remove')} {channel.label}?</h2><button className="icon-btn" onClick={()=>setConfirmRemove(false)}><X size={18}/></button></div>
+      {inUse>0
+        ?<div className="notice warning"><strong>{usage?.agents.length} {t('agents')}, {usage?.rules.length} {t('routing rules')} {t('and')} {usage?.campaigns.length} {t('campaigns')} {t('use this number.')}</strong><p>{t('They will fall back to your main number.')}</p></div>
+        :<p>{t('Nothing is using this number.')}</p>}
+      <p className="small muted">{t('Calls already made on it stay in your history.')}</p>
+      <div className="row"><Button variant="outline" onClick={()=>setConfirmRemove(false)}>Cancel</Button><Button variant="danger" onClick={remove}>Remove it</Button></div>
+    </div></div>}
   </div>;
 }
 

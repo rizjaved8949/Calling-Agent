@@ -34,13 +34,14 @@ const logPlatform = (action:string, detail:string, orgId?:string) => {
  * an explicit choice, then a routing rule, then the agent's default, then the
  * company default. The reason is recorded so call detail can explain itself.
  */
-function resolveKnowledge(orgId:string, agentId:string, explicitKbId?:string, channelType?:ChannelType, toNumber?:string):{kbId:string;kbName:string;resolvedBy:KnowledgeResolution} {
+function resolveKnowledge(orgId:string, agentId:string, explicitKbId?:string, channelId?:string, toNumber?:string):{kbId:string;kbName:string;resolvedBy:KnowledgeResolution} {
   const named = (kbId:string, resolvedBy:KnowledgeResolution) => ({kbId,kbName:store.knowledgeBases.find(x=>x.id===kbId)?.name||'Default',resolvedBy});
   if (explicitKbId) return named(explicitKbId,'explicit');
   const rules = store.routingRules.filter(x=>x.orgId===orgId&&x.enabled&&!x.isFallback).sort((a,b)=>a.order-b.order);
   for (const rule of rules) {
     const c = rule.condition;
-    const hit = (c.kind==='number'&&toNumber===c.value) || (c.kind==='channel'&&channelType===c.value) || (c.kind==='prefix'&&!!toNumber&&toNumber.startsWith(c.value));
+      const channelType=store.channels.find(x=>x.id===channelId)?.type;
+      const hit = (c.kind==='number'&&channelId===c.value) || (c.kind==='channel'&&channelType===c.value) || (c.kind==='prefix'&&!!toNumber&&toNumber.startsWith(c.value));
     if (hit && rule.outcome.knowledgeBaseIds?.length) return named(rule.outcome.knowledgeBaseIds[0],'rule');
   }
   const agent = store.agents.find(x=>x.id===agentId);
@@ -69,7 +70,7 @@ export const api = {
   getAgent: (agentId:string) => mock(()=>store.agents.find(x=>x.id===agentId)),
   createAgent: (orgId:string,name:string) => update(()=> {
     const defaultKb=store.knowledgeBases.find(x=>x.orgId===orgId&&x.isDefault)||store.knowledgeBases.find(x=>x.orgId===orgId);
-    const row:Agent={id:'agent-'+id(),orgId,name,status:'draft',personaId:'persona-'+id(),defaultKnowledgeBaseId:defaultKb?.id||'',knowledgeBaseIds:defaultKb?[defaultKb.id]:[],voiceId:'voice-'+id(),channels:[],createdAt:new Date().toISOString()};
+    const row:Agent={id:'agent-'+id(),orgId,name,status:'draft',personaId:'persona-'+id(),defaultKnowledgeBaseId:defaultKb?.id||'',knowledgeBaseIds:defaultKb?[defaultKb.id]:[],voiceId:'voice-'+id(),channelIds:[],createdAt:new Date().toISOString()};
     store.agents.push(row);
     store.personas.push({id:row.personaId,orgId,agentName:name,gender:'neutral',greeting:'Hello, how can I help?',roleDescription:'Help callers with accurate information.',languagePolicy:'Match the caller language.',toneNotes:'Clear and friendly.',forbiddenPhrases:[],escalationRules:'Hand complex requests to a person.',closingBehaviour:'Confirm next steps.',compiledPrompt:''});
     store.voices.push({id:row.voiceId,orgId,voiceName:'Alloy',speed:0.95,language:'ur-PK',sttModel:'gpt-4o-transcribe',noiseReduction:true,turnDetection:'server_vad',vadThreshold:0.5,vadSilenceMs:600,vadPrefixPaddingMs:300,vadEagerness:'medium',interruptionEnabled:true,greetingDelaySeconds:0.4});
@@ -125,11 +126,12 @@ export const api = {
   deleteRoutingRule: (ruleId:string) => update(()=> { store.routingRules=store.routingRules.filter(x=>x.id!==ruleId||x.isFallback); return true; }),
   reorderRoutingRules: (orgId:string,orderedIds:string[]) => update(()=> { orderedIds.forEach((rid,i)=>{const row=store.routingRules.find(x=>x.id===rid); if(row&&!row.isFallback)row.order=i;}); return store.routingRules.filter(x=>x.orgId===orgId).sort((a,b)=>a.order-b.order); }),
   /** Dry run: which rule would win, and which material the call would use. */
-  testRoute: (orgId:string,number:string,channelType:ChannelType,outsideHours:boolean) => mock(()=> {
+  testRoute: (orgId:string,channelId:string,callerNumber:string,outsideHours:boolean) => mock(()=> {
+    const channelType=store.channels.find(x=>x.id===channelId)?.type;
     const rules=store.routingRules.filter(x=>x.orgId===orgId&&x.enabled).sort((a,b)=>a.order-b.order);
     for (const rule of rules) {
       const c=rule.condition;
-      const hit = rule.isFallback || (c.kind==='number'&&number===c.value) || (c.kind==='channel'&&channelType===c.value) || (c.kind==='prefix'&&number.startsWith(c.value)) || (c.kind==='hours'&&((c.value==='outside')===outsideHours));
+      const hit = rule.isFallback || (c.kind==='number'&&channelId===c.value) || (c.kind==='channel'&&channelType===c.value) || (c.kind==='prefix'&&callerNumber.startsWith(c.value)) || (c.kind==='hours'&&((c.value==='outside')===outsideHours));
       if (hit) {
         const kbIds=rule.outcome.knowledgeBaseIds||[];
         return { rule, knowledgeBaseNames: kbIds.map(k=>store.knowledgeBases.find(x=>x.id===k)?.name||'Unknown'),
@@ -143,6 +145,31 @@ export const api = {
   getChannels: (orgId:string) => mock(()=>store.channels.filter(x=>x.orgId===orgId)),
   updateChannel: (channelId:string,patch:Partial<Channel>) => update(()=> { const row=store.channels.find(x=>x.id===channelId)!; Object.assign(row,patch); return row; }),
   testChannel: (channelId:string) => update(()=> { const row=store.channels.find(x=>x.id===channelId)!; row.status='verifying'; setTimeout(()=>{row.status=row.errorDetail?'error':'connected';row.lastCheckedAt=new Date().toISOString();notify();},1400); return row; }),
+  /** Request another number. It arrives as a setup task on our side. */
+  addChannel: (orgId:string,type:ChannelType,label:string) => update(()=> {
+    const row:Channel={id:'ch-'+id(),orgId,type,label,isPrimary:!store.channels.some(c=>c.orgId===orgId&&c.type===type),status:'disconnected',provider:type==='sim'?'Infobip':'Meta',config:{}};
+    store.channels.push(row);
+    store.provisioning.unshift({id:'prov-'+id(),orgId,channelId:row.id,kind:type,state:'requested',note:'',updatedAt:new Date().toISOString()});
+    logAudit(orgId,'Requested another number: '+label,'Channel',row.id);
+    return row; }),
+  renameChannel: (channelId:string,label:string) => update(()=> { const row=store.channels.find(x=>x.id===channelId)!; row.label=label; return row; }),
+  setPrimaryChannel: (orgId:string,channelId:string) => update(()=> {
+    const target=store.channels.find(x=>x.id===channelId)!;
+    store.channels.filter(c=>c.orgId===orgId&&c.type===target.type).forEach(c=>{c.isPrimary=c.id===channelId});
+    return target; }),
+  removeChannel: (channelId:string) => update(()=> {
+    const row=store.channels.find(x=>x.id===channelId); if(!row) return false;
+    store.agents.filter(a=>a.orgId===row.orgId).forEach(a=>{a.channelIds=a.channelIds.filter(x=>x!==channelId)});
+    store.routingRules=store.routingRules.filter(r=>r.isFallback||!(r.condition.kind==='number'&&r.condition.value===channelId));
+    store.channels=store.channels.filter(x=>x.id!==channelId);
+    store.provisioning=store.provisioning.filter(x=>x.channelId!==channelId);
+    logAudit(row.orgId,'Removed the number '+row.label,'Channel',channelId); return true; }),
+  /** Which agents, rules and campaigns depend on a number. */
+  channelUsage: (channelId:string) => mock(()=>({
+    agents: store.agents.filter(a=>a.channelIds.includes(channelId)).map(a=>a.name),
+    rules: store.routingRules.filter(r=>r.condition.kind==='number'&&r.condition.value===channelId).map(r=>r.name),
+    campaigns: store.campaigns.filter(c=>c.fromChannelId===channelId).map(c=>c.name),
+  })),
   getCredentials: (channelId:string) => mock(()=>store.credentials.filter(x=>x.channelId===channelId)),
   setCredential: (orgId:string,channelId:string,keyName:string,lastFour:string) => update(()=> {
     let row=store.credentials.find(x=>x.channelId===channelId&&x.keyName===keyName);
@@ -158,11 +185,13 @@ export const api = {
   endCall: (callId:string) => update(()=> { const row=store.calls.find(x=>x.id===callId)!; row.status='completed';row.endedAt=new Date().toISOString();row.recordingState='PENDING';return row; }),
   takeOverCall: (callId:string,userId?:string) => update(()=> { const row=store.calls.find(x=>x.id===callId)!; row.mode='operator'; if(userId)row.assignedToUserId=userId; return row; }),
   /** Place a call. `knowledgeBaseId` is the explicit per-call choice. */
-  createTestCall: (orgId:string,agentId:string,phoneNumber:string,knowledgeBaseId?:string) => update(()=> {
-    const resolved=resolveKnowledge(orgId,agentId,knowledgeBaseId,'sim',phoneNumber);
-    const row:Call={id:'call-'+id(),orgId,agentId,channelType:'sim',direction:'OUTBOUND',phoneNumber,fromNumber:'+92 21 555 0142',toNumber:phoneNumber,status:'active',mode:'agent',startedAt:new Date().toISOString(),durationSeconds:0,outcome:'Test call',summary:'Test call in progress.',recordingState:'RECORDING',recordingScope:'two_way',knowledgeBaseId:resolved.kbId,knowledgeBaseName:resolved.kbName,resolvedBy:resolved.resolvedBy};
+  createTestCall: (orgId:string,agentId:string,phoneNumber:string,knowledgeBaseId?:string,fromChannelId?:string) => update(()=> {
+    const agent=store.agents.find(a=>a.id===agentId);
+    const channel=store.channels.find(c=>c.id===(fromChannelId||agent?.channelIds[0]))||store.channels.find(c=>c.orgId===orgId&&c.isPrimary)||store.channels.find(c=>c.orgId===orgId)!;
+    const resolved=resolveKnowledge(orgId,agentId,knowledgeBaseId,channel.id,phoneNumber);
+    const row:Call={id:'call-'+id(),orgId,agentId,channelId:channel.id,channelType:channel.type,direction:'OUTBOUND',phoneNumber,fromNumber:channel.displayNumber||'',toNumber:phoneNumber,status:'active',mode:'agent',startedAt:new Date().toISOString(),durationSeconds:0,outcome:'Test call',summary:'Test call in progress.',recordingState:'RECORDING',recordingScope:'two_way',knowledgeBaseId:resolved.kbId,knowledgeBaseName:resolved.kbName,resolvedBy:resolved.resolvedBy};
     store.calls.unshift(row);
-    setTimeout(()=>{row.status='completed';row.endedAt=new Date().toISOString();row.durationSeconds=18;row.recordingState='PENDING';row.summary='The test call completed. The agent answered from '+resolved.kbName+'.';notify();},6500);
+    setTimeout(()=>{row.status='completed';row.endedAt=new Date().toISOString();row.durationSeconds=18;row.recordingState='PENDING';row.summary='The test call completed. It went out from '+(channel.label||'your number')+' and the agent answered from '+resolved.kbName+'.';notify();},6500);
     return row; }),
 
   // ---- Outbound campaigns -------------------------------------------------
@@ -170,7 +199,7 @@ export const api = {
   getCampaign: (campaignId:string) => mock(()=>store.campaigns.find(x=>x.id===campaignId)),
   getCampaignContacts: (campaignId:string) => mock(()=>store.campaignContacts.filter(x=>x.campaignId===campaignId)),
   createCampaign: (orgId:string,patch:Partial<Campaign>) => update(()=> {
-    const row:Campaign={id:'camp-'+id(),orgId,name:patch.name||'Untitled campaign',agentId:patch.agentId||store.agents.find(a=>a.orgId===orgId)?.id||'',knowledgeBaseIds:patch.knowledgeBaseIds||[],status:'draft',total:patch.total||0,attempted:0,connected:0,unanswered:0,windowStart:patch.windowStart||'09:00',windowEnd:patch.windowEnd||'17:00',maxAttempts:patch.maxAttempts||2,retryAfterMinutes:patch.retryAfterMinutes||240,createdAt:new Date().toISOString()};
+    const row:Campaign={id:'camp-'+id(),orgId,name:patch.name||'Untitled campaign',agentId:patch.agentId||store.agents.find(a=>a.orgId===orgId)?.id||'',fromChannelId:patch.fromChannelId||store.channels.find(c=>c.orgId===orgId&&c.isPrimary)?.id||'',knowledgeBaseIds:patch.knowledgeBaseIds||[],status:'draft',total:patch.total||0,attempted:0,connected:0,unanswered:0,windowStart:patch.windowStart||'09:00',windowEnd:patch.windowEnd||'17:00',maxAttempts:patch.maxAttempts||2,retryAfterMinutes:patch.retryAfterMinutes||240,createdAt:new Date().toISOString()};
     store.campaigns.unshift(row); logAudit(orgId,'Created the campaign '+row.name,'Campaign',row.id); return row; }),
   updateCampaign: (campaignId:string,patch:Partial<Campaign>) => update(()=> { const row=store.campaigns.find(x=>x.id===campaignId)!; Object.assign(row,patch); return row; }),
   setCampaignStatus: (campaignId:string,status:Campaign['status']) => update(()=> { const row=store.campaigns.find(x=>x.id===campaignId)!; row.status=status; logAudit(row.orgId,'Set the campaign '+row.name+' to '+status,'Campaign',row.id); return row; }),
@@ -214,11 +243,11 @@ export const api = {
   getProvisioning: (orgId?:string) => mock(()=>orgId?store.provisioning.filter(x=>x.orgId===orgId):store.provisioning),
   updateProvisioning: (taskId:string,patch:Partial<ProvisioningTask>) => update(()=> {
     const row=store.provisioning.find(x=>x.id===taskId)!; Object.assign(row,patch,{updatedAt:new Date().toISOString()});
-    if(patch.state==='active'){ const ch=store.channels.find(c=>c.orgId===row.orgId&&c.type===row.kind); if(ch){ch.status='connected';ch.lastCheckedAt=new Date().toISOString();} }
+    if(patch.state==='active'){ const ch=store.channels.find(c=>c.id===row.channelId); if(ch){ch.status='connected';ch.lastCheckedAt=new Date().toISOString();} }
     logPlatform('Updated setup',row.kind+' is now '+row.state,row.orgId); return row; }),
-  assignNumber: (orgId:string,kind:ChannelType,number:string) => update(()=> {
-    const ch=store.channels.find(c=>c.orgId===orgId&&c.type===kind); if(ch){ch.displayNumber=number;ch.status='verifying';}
-    logPlatform('Assigned number',number+' to '+kind,orgId); return ch; }),
+  assignNumber: (orgId:string,channelId:string,number:string) => update(()=> {
+    const ch=store.channels.find(c=>c.id===channelId); if(ch){ch.displayNumber=number;ch.status='verifying';}
+    logPlatform('Assigned number',number+' to '+(ch?.label||channelId),orgId); return ch; }),
   getPlatformAudit: () => mock(()=>store.platformAudit),
   startImpersonation: (orgId:string) => update(()=> { logPlatform('Started impersonation','Opened '+(store.organizations.find(x=>x.id===orgId)?.name||orgId)+' read-only',orgId); return true; }),
   endImpersonation: (orgId:string) => update(()=> { logPlatform('Ended impersonation','Closed read-only session',orgId); return true; }),

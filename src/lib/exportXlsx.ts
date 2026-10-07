@@ -22,7 +22,7 @@ export function exportCallsXlsx(calls:Call[]){
     {name:'xl/_rels/workbook.xml.rels',body:'<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>'},
     {name:'xl/worksheets/sheet1.xml',body:sheet}
   ];
-  const url=URL.createObjectURL(zip(files));const a=document.createElement('a');a.href=url;a.download='voxops-calls.xlsx';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  const url=URL.createObjectURL(zip(files));const a=document.createElement('a');a.href=url;a.download='calls.xlsx';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 
 
