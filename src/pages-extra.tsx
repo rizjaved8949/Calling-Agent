@@ -122,11 +122,11 @@ export function KnowledgeDetail(){
 // ------------------------------------------------------------------ routing --
 
 const CONDITION_LABEL:Record<RuleConditionKind,string>={
-  number:'The call came in on one of your numbers',
+  number:'The call came in on',
   channel:'The call came in on this channel',
   prefix:'The caller’s number starts with',
   contactList:'The caller is in this list',
-  hours:'The time of day is',
+  hours:'The call came in',
 };
 
 export function Routing(){
@@ -175,6 +175,7 @@ export function Routing(){
                 :<>{t(CONDITION_LABEL[rule.condition.kind])} <strong>{
                   rule.condition.kind==='channel'?t(CHANNEL_LABEL[rule.condition.value])
                   :rule.condition.kind==='number'?(store.channels.find(c=>c.id===rule.condition.value)?.label||t('a number that no longer exists'))
+                  :rule.condition.kind==='hours'?t(rule.condition.value==='outside'?'outside business hours':'inside business hours')
                   :rule.condition.value}</strong></>}
             </div>
             <div className="small">
@@ -339,6 +340,8 @@ export function Campaigns(){
 export function CampaignDetail(){
   const {store,org,run,canManage,t}=useApp();
   const {id}=useParams();
+  const navigate=useNavigate();
+  const [confirmDelete,setConfirmDelete]=useState(false);
   const campaign=store.campaigns.find(x=>x.id===id&&x.orgId===org.id);
   const contacts=store.campaignContacts.filter(x=>x.campaignId===id);
   const bases=store.knowledgeBases.filter(x=>x.orgId===org.id);
@@ -351,6 +354,7 @@ export function CampaignDetail(){
       action={canManage&&<div className="row">
         {campaign.status!=='running'&&<Button onClick={()=>run(()=>api.setCampaignStatus(campaign.id,'running'),'Campaign started.')}><Play size={15}/> Start</Button>}
         {campaign.status==='running'&&<Button variant="outline" onClick={()=>run(()=>api.setCampaignStatus(campaign.id,'paused'),'Campaign paused.')}><Pause size={15}/> Pause</Button>}
+        <Button variant="outline" onClick={()=>setConfirmDelete(true)}><Trash2 size={15}/> Delete</Button>
       </div>}/>
     <div className="grid cols-4">
       <div className="card"><div className="stat-label">{t('Called')}</div><div className="stat-number mono">{campaign.attempted}</div><div className="small muted">{t('of')} {campaign.total}</div></div>
@@ -368,6 +372,12 @@ export function CampaignDetail(){
           <tbody>{contacts.map(c=><tr key={c.id}><td>{c.name||'—'}</td><td className="mono">{c.number}</td><td className="mono">{c.attempts}</td><td>{c.lastOutcome||'—'}</td></tr>)}</tbody>
         </table></div>}
     </div>
+    {confirmDelete&&<div className="modal-backdrop" onClick={()=>setConfirmDelete(false)}><div className="modal" onClick={e=>e.stopPropagation()}>
+      <div className="row between"><h2>{t('Delete')} {campaign.name}?</h2><button className="icon-btn" onClick={()=>setConfirmDelete(false)}><X size={18}/></button></div>
+      <p>{t('This removes the campaign and its contact list. Calls already made stay in your history.')}</p>
+      <div className="row"><Button variant="outline" onClick={()=>setConfirmDelete(false)}>Cancel</Button>
+        <Button variant="danger" onClick={async()=>{await run(()=>api.deleteCampaign(campaign.id),'Campaign deleted.');navigate('/app/campaigns')}}>Delete it</Button></div>
+    </div></div>}
   </div>;
 }
 
@@ -397,7 +407,7 @@ export function Unanswered(){
           <div className="unanswered-body">
             <strong>{q.question}</strong>
             <div className="small muted">{t('Asked of')} {kb?.name||t('your documents')} · {t('last')} {formatDate(q.lastAskedAt)}</div>
-            <div className="small">{q.exampleCallIds.map(cid=><Link className="link-inline" to={'/app/history/'+cid} key={cid}>{t('Listen to a call')}</Link>)}</div>
+            <div className="small">{q.exampleCallIds.map((cid,i)=><Link className="link-inline" to={'/app/history/'+cid} key={cid}>{t(i===0?'Listen to a call':'Another example')}</Link>)}</div>
           </div>
           <div className="unanswered-actions">
             {q.status==='open'&&<>

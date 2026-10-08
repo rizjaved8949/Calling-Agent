@@ -68,8 +68,31 @@ export const useOrgReadiness=()=>useApp().readiness;
 
 function Provider({children}:{children:React.ReactNode}){
   const [store,setStore]=useState<Store>(()=>api.snapshot());
-  const [sessionState,setSessionState]=useState<Session|null>(()=>{try{return JSON.parse(localStorage.getItem('ca-session')||'null')}catch{return null}});
-  const [theme,setThemeState]=useState<'light'|'dark'>(()=>localStorage.getItem('ca-theme')==='dark'?'dark':'light');
+  const [sessionState,setSessionState]=useState<Session|null>(()=>{
+    // A shareable demo link: /app/dashboard?demo=admin opens a portal without
+    // signing in, so the product can be shown to someone without an account.
+    // Resolved here rather than in an effect, because the route guard reads the
+    // session on the very first render.
+    const seats:Record<string,Session>={
+      admin:{email:'samira@northstar.edu',name:'Samira Khan',userId:'user-1',orgId:'org-northstar',portal:'company'},
+      staff:{email:'omar@northstar.edu',name:'Omar Farooq',userId:'user-2',orgId:'org-northstar',portal:'company'},
+      platform:{email:'ops@platform.internal',name:'Platform Operations',userId:'user-platform',orgId:'org-northstar',portal:'platform',platformRole:'superadmin'},
+    };
+    const want=new URLSearchParams(window.location.search).get('demo');
+    const seat=want?seats[want]:undefined;
+    if(seat){
+      if(want==='platform')api.setProfile('user-platform');
+      localStorage.setItem('ca-session',JSON.stringify(seat));
+      return seat;
+    }
+    try{return JSON.parse(localStorage.getItem('ca-session')||'null')}catch{return null}
+  });
+  const [theme,setThemeState]=useState<'light'|'dark'>(()=>{
+    // ?theme=dark pairs with the demo link, so a shared URL opens as intended.
+    const want=new URLSearchParams(window.location.search).get('theme');
+    if(want==='dark'||want==='light'){localStorage.setItem('ca-theme',want);return want}
+    return localStorage.getItem('ca-theme')==='dark'?'dark':'light';
+  });
   const [pending,setPending]=useState(0);
   const [connection,setConnection]=useState<'live'|'reconnecting'|'offline'>('live');
   const [toasts,setToasts]=useState<{id:number;text:string}[]>([]);

@@ -1,0 +1,167 @@
+/* ==========================================================================
+   Polish layer: scrollbars, focus, motion and text contrast.
+   Loaded last, so it settles details the other sheets leave to the browser.
+   ========================================================================== */
+
+/* --- Scrollbars ----------------------------------------------------------
+   The native Windows scrollbar, with its grey track and arrow buttons, was
+   cutting through the dark sidebar. These are themed, thin and overlay-style,
+   and the sidebar gets its own light-on-dark variant. */
+
+* { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb, oklch(0.74 0.02 260)) transparent; }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--scroll-thumb, oklch(0.80 0.015 260));
+  border: 3px solid transparent;
+  border-radius: 100px;
+  background-clip: content-box;
+  transition: background-color .16s ease;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--scroll-thumb-hover, oklch(0.66 0.03 260)); background-clip: content-box; }
+::-webkit-scrollbar-corner { background: transparent; }
+/* Chrome still draws stepper arrows on Windows unless they are zeroed. */
+::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+
+:root[data-theme="dark"] {
+  --scroll-thumb: oklch(0.40 0.02 260);
+  --scroll-thumb-hover: oklch(0.52 0.025 260);
+}
+
+/* The sidebar is dark in both themes, so it needs its own thumb either way. */
+.app .sidebar, .app .sidebar nav, .app.platform .sidebar {
+  --scroll-thumb: rgba(146, 196, 216, .3);
+  --scroll-thumb-hover: rgba(146, 196, 216, .52);
+  scrollbar-color: rgba(146, 196, 216, .3) transparent;
+}
+.app .sidebar nav::-webkit-scrollbar { width: 8px; }
+
+/* Let the nav scroll without the bar reserving a permanent gutter. */
+.app .sidebar nav { overflow-y: auto; overscroll-behavior: contain; }
+
+/* --- Focus ---------------------------------------------------------------
+   A 3px ring was landing like a highlighter. This is a 2px ring plus a soft
+   halo, which reads as deliberate rather than accidental. */
+
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+.button:focus-visible, .icon-btn:focus-visible, .ghost-btn:focus-visible,
+.nav-link:focus-visible, .tab:focus-visible, .chip:focus-visible, .preset-card:focus-visible {
+  outline-offset: 3px;
+  box-shadow: 0 0 0 5px color-mix(in oklch, var(--ring) 22%, transparent);
+}
+.input:focus-visible, .select:focus-visible, .textarea:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 18%, transparent);
+}
+/* The sidebar sits on navy, so the ring needs to be light there. */
+.app .sidebar :focus-visible { outline-color: #8ad4e6; }
+.app .sidebar .ghost-btn:focus-visible { box-shadow: 0 0 0 5px rgba(138, 212, 230, .2); }
+
+/* --- Motion --------------------------------------------------------------
+   Short, consistent easing on the things that respond to a pointer. */
+
+.nav-link, .button, .icon-btn, .ghost-btn, .tab, .chip, .badge,
+.card.lift, .preset-card, .table tbody tr, .m-button, .m-nav-link {
+  transition: background-color .16s ease, color .16s ease, border-color .16s ease,
+              box-shadow .2s ease, transform .16s ease;
+}
+.card.lift:hover { transform: translateY(-2px); }
+.button:active, .m-button:active { transform: translateY(1px); }
+.sidebar { transition: width .18s ease; }
+.nav-link svg, .icon-btn svg { transition: color .16s ease, transform .16s ease; }
+.nav-link:hover svg { transform: translateX(1px); }
+
+/* Content arriving should settle, not snap. */
+.app .content > * { animation: rise .26s ease both; }
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .card.lift:hover, .nav-link:hover svg { transform: none; }
+}
+
+/* --- Text contrast -------------------------------------------------------
+   Sidebar labels were sitting at roughly 3:1 on navy, which is under the
+   threshold for body text. These lift them without making them shout. */
+
+.app .sidebar .nav-link { color: #b6cfdb; font-weight: 650; }
+.app .sidebar .nav-link:hover { color: #e8f6fa; }
+.app .sidebar .nav-link.active { color: #ffffff; font-weight: 750; }
+.app .sidebar .nav-group { color: #87adbf; letter-spacing: .13em; }
+.app .sidebar .brand { color: #f2fbff; }
+.app .sidebar .workspace { color: #eaf6fb; }
+.app .sidebar .ghost-btn { color: #9fc0cf; }
+.app .sidebar .ghost-btn:hover { color: #e8f6fa; background: rgba(146, 196, 216, .12); }
+
+.app.platform .sidebar .nav-link { color: #c3cbe6; }
+.app.platform .sidebar .nav-link:hover { color: #ffffff; }
+.app.platform .sidebar .nav-group { color: #9aa3c4; }
+
+/* Muted body copy was a touch light against the page in both themes. */
+.app .muted, .app .small.muted { color: var(--muted); }
+.app .help { color: var(--muted); }
+:root[data-theme="dark"] .app .table th { color: oklch(0.78 0.012 260); }
+
+/* --- Selection and small details ---------------------------------------- */
+::selection { background: color-mix(in oklch, var(--accent) 28%, transparent); color: inherit; }
+.app .table tbody tr:hover { background: color-mix(in oklch, var(--accent) 5%, var(--surface)); }
+hr { border: 0; border-top: 1px solid var(--border); }
+
+/* --- Connection setup (platform portal) ---------------------------------- */
+.conn-block { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--card); }
+.conn-block + .conn-block { margin-top: 10px; }
+.conn-block.open { border-color: color-mix(in oklch, var(--accent) 45%, var(--border)); }
+.conn-head {
+  width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  padding: 14px 16px; border: 0; background: transparent; text-align: start; color: inherit;
+}
+.conn-head:hover { background: var(--surface); }
+.conn-head-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.conn-body { padding: 4px 16px 16px; border-top: 1px solid var(--border); display: grid; gap: 14px; }
+.conn-field { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 10px 18px; align-items: start; padding-top: 14px; }
+.conn-field + .conn-field { border-top: 1px dashed var(--border); }
+.conn-field-label { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.conn-field-input { display: flex; gap: 8px; align-items: center; }
+.conn-field-input .input { min-height: 38px; }
+.conn-field > .small.muted { grid-column: 1 / -1; margin-top: -4px; }
+.conn-webhook { display: grid; gap: 8px; padding: 13px 14px; border-radius: 10px; background: var(--surface); }
+.conn-copy { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.conn-copy code {
+  flex: 1; min-width: 220px; font-size: .76rem; padding: 7px 10px; border-radius: 7px;
+  background: var(--card); border: 1px solid var(--border); overflow-wrap: anywhere;
+}
+.conn-actions { display: flex; align-items: center; gap: 11px; flex-wrap: wrap; padding-top: 4px; }
+@media (max-width: 860px) {
+  .conn-field { grid-template-columns: 1fr; }
+}
+
+/* Show/hide toggle and the inline remove confirmation on credential fields. */
+.conn-input-wrap { position: relative; flex: 1; min-width: 0; display: block; }
+.conn-input-wrap .input { width: 100%; padding-inline-end: 38px; }
+.conn-eye {
+  position: absolute; inset-inline-end: 6px; top: 50%; transform: translateY(-50%);
+  border: 0; background: transparent; color: var(--muted); padding: 6px; border-radius: 7px;
+  display: inline-flex; transition: color .16s ease, background-color .16s ease;
+}
+.conn-eye:hover { color: var(--foreground); background: var(--surface); }
+.conn-confirm {
+  grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap; padding: 10px 12px; border-radius: 9px;
+  background: color-mix(in oklch, var(--destructive) 8%, var(--card));
+  border: 1px solid color-mix(in oklch, var(--destructive) 30%, transparent);
+}
+
+/* A disabled history button should read as unavailable, not just faint. */
+.history-controls button:disabled { opacity: .38; cursor: not-allowed; filter: grayscale(1); }
+.history-controls button:not(:disabled) { cursor: pointer; }

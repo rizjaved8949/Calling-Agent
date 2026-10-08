@@ -4,6 +4,7 @@ import {Activity,AlertTriangle,BrainCircuit,CheckCircle2,Clock,FileText,ListChec
 import {Area,AreaChart,CartesianGrid,ResponsiveContainer,Tooltip,XAxis,YAxis} from 'recharts';
 import {Badge,Button,Empty,Field,PageHead,PresetPicker,Tabs,useApp,formatDate,formatDuration} from './app';
 import {api} from './lib/api';
+import {ConnectionSetup} from './connection-setup';
 import {presetKindHelp,presetKindLabel,presetsOfKind} from './lib/presets';
 import type {ChannelType,Persona,PresetKind} from './lib/types';
 
@@ -99,7 +100,7 @@ export function Dashboard(){
 
     <div className="grid cols-4">
       <div className="card"><div className="stat-label">{t('Calls today')}</div><div className="stat-number mono">{todayCalls.length}</div></div>
-      <div className="card"><div className="stat-label">{t('Talk time today')}</div><div className="stat-number mono">{talkMinutes}<span className="small"> {t('min')}</span></div></div>
+      <div className="card"><div className="stat-label">{t('Talk time today')}</div><div className="stat-number mono">{talkMinutes}</div><div className="small muted">{t('minutes')}</div></div>
       <div className="card"><div className="stat-label">{t('Answered')}</div><div className="stat-number mono">{answerRate}%</div></div>
       <div className="card"><div className="stat-label">{t('Messages sent')}</div><div className="stat-number mono">{messagesSent}</div></div>
     </div>
@@ -195,6 +196,8 @@ export function AgentDetail(){
   const [testNumber,setTestNumber]=useState('');
   const [testKb,setTestKb]=useState('');
   const [testFrom,setTestFrom]=useState('');
+  const [confirmDelete,setConfirmDelete]=useState(false);
+  const navigate=useNavigate();
   if(!agent)return <Empty icon={Mic2} title="Agent not found" body="It may have been deleted." action={<Button to="/app/agents">Back to agents</Button>}/>;
   const persona=store.personas.find(x=>x.id===agent.personaId)!;
   const bases=store.knowledgeBases.filter(x=>x.orgId===org.id);
@@ -225,6 +228,7 @@ export function AgentDetail(){
       action={<div className="row">
         <Badge tone={agent.status==='live'?'live':agent.status==='paused'?'warning':''}>{t(agent.status)}</Badge>
         {canManage&&<Button variant="outline" onClick={()=>run(()=>api.updateAgent(agent.id,{status:agent.status==='live'?'paused':'live'}),agent.status==='live'?'Agent paused.':'Agent is live.')}>{agent.status==='live'?t('Pause'):t('Go live')}</Button>}
+        {canManage&&<Button variant="outline" onClick={()=>setConfirmDelete(true)}><Trash2 size={15}/> Delete</Button>}
       </div>}/>
     <Tabs items={['Persona','How it speaks','Knowledge','Where it answers','Try it']} active={tab} onChange={setTab}/>
 
@@ -325,6 +329,13 @@ export function AgentDetail(){
       <div className="row"><Button disabled={!canManage||!testNumber.trim()} onClick={()=>run(()=>api.createTestCall(org.id,agent.id,testNumber,testKb||undefined,testFrom||undefined),'Calling now. Watch it on the Live screen.')}><Phone size={15}/> Call now</Button>
         <Button variant="outline" to="/app/live">Open live</Button></div>
     </div>}
+
+    {confirmDelete&&<div className="modal-backdrop" onClick={()=>setConfirmDelete(false)}><div className="modal" onClick={e=>e.stopPropagation()}>
+      <div className="row between"><h2>{t('Delete')} {agent.name}?</h2><button className="icon-btn" onClick={()=>setConfirmDelete(false)}><X size={18}/></button></div>
+      <p>{t('This removes the agent and its persona. Any routing rule pointing at it will fall back to your default agent. Calls it already handled stay in your history.')}</p>
+      <div className="row"><Button variant="outline" onClick={()=>setConfirmDelete(false)}>Cancel</Button>
+        <Button variant="danger" onClick={async()=>{await run(()=>api.deleteAgent(agent.id),'Agent deleted.');navigate('/app/agents')}}>Delete it</Button></div>
+    </div></div>}
   </div>;
 }
 
@@ -380,8 +391,10 @@ export function Channels(){
             const calls=store.calls.filter(c=>c.channelId===ch.id).length;
             return <div className="row between number-row" key={ch.id}>
               <div className="number-main">
-                <Link to={'/app/channels/'+ch.id}><strong>{ch.label}</strong></Link>
-                {ch.isPrimary&&<span className="small muted"> · {t('main')}</span>}
+                <span className="row" style={{gap:8}}>
+                  <Link to={'/app/channels/'+ch.id}><strong>{ch.label}</strong></Link>
+                  {ch.isPrimary&&<Badge tone="success">{t('Main')}</Badge>}
+                </span>
                 <div className="mono">{ch.displayNumber||t('Number not assigned yet')}</div>
                 <div className="small muted">
                   {agents.length?t('Answered by')+' '+agents.map(a=>a.name).join(', '):t('No agent answers this yet')}
@@ -453,6 +466,8 @@ export function ChannelDetail(){
       <div className="card"><div className="stat-label">{t('Last 7 days')}</div><div className="stat-number mono">{calls.filter(c=>Date.now()-new Date(c.startedAt).getTime()<7*86400000).length}</div></div>
       <div className="card"><div className="stat-label">{t('Last checked')}</div><div>{formatDate(channel.lastCheckedAt)}</div></div>
     </div>
+
+    <ConnectionSetup orgId={org.id} channelId={channel.id}/>
 
     <div className="card stack">
       <h2>{t('What happens when this number rings')}</h2>

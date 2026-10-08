@@ -3,6 +3,7 @@ import {Link,useNavigate,useParams} from 'react-router-dom';
 import {AlertTriangle,Building2,CheckCircle2,Eye,Plus,ServerCog,ShieldCheck,X} from 'lucide-react';
 import {Badge,Button,Empty,Field,PageHead,useApp,formatDate} from './app';
 import {api} from './lib/api';
+import {ConnectionSetup} from './connection-setup';
 import {presetKindLabel,presetsOfKind} from './lib/presets';
 import type {ChannelType,Preset,PresetKind,ProvisioningTask} from './lib/types';
 
@@ -99,24 +100,7 @@ export function PlatformCompanyDetail(){
       </table></div>
     </div>
 
-    <div className="card stack">
-      <h2>{t('Credentials')}</h2>
-      <p className="small muted">{t('Entered by us on the company’s behalf. The value is discarded on save; only the last four characters are kept.')}</p>
-      <div className="field-grid">
-        <div className="field"><label>{t('Number')}</label><select className="select" value={channelId} onChange={e=>setChannelId(e.target.value)}>{channels.map(c=><option key={c.id} value={c.id}>{c.label} — {t(CHANNEL_LABEL[c.type])}</option>)}</select></div>
-        <div className="field"><label>{t('Credential')}</label><select className="select" value={keyName} onChange={e=>setKeyName(e.target.value)}>
-          {['apiKey','accessToken','appSecret','phoneNumberId','businessAccountId','sipTrunkId','webhookVerifyToken'].map(k=><option key={k} value={k}>{k}</option>)}
-        </select></div>
-        <div className="field"><label>{t('Value')}</label><input className="input" type="password" value={secret} onChange={e=>setSecret(e.target.value)} placeholder={t('Paste the value')} autoComplete="off"/></div>
-      </div>
-      <div className="row"><Button onClick={saveSecret} disabled={secret.length<4}>Store credential</Button></div>
-      <div className="table-wrap"><table className="table">
-        <thead><tr><th>{t('Credential')}</th><th>{t('Value')}</th><th>{t('Set by')}</th><th>{t('When')}</th></tr></thead>
-        <tbody>{credentials.length===0
-          ?<tr><td colSpan={4} className="small muted">{t('Nothing stored yet.')}</td></tr>
-          :credentials.map(c=><tr key={c.id}><td className="mono">{c.keyName}</td><td className="mono">•••• •••• ····{c.lastFour}</td><td className="small">{c.setBy}</td><td className="small">{formatDate(c.setAt)}</td></tr>)}</tbody>
-      </table></div>
-    </div>
+    <ConnectionSetup orgId={org.id}/>
 
     <div className="grid cols-2">
       <div className="card stack">

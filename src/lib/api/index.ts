@@ -76,6 +76,13 @@ export const api = {
     store.voices.push({id:row.voiceId,orgId,voiceName:'Alloy',speed:0.95,language:'ur-PK',sttModel:'gpt-4o-transcribe',noiseReduction:true,turnDetection:'server_vad',vadThreshold:0.5,vadSilenceMs:600,vadPrefixPaddingMs:300,vadEagerness:'medium',interruptionEnabled:true,greetingDelaySeconds:0.4});
     logAudit(orgId,'Created the agent '+name,'Agent',row.id); return row; }),
   updateAgent: (agentId:string,patch:Partial<Agent>) => update(()=> { const row=store.agents.find(x=>x.id===agentId)!; Object.assign(row,patch); return row; }),
+  deleteAgent: (agentId:string) => update(()=> {
+    const row=store.agents.find(x=>x.id===agentId); if(!row) return false;
+    store.agents=store.agents.filter(x=>x.id!==agentId);
+    store.personas=store.personas.filter(x=>x.id!==row.personaId);
+    store.voices=store.voices.filter(x=>x.id!==row.voiceId);
+    store.routingRules.filter(r=>r.orgId===row.orgId).forEach(r=>{ if(r.outcome.agentId===agentId) r.outcome.agentId=undefined; });
+    logAudit(row.orgId,'Deleted the agent '+row.name,'Agent',agentId); return true; }),
   getPersona: (id:string) => mock(()=>store.personas.find(x=>x.id===id)),
   updatePersona: (id:string,patch:Partial<Persona>) => update(()=> { const row=store.personas.find(x=>x.id===id)!; Object.assign(row,patch); return row; }),
   getVoice: (id:string) => mock(()=>store.voices.find(x=>x.id===id)),
@@ -171,6 +178,10 @@ export const api = {
     campaigns: store.campaigns.filter(c=>c.fromChannelId===channelId).map(c=>c.name),
   })),
   getCredentials: (channelId:string) => mock(()=>store.credentials.filter(x=>x.channelId===channelId)),
+  deleteCredential: (credId:string) => update(()=> {
+    const row=store.credentials.find(x=>x.id===credId); if(!row) return false;
+    store.credentials=store.credentials.filter(x=>x.id!==credId);
+    logAudit(row.orgId,'Removed '+row.keyName,'Credential',credId); return true; }),
   setCredential: (orgId:string,channelId:string,keyName:string,lastFour:string) => update(()=> {
     let row=store.credentials.find(x=>x.channelId===channelId&&x.keyName===keyName);
     if(row){Object.assign(row,{lastFour,setBy:store.profile.fullName,setAt:new Date().toISOString()});}
@@ -202,6 +213,11 @@ export const api = {
     const row:Campaign={id:'camp-'+id(),orgId,name:patch.name||'Untitled campaign',agentId:patch.agentId||store.agents.find(a=>a.orgId===orgId)?.id||'',fromChannelId:patch.fromChannelId||store.channels.find(c=>c.orgId===orgId&&c.isPrimary)?.id||'',knowledgeBaseIds:patch.knowledgeBaseIds||[],status:'draft',total:patch.total||0,attempted:0,connected:0,unanswered:0,windowStart:patch.windowStart||'09:00',windowEnd:patch.windowEnd||'17:00',maxAttempts:patch.maxAttempts||2,retryAfterMinutes:patch.retryAfterMinutes||240,createdAt:new Date().toISOString()};
     store.campaigns.unshift(row); logAudit(orgId,'Created the campaign '+row.name,'Campaign',row.id); return row; }),
   updateCampaign: (campaignId:string,patch:Partial<Campaign>) => update(()=> { const row=store.campaigns.find(x=>x.id===campaignId)!; Object.assign(row,patch); return row; }),
+  deleteCampaign: (campaignId:string) => update(()=> {
+    const row=store.campaigns.find(x=>x.id===campaignId); if(!row) return false;
+    store.campaigns=store.campaigns.filter(x=>x.id!==campaignId);
+    store.campaignContacts=store.campaignContacts.filter(x=>x.campaignId!==campaignId);
+    logAudit(row.orgId,'Deleted the campaign '+row.name,'Campaign',campaignId); return true; }),
   setCampaignStatus: (campaignId:string,status:Campaign['status']) => update(()=> { const row=store.campaigns.find(x=>x.id===campaignId)!; row.status=status; logAudit(row.orgId,'Set the campaign '+row.name+' to '+status,'Campaign',row.id); return row; }),
 
   // ---- The improvement loop ----------------------------------------------

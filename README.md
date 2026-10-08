@@ -44,9 +44,16 @@ chunk size, provider name, webhook URL, credential or raw provider error.
   clean of it; the only matches left are code identifiers such as
   `kb.similarityThreshold`, never rendered text.
 
-Credentials are entered by the platform operator on the company's behalf, in
-**Platform → company detail**. The input is write-only: the value is discarded on
-submit and only the last four characters plus audit metadata are kept.
+**Credentials are entered by the company itself**, on each number's own page
+(**Numbers → a number → Connection setup**). The platform portal has the same panel
+for support, but it is the company's own screen that owns the job.
+
+This is the one place where provider names are unavoidable — you cannot ask someone
+for a Meta app secret without saying so — so the plain-language rule is relaxed there,
+and only there. Everything else about the field is still write-only: the input clears
+on save, only the last four characters plus who and when are kept, secret fields have
+a show/hide toggle while you type, and a saved value can be replaced or removed but
+never read back.
 
 ## Many numbers per company
 
