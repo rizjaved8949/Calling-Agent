@@ -1,16 +1,30 @@
-# Calling Agent — frontend
+# Calling Agent
 
-A browser-only React, TypeScript, Vite and Tailwind frontend for a multi-tenant voice
-agent platform. Companies get an AI agent that answers and places calls on a phone
-number and on WhatsApp, grounded in their own uploaded material. The public site has
-Home, Product, Solutions, Pricing, About, Resources and Contact pages.
+A multi-tenant voice agent platform. Companies get an AI agent that answers and
+places calls on a phone number and on WhatsApp, grounded in their own uploaded
+material. The public site has Home, Product, Solutions, Pricing, About, Resources
+and Contact pages.
+
+## Layout
+
+```
+frontend/   the React, TypeScript, Vite and Tailwind app (everything runs here today)
+backend/    reserved for the API server — empty for now
+```
+
+The frontend is still browser-only: it serves itself from an in-memory mock store
+in `frontend/src/lib/api`, so nothing depends on the backend yet.
 
 ## Run
 
-1. `npm install`
+From the repository root, which forwards to `frontend/`:
+
+1. `npm --prefix frontend install`
 2. `npm run dev`
 3. Open http://localhost:5173/
 4. `npm run build` for a production bundle.
+
+Running the commands inside `frontend/` directly works the same way.
 
 ## Three portals, three demo logins
 
