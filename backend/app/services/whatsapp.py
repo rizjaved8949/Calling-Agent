@@ -272,6 +272,32 @@ class WhatsApp:
             },
         )
 
+    async def answer_call(self, provider_call_id: str, sdp_answer: str) -> dict[str, Any]:
+        """Accept an inbound call, handing Meta our SDP answer.
+
+        This is the reply to the offer that arrived on the webhook. Until it is
+        sent the caller hears ringing; after it, Meta starts media.
+        """
+        return await self._post(
+            f"{self.tenant.phone_number_id}/calls",
+            {
+                "messaging_product": "whatsapp",
+                "call_id": provider_call_id,
+                "action": "accept",
+                "session": {"sdp_type": "answer", "sdp": sdp_answer},
+            },
+        )
+
+    async def reject_call(self, provider_call_id: str) -> dict[str, Any]:
+        return await self._post(
+            f"{self.tenant.phone_number_id}/calls",
+            {
+                "messaging_product": "whatsapp",
+                "call_id": provider_call_id,
+                "action": "reject",
+            },
+        )
+
     async def terminate_call(self, provider_call_id: str) -> dict[str, Any]:
         return await self._post(
             f"{self.tenant.phone_number_id}/calls",

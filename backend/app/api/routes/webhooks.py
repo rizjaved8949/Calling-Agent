@@ -15,6 +15,7 @@ forge another's traffic.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import time
@@ -38,7 +39,7 @@ from ...repositories import knowledge
 from ...repositories import tenants as tenant_repo
 from ...security import playback
 from ...services import reports
-from ...services.agent import reply
+from ...services.agent import live, reply
 from ...services.telephony import Infobip
 from ...services.whatsapp import WhatsApp, mask, signature_ok
 
@@ -287,9 +288,22 @@ async def _on_calls(tenant: Tenant, value: dict[str, Any]) -> None:
                 provider_call_id, mask(existing.counterparty), tenant.phone_number_id,
             )
 
+        # The offer is the call. Meta sends an SDP offer with the `connect`
+        # event and waits for an answer; everything else here is bookkeeping.
+        offer = ""
+        session_info = raw.get("session") or {}
+        if isinstance(session_info, dict) and session_info.get("sdp_type") == "offer":
+            offer = str(session_info.get("sdp") or "")
+
         if event in {"connect", "accepted", "answered"}:
             existing.status = CallStatus.IN_PROGRESS
             existing.answered_at = existing.answered_at or time.time()
+            if offer and existing.direction is Direction.INBOUND:
+                await call_repo.save_call(existing)
+                # Answered in the background: terminating WebRTC takes seconds
+                # and Meta retries a webhook that does not return promptly.
+                asyncio.create_task(_answer_whatsapp(tenant, existing, offer))
+                continue
         elif event in {"terminate", "ended", "completed"}:
             existing.status = CallStatus.COMPLETED
             existing.ended_at = time.time()
@@ -299,9 +313,15 @@ async def _on_calls(tenant: Tenant, value: dict[str, Any]) -> None:
                 )
             else:
                 existing.status = CallStatus.NO_ANSWER
-            if existing.recording_state == RecordingState.PENDING:
-                # Nothing recorded it: this build does not carry the media.
+            # The agent was on this call: settle it properly, which stores the
+            # recording and the transcript, then close the WebRTC leg.
+            from ...services.agent import whatsapp_media
+
+            if live.get(existing.id) is not None:
+                asyncio.create_task(live.finish(tenant, existing.id, "the caller hung up"))
+            elif existing.recording_state == RecordingState.PENDING:
                 existing.recording_state = RecordingState.ABSENT
+            asyncio.create_task(whatsapp_media.drop(existing.id))
         elif event in {"reject", "rejected", "failed"}:
             existing.status = CallStatus.FAILED
             existing.ended_at = time.time()
@@ -342,6 +362,61 @@ async def infobip_events(phone_number_id: str, request: Request) -> dict:
     except Exception:  # noqa: BLE001
         log.exception("failed while handling an Infobip event for %s", phone_number_id)
     return {"status": "received"}
+
+
+async def _answer_whatsapp(tenant: Tenant, call: Call, sdp_offer: str) -> None:
+    """Answer an inbound WhatsApp call and put the agent on it.
+
+    Four things in order, and the order matters: terminate the WebRTC leg
+    locally, tell Meta we accept with our answer, wait for media to actually
+    connect, and only then start the agent. Starting it earlier means its
+    greeting plays into a connection that does not exist yet, and the caller
+    hears the middle of a sentence.
+
+    Never raises. The webhook has already returned, and a failure here settles
+    the call rather than leaving a row that says a call is still in progress.
+    """
+    from ...services.agent import whatsapp_media
+
+    if not whatsapp_media.available():
+        log.error("call %s: aiortc is not installed, cannot answer", call.id)
+        await _fail_call(tenant, call, "the media stack is not installed")
+        return
+
+    bridge = None
+    try:
+        bridge = whatsapp_media.WhatsAppBridge(call.id, tenant)
+        whatsapp_media.register(call.id, bridge)
+
+        answer_sdp = await bridge.answer(sdp_offer)
+        await WhatsApp(tenant).answer_call(call.provider_call_id, answer_sdp)
+        log.info("call %s: accepted with Meta, waiting for media", call.id)
+
+        if not await bridge.wait_connected(timeout=30):
+            raise RuntimeError(
+                "Meta accepted the call but WebRTC media never connected "
+                "(check UDP/NAT, or set WHATSAPP_TURN_URL)"
+            )
+
+        session = await live.start(tenant, call, bridge.send_to_caller, keepalive=False)
+        bridge.attach(session)
+        log.info("call %s: the agent is on the line", call.id)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("call %s: could not answer", call.id)
+        if bridge is not None:
+            await whatsapp_media.drop(call.id)
+        with contextlib.suppress(Exception):
+            await WhatsApp(tenant).terminate_call(call.provider_call_id)
+        await _fail_call(tenant, call, str(exc)[:200])
+
+
+async def _fail_call(tenant: Tenant, call: Call, reason: str) -> None:
+    call.status = CallStatus.FAILED
+    call.ended_at = time.time()
+    call.error = reason
+    call.recording_state = RecordingState.NONE
+    with contextlib.suppress(Exception):
+        await call_repo.save_call(call)
 
 
 def name_of(event: dict[str, Any]) -> str:

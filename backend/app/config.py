@@ -123,6 +123,14 @@ class Settings(BaseSettings):
     # Greeting, language, voice and persona are deliberately absent: each
     # company sets its own on the settings screen, and a platform-wide default
     # would be a sentence spoken to someone else's callers.
+    # WebRTC for WhatsApp calls. STUN alone was enough for the service that
+    # ran this before, on Render; the TURN settings exist so a relay can be
+    # added without a code change if media ever fails to connect.
+    whatsapp_stun_url: str = "stun:stun.l.google.com:19302"
+    whatsapp_turn_url: str = ""
+    whatsapp_turn_username: str = ""
+    whatsapp_turn_credential: str = ""
+
     voice_engine: str = "gemini"
     gemini_api_key: str = ""
     gemini_live_model: str = "gemini-3.1-flash-live-preview"

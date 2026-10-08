@@ -27,3 +27,8 @@ numpy==2.5.1
 # Reading text out of an uploaded PDF, once on upload rather than on every
 # message. Pure Python and about a megabyte, against PyMuPDF's twenty.
 pypdf==5.1.0
+
+# WhatsApp calls arrive as WebRTC: Meta sends an SDP offer and expects a real
+# endpoint on the other end. aiortc is that endpoint, and `av` is the Opus
+# codec it decodes and encodes with.
+aiortc==1.14.0

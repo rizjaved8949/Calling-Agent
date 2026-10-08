@@ -66,49 +66,55 @@ See [backend/README.md](backend/README.md) for the API and what is not built yet
 
 ## What still needs doing
 
-Live today: **https://calling-agent-amber.vercel.app** → **https://calling-agent-juk1.onrender.com**
+Live: **https://calling-agent-amber.vercel.app** → **https://calling-agent-juk1.onrender.com**
 
-### Needs you — blocking
+### Yours — dashboard changes and decisions
+
+Everything in this list needs an account you own. None of it is code.
 
 - [ ] **Google Cloud Console — add the redirect URI.** Credentials → your OAuth
       client (project `strategic-insights-hub`) → Authorised redirect URIs →
       `https://calling-agent-juk1.onrender.com/api/google/callback`. Keep the
-      localhost one alongside. **Verified failing today**: Google answers
+      localhost one too. **Verified failing**: Google answers
       `redirect_uri_mismatch`, so no company can connect their Drive.
 - [ ] **Infobip — point call webhooks here.** Calls configuration
       *"Conversaigent Voice Agent"* → notification URL →
       `https://calling-agent-juk1.onrender.com/api/webhooks/infobip/674871172379324`.
-      Without it a SIM call really connects and the row never leaves `RINGING`.
-- [ ] **Render — upgrade to Starter.** Free sleeps after 15 minutes, so a call
-      arriving at a sleeping instance is a missed call, and 0.1 vCPU cannot do
-      real-time audio. This blocks the media bridge from working at all.
-- [ ] **Run `supabase/migrations/20261009000000_lock_down_remaining_tables.sql`.**
-      Seventeen tables — including call transcripts, emails and phone numbers —
-      are readable with the published anon key. See
-      [backend/SECURITY.md](backend/SECURITY.md).
-
-### Needs you — before real customers
-
+      The code to answer a SIM call and attach the agent is written and tested;
+      without this the carrier never tells us the call connected.
+- [ ] **Render — upgrade to Starter.** Free sleeps after 15 minutes (a call
+      arriving at a sleeping instance is a missed call) and gives 0.1 vCPU,
+      which cannot carry real-time audio. This one gates the whole voice
+      feature working under load.
 - [ ] **Supabase — upgrade from Free.** It pauses after about a week idle, and
-      a paused project does not error: it goes silent and every screen empties.
+      a paused project does not error: it goes silent.
 - [ ] **Publish the Google consent screen.** Testing mode caps you at 100
-      users, and publishing needs a privacy policy URL.
-- [ ] **Decide the wording of the privacy and data-deletion pages.** Google
-      requires one, Meta requires both. The pages can be built once the
-      commitments are yours to make.
-- [ ] **Decide the auth model.** The company API key currently lives in browser
-      storage — fine for you, not for selling.
-- [ ] **Click through the app.** Nobody has yet.
-- [ ] **Decide about `calls` webhooks.** They now point here, and this build
-      logs calls without answering them, so the WhatsApp number rings
-      unanswered until the media bridge lands.
+      users. Needs a privacy policy URL first.
+- [ ] **Write the privacy and data-deletion wording.** Google requires one,
+      Meta requires both. The pages get built once the commitments are yours
+      to make.
+- [ ] **Decide the auth model.** Still outstanding; the company API key lives
+      in browser storage today.
+- [ ] **Set an agent greeting** for your own company, or the agent mirrors the
+      caller instead of introducing itself. Settings → agent.
+- [ ] **Decide about `calls` webhooks.** They point here now, and WhatsApp
+      calls are not answered until the WebRTC bridge lands, so that number
+      rings unanswered meanwhile.
 - [ ] Billing and usage limits — nothing counts minutes or messages.
 
-### Being built
+~~Run the RLS lockdown migration~~ — **done**, all 21 tables now refuse the
+public anon key.
 
-SIM media bridge → WhatsApp media bridge → operator takeover. The shared core
-(`app/services/agent/`) is written and tested; what is missing is the transport
-that carries audio into it.
+### Mine — being built
+
+- [x] Multi-tenant core, credentials, isolation, call log, recordings, Drive
+- [x] WhatsApp messaging both ways, with auto-reply from uploaded material
+- [x] The voice agent, and the call session it runs in
+- [x] SIM calls, operator takeover, and the test harness that proves them
+- [ ] WhatsApp calls — WebRTC, inbound and outbound
+- [ ] Every screen in the app wired to the API
+- [ ] Sign-in, once the model is chosen
+- [ ] Privacy and data-deletion pages
 
 ## Deploying
 
