@@ -30,7 +30,7 @@ that points at asset names the new deploy no longer has.
 Set one, under Settings → Environment Variables:
 
 ```
-VITE_API_URL = https://<your-render-service>.onrender.com
+VITE_API_URL = https://calling-agent-juk1.onrender.com
 ```
 
 Set it for Production, Preview and Development. Two things worth knowing:
