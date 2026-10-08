@@ -19,6 +19,10 @@ COPY requirements.txt ./
 RUN pip install -r requirements.txt
 
 COPY app ./app
+# The maintenance commands travel with the image, so a migration can be run
+# from the Render shell rather than from a laptop that would otherwise need a
+# copy of the production credentials to do it.
+COPY scripts ./scripts
 
 # Recordings fall back to this when no company has connected Drive and no
 # bucket is configured. It does not survive a redeploy — that is the point of

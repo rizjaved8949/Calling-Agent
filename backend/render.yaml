@@ -19,13 +19,15 @@ services:
     runtime: docker
     rootDir: backend
     dockerfilePath: ./Dockerfile
-    plan: starter
-    region: oregon
+    # Free, with one consequence worth knowing: a free service spins down after
+    # ~15 minutes without traffic and takes roughly a minute to wake. A webhook
+    # that arrives while it is asleep is waiting on that cold start, and Meta
+    # does not wait a minute for a call webhook. Fine for a demo; move to
+    # starter before a customer's calls depend on it.
+    plan: free
+    # Nearest region to the numbers being called keeps the round trip short.
+    region: singapore
     healthCheckPath: /health
-    # One instance. The Google Sheet sync debounces in process memory, so a
-    # second worker would mean two uploads racing for the same file. Scale with
-    # instances behind Render's load balancer, not workers inside the container.
-    numInstances: 1
 
     envVars:
       # ---- Set these in the Render dashboard; never commit them -------------
