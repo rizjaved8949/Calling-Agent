@@ -27,7 +27,12 @@ RUN mkdir -p data/recordings
 
 EXPOSE 8000
 
-# No --reload, and one worker by default: the Sheet-sync debounce keeps state
-# in the process, so a second worker would mean two uploads racing. Scale with
-# replicas behind the load balancer rather than workers inside the container.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Shell form on purpose: Render (and Cloud Run, and Heroku) inject the port to
+# listen on as $PORT, and a container that ignores it binds somewhere the load
+# balancer is not looking — which presents as a deploy that builds, starts, and
+# then fails its health check with nothing in the logs.
+#
+# No --reload, and one worker: the Google Sheet sync debounces in process
+# memory, so a second worker would mean two uploads racing for the same file.
+# Scale with instances behind the load balancer, not workers inside this.
+CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}

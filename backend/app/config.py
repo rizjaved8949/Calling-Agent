@@ -13,6 +13,7 @@ migrated. See `app.repositories.tenants` for the resolution order.
 """
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -23,8 +24,15 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 
 class Settings(BaseSettings):
+    # APP_ENV_FILE lets the test suite point somewhere that does not exist, so
+    # tests never read the developer's own .env. A suite whose result depends
+    # on local configuration is a suite that passes on one machine and fails on
+    # another for reasons nobody can see.
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", extra="ignore", case_sensitive=False
+        env_file=os.getenv("APP_ENV_FILE", ".env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+        case_sensitive=False,
     )
 
     # ---- Service ----------------------------------------------------------
@@ -32,8 +40,11 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
     log_level: str = "INFO"
-    # Comma-separated CORS allowlist. The frontend dev server is the default.
-    frontend_url: str = "http://localhost:5173"
+    # Comma-separated CORS allowlist. Both spellings of the dev server are
+    # included because they are *different origins* to a browser: opening the
+    # app on 127.0.0.1 when only localhost is allowed fails every request with
+    # an opaque CORS error that says nothing about the cause.
+    frontend_url: str = "http://localhost:5173,http://127.0.0.1:5173"
     # Where webhooks are delivered. Meta and Infobip both need an absolute URL.
     public_base_url: str = ""
 
@@ -103,6 +114,19 @@ class Settings(BaseSettings):
     infobip_base_url: str = ""
     infobip_api_key: str = ""
 
+    # ---- Voice agent ------------------------------------------------------
+    # Configured here, and **not yet used**: the engine that carries call audio
+    # is the one piece this build does not have (see the README). The key and
+    # the model live here so that when it lands there is nothing to go and find,
+    # and so /health can say whether the agent could run at all.
+    #
+    # Greeting, language, voice and persona are deliberately absent: each
+    # company sets its own on the settings screen, and a platform-wide default
+    # would be a sentence spoken to someone else's callers.
+    voice_engine: str = "gemini"
+    gemini_api_key: str = ""
+    gemini_live_model: str = "gemini-3.1-flash-live-preview"
+
     request_timeout_seconds: float = Field(default=30.0)
 
     @property
@@ -121,6 +145,13 @@ class Settings(BaseSettings):
     def recordings_path(self) -> Path:
         candidate = Path(self.recordings_dir)
         return candidate if candidate.is_absolute() else BASE_DIR / candidate
+
+    @property
+    def agent_configured(self) -> bool:
+        """Whether the voice engine has a key. It still has no media bridge."""
+        if self.voice_engine.lower() == "gemini":
+            return bool(self.gemini_api_key.strip())
+        return False
 
     @property
     def is_production(self) -> bool:

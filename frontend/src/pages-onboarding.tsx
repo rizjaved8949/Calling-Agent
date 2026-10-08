@@ -1,11 +1,11 @@
-import {useState} from 'react';
+import {useEffect,useState} from 'react';
 import {Link,useNavigate,useParams} from 'react-router-dom';
 import {AlertTriangle,CheckCircle2,Clock,MessageSquare,Sparkles} from 'lucide-react';
 import {Badge,Button,Empty,Field,PageHead,Tabs} from './app';
 import {useApp} from './app-context';
 import {formatDate,formatDuration} from './lib/format';
 import {api} from './lib/api';
-import type {ChannelType} from './lib/types';
+import type {Call,ChannelType} from './lib/types';
 
 /**
  * Setup and call detail. Both are written around managed provisioning: the
@@ -122,6 +122,38 @@ export function Onboarding(){
 }
 
 /** Honest about which material answered, and where the agent came up short. */
+/** What a recording actually captured, in the company's words rather than ours. */
+const SCOPE:Record<string,string>={two_way:'Both sides of the conversation',caller_only:'Only the caller',agent_only:'Only the agent',none:'Nothing was recorded'};
+
+/**
+ * The audio player.
+ *
+ * The URL is fetched rather than read off the call, because a media element
+ * sends no Authorization header: the server mints a short-lived link that
+ * carries its own proof. Requested when the tab is opened rather than with the
+ * call list, so browsing history does not mint a playable link for every
+ * recording the company has ever made.
+ */
+function RecordingPlayer({call}:{call:Call}){
+  const {t}=useApp();
+  const [url,setUrl]=useState('');
+  const [error,setError]=useState('');
+  useEffect(()=>{
+    let cancelled=false;
+    setUrl('');setError('');
+    api.playbackUrl(call.id)
+      .then(href=>{if(!cancelled)setUrl(href||'')})
+      .catch(cause=>{if(!cancelled)setError(cause instanceof Error?cause.message:'The recording could not be loaded.')});
+    return()=>{cancelled=true};
+  },[call.id]);
+  if(error)return <div className="notice danger">{error}</div>;
+  if(!url)return <div className="small muted">{t('Loading the recording…')}</div>;
+  return <>
+    <audio controls src={url} style={{width:'100%'}}/>
+    <div className="small muted">{t('This recording contains')}: {t(SCOPE[call.recordingScope])}</div>
+  </>;
+}
+
 export function CallDetail(){
   const {store,org,t}=useApp();
   const {id}=useParams();
@@ -140,7 +172,6 @@ export function CallDetail(){
     NONE:['','This call was never recorded.'],
   };
   const [recTone,recBlurb]=RECORDING[call.recordingState];
-  const SCOPE:Record<string,string>={two_way:'Both sides of the conversation',caller_only:'Only the caller',agent_only:'Only the agent',none:'Nothing was recorded'};
 
   return <div className="stack">
     <PageHead eyebrow="Call" title={call.phoneNumber}
@@ -183,10 +214,7 @@ export function CallDetail(){
       </div>}
       {tab==='Recording'&&<div className="stack">
         <div className="notice">{t(recBlurb)}</div>
-        {call.recordingState==='READY'&&call.recordingUrl&&<>
-          <audio controls src={call.recordingUrl} style={{width:'100%'}}/>
-          <div className="small muted">{t('This recording contains')}: {t(SCOPE[call.recordingScope])}</div>
-        </>}
+        {call.recordingState==='READY'&&<RecordingPlayer call={call}/>}
         {call.recordingState==='PENDING'&&<div className="row"><Button variant="outline" onClick={()=>location.reload()}>Check again</Button></div>}
       </div>}
       {tab==='What it looked up'&&<div className="stack">

@@ -1,7 +1,17 @@
 import { initialStore } from '../fixtures';
+import { LIVE, hasAuthToken } from './http';
+import { live, toChannels, toCredentials, toOrganization } from './live';
 import type { Store, Organization, Agent, Persona, Voice, KnowledgeBase, KbDocument, Channel, Call, Message, Invitation, Role, WebhookEndpoint, Guide, CallSetup, Campaign, ChannelType, ProvisioningTask, Preset, KnowledgeResolution } from '../types';
 
-export const USE_MOCK = true;
+/**
+ * When VITE_API_URL is set this module talks to the Python backend for
+ * everything the backend owns — the company and its credentials, calls,
+ * recordings, messages and Google Drive. The remaining slices still come from
+ * the fixtures, and the screens that read them are gated behind `isLive`
+ * so nothing presents invented data as real. See `live.ts` for the mapping.
+ */
+export const USE_MOCK = !LIVE;
+export { LIVE, hasAuthToken, setAuthToken } from './http';
 let store: Store = structuredClone(initialStore);
 const listeners = new Set<() => void>();
 let pending = 0;
@@ -21,6 +31,57 @@ async function mock<T>(work:()=>T, failureRate=0.01):Promise<T> {
   } finally { pending--; notifyPending(); }
 }
 const update = <T,>(work:()=>T) => mock(() => { const result=work(); notify(); return result; },0);
+
+/**
+ * A real request, counted in the same pending tally the mock uses so the
+ * global activity indicator keeps working. No artificial latency and no
+ * injected failures: those exist to make the prototype feel like a network,
+ * and this *is* one.
+ */
+async function real<T>(work:()=>Promise<T>):Promise<T> {
+  pending++; notifyPending();
+  try { return await work(); } finally { pending--; notifyPending(); }
+}
+
+/**
+ * Pull the company, its channels and its credential state into the store.
+ *
+ * The backend has one tenant per number and the app has an organisation with
+ * channels hanging off it, so this is where one becomes the other.
+ */
+export async function hydrateCompany(): Promise<void> {
+  if (!LIVE || !hasAuthToken()) return;
+  const company = await live.company();
+  const orgId = company.phoneNumberId;
+  const previous = store.organizations.find(x => x.id === orgId);
+  // Replaced, not merged: leaving the fixture companies in the list would let
+  // a screen resolve one of them and show a stranger's name beside real calls.
+  store.organizations = [toOrganization(company, previous)];
+  store.channels = toChannels(company);
+  store.credentials = toCredentials(company);
+  notify();
+}
+
+export async function hydrateCalls(): Promise<void> {
+  if (!LIVE || !hasAuthToken()) return;
+  store.calls = await live.calls();
+  notify();
+}
+
+export async function hydrateMessages(): Promise<void> {
+  if (!LIVE || !hasAuthToken()) return;
+  store.messages = await live.messages();
+  notify();
+}
+
+/** Everything, for the initial load. */
+export async function hydrate(): Promise<void> {
+  if (!LIVE || !hasAuthToken()) return;
+  await hydrateCompany();
+  // Settled, not all: a company with no WhatsApp credentials yet still gets
+  // its dashboard, with the parts that need Meta simply empty.
+  await Promise.allSettled([hydrateCalls(), hydrateMessages()]);
+}
 const id = () => Math.random().toString(36).slice(2,10);
 const logAudit = (orgId:string, action:string, targetType:string, targetId:string) => {
   store.audit.unshift({id:id(),orgId,actorName:store.profile.fullName,action,targetType,targetId,createdAt:new Date().toISOString()});
@@ -49,8 +110,23 @@ function resolveKnowledge(orgId:string, agentId:string, setupId?:string, channel
 export const api = {
   // ---- Organisations and people ------------------------------------------
   getOrganizations: () => mock(()=>store.organizations),
-  getOrganization: (orgId:string) => mock(()=>store.organizations.find(x=>x.id===orgId)),
-  updateOrganization: (orgId:string, patch:Partial<Organization>) => update(()=> { const row=store.organizations.find(x=>x.id===orgId)!; Object.assign(row,patch); return row; }),
+  getOrganization: (orgId:string) => LIVE
+    ? real(async()=>{ await hydrateCompany(); return clone(store.organizations.find(x=>x.id===orgId)); })
+    : mock(()=>store.organizations.find(x=>x.id===orgId)),
+  updateOrganization: (orgId:string, patch:Partial<Organization>) => LIVE
+    ? real(async()=>{
+        // Only the fields the backend owns are sent; the rest of the app's
+        // Organization has no counterpart there yet and would be rejected.
+        const body:Record<string,unknown>={};
+        if(patch.name!==undefined) body.name=patch.name;
+        if(patch.recordCalls!==undefined) body.recordCalls=patch.recordCalls;
+        if(patch.defaultLanguage!==undefined) body.language=patch.defaultLanguage;
+        if(patch.countryCode!==undefined) body.defaultCountryCode=patch.countryCode;
+        if(Object.keys(body).length) await live.updateCompany(body);
+        await hydrateCompany();
+        return clone(store.organizations.find(x=>x.id===orgId)!);
+      })
+    : update(()=> { const row=store.organizations.find(x=>x.id===orgId)!; Object.assign(row,patch); return row; }),
   getProfile: () => mock(()=>store.profile),
   setProfile: (userId:string) => update(()=> { const row=store.profiles.find(x=>x.id===userId); if(row) store.profile=row; return store.profile; }),
   getMemberships: (orgId:string) => mock(()=>store.memberships.filter(x=>x.orgId===orgId)),
@@ -145,7 +221,9 @@ export const api = {
   canAddInbound: (channelId:string) => mock(()=>!store.callSetups.some(x=>x.channelId===channelId&&x.direction==='INBOUND')),
 
   // ---- Channels -----------------------------------------------------------
-  getChannels: (orgId:string) => mock(()=>store.channels.filter(x=>x.orgId===orgId)),
+  getChannels: (orgId:string) => LIVE
+    ? real(async()=>{ await hydrateCompany(); return clone(store.channels.filter(x=>x.orgId===orgId)); })
+    : mock(()=>store.channels.filter(x=>x.orgId===orgId)),
   updateChannel: (channelId:string,patch:Partial<Channel>) => update(()=> { const row=store.channels.find(x=>x.id===channelId)!; Object.assign(row,patch); return row; }),
   testChannel: (channelId:string) => update(()=> { const row=store.channels.find(x=>x.id===channelId)!; row.status='verifying'; setTimeout(()=>{row.status=row.errorDetail?'error':'connected';row.lastCheckedAt=new Date().toISOString();notify();},1400); return row; }),
   /** Request another number. It arrives as a setup task on our side. */
@@ -177,23 +255,64 @@ export const api = {
     rules: store.callSetups.filter(r=>r.channelId===channelId).map(r=>r.name),
     campaigns: store.campaigns.filter(c=>{const sp=store.callSetups.find(x=>x.id===c.setupId);return sp?.channelId===channelId}).map(c=>c.name),
   })),
-  getCredentials: (channelId:string) => mock(()=>store.credentials.filter(x=>x.channelId===channelId)),
-  deleteCredential: (credId:string) => update(()=> {
+  getCredentials: (channelId:string) => LIVE
+    ? real(async()=>{ await hydrateCompany(); return clone(store.credentials.filter(x=>x.channelId===channelId)); })
+    : mock(()=>store.credentials.filter(x=>x.channelId===channelId)),
+  deleteCredential: (credId:string) => LIVE
+    ? real(async()=>{
+        // The id carries which field it is: "<phoneNumberId>:<keyName>".
+        // An empty string is how the API is told to clear a credential,
+        // which is a different instruction from leaving it unmentioned.
+        const keyName=credId.split(':').slice(1).join(':');
+        if(!keyName) return false;
+        await live.updateCompany({[keyName]:''});
+        await hydrateCompany();
+        return true;
+      })
+    : update(()=> {
     const row=store.credentials.find(x=>x.id===credId); if(!row) return false;
     store.credentials=store.credentials.filter(x=>x.id!==credId);
     logAudit(row.orgId,'Removed '+row.keyName,'Credential',credId); return true; }),
-  setCredential: (orgId:string,channelId:string,keyName:string,lastFour:string) => update(()=> {
+  /**
+   * Store one credential. `value` is the real secret, not a fragment of it:
+   * the server is where it gets sealed, and the mock keeps only the last four
+   * because a prototype has nowhere safe to put the rest.
+   */
+  setCredential: (orgId:string,channelId:string,keyName:string,value:string) => LIVE
+    ? real(async()=>{ await live.updateCompany({[keyName]:value}); await hydrateCompany();
+        return clone(store.credentials.find(x=>x.channelId===channelId&&x.keyName===keyName)); })
+    : update(()=> {
+    const lastFour=value.slice(-4);
     let row=store.credentials.find(x=>x.channelId===channelId&&x.keyName===keyName);
     if(row){Object.assign(row,{lastFour,setBy:store.profile.fullName,setAt:new Date().toISOString()});}
     else {row={id:'cred-'+id(),orgId,channelId,keyName,lastFour,setBy:store.profile.fullName,setAt:new Date().toISOString()};store.credentials.push(row);}
     logPlatform('Replaced credential',keyName+' for channel '+channelId,orgId); return row; }),
 
   // ---- Calls --------------------------------------------------------------
-  getCalls: (orgId:string) => mock(()=>store.calls.filter(x=>x.orgId===orgId)),
-  getCall: (callId:string) => mock(()=>store.calls.find(x=>x.id===callId)),
-  getTranscript: (callId:string) => mock(()=>store.transcripts.filter(x=>x.callId===callId)),
+  getCalls: (orgId:string) => LIVE
+    ? real(async()=>{ await hydrateCalls(); return clone(store.calls.filter(x=>x.orgId===orgId)); })
+    : mock(()=>store.calls.filter(x=>x.orgId===orgId)),
+  getCall: (callId:string) => LIVE
+    ? real(async()=>live.call(callId))
+    : mock(()=>store.calls.find(x=>x.id===callId)),
+  /**
+   * The backend keeps a transcript as one block of text, not the turn-by-turn
+   * rows this app renders, because nothing in this build produces turns yet.
+   * It is returned as a single entry rather than parsed into speakers: an
+   * invented split would read as though we knew who said what.
+   */
+  getTranscript: (callId:string) => LIVE
+    ? real(async()=>{
+        const body=await live.transcript(callId);
+        if(!body.transcript) return [];
+        return [{id:callId+'-transcript',callId,role:'agent' as const,speaker:'Transcript',
+                 text:body.transcript,timestamp:''}];
+      })
+    : mock(()=>store.transcripts.filter(x=>x.callId===callId)),
   getRagQueries: (callId:string) => mock(()=>store.ragQueries.filter(x=>x.callId===callId)),
-  endCall: (callId:string) => update(()=> { const row=store.calls.find(x=>x.id===callId)!; row.status='completed';row.endedAt=new Date().toISOString();row.recordingState='PENDING';return row; }),
+  endCall: (callId:string) => LIVE
+    ? real(async()=>{ const row=await live.endCall(callId); await hydrateCalls(); return row; })
+    : update(()=> { const row=store.calls.find(x=>x.id===callId)!; row.status='completed';row.endedAt=new Date().toISOString();row.recordingState='PENDING';return row; }),
   takeOverCall: (callId:string,userId?:string) => update(()=> { const row=store.calls.find(x=>x.id===callId)!; row.mode='operator'; if(userId)row.assignedToUserId=userId; return row; }),
   /** Place a call. `knowledgeBaseId` is the explicit per-call choice. */
   createTestCall: (orgId:string,agentId:string,phoneNumber:string,knowledgeBaseId?:string,fromChannelId?:string) => update(()=> {
@@ -225,17 +344,42 @@ export const api = {
   resolveUnanswered: (questionId:string,status:'answered'|'ignored'|'open') => update(()=> { const row=store.unanswered.find(x=>x.id===questionId)!; row.status=status; return row; }),
 
   // ---- Messaging ----------------------------------------------------------
-  getMessages: (orgId:string) => mock(()=>store.messages.filter(x=>x.orgId===orgId)),
-  sendMessage: (orgId:string,toNumber:string,body:string,templateId?:string) => update(()=> { const row:Message={id:'msg-'+id(),orgId,toNumber,body,templateId,status:'sent',sentAt:new Date().toISOString()};store.messages.unshift(row);return row; }),
-  getTemplates: (orgId:string) => mock(()=>store.templates.filter(x=>x.orgId===orgId)),
+  getMessages: (orgId:string) => LIVE
+    ? real(async()=>{ await hydrateMessages(); return clone(store.messages.filter(x=>x.orgId===orgId)); })
+    : mock(()=>store.messages.filter(x=>x.orgId===orgId)),
+  sendMessage: (orgId:string,toNumber:string,body:string,templateId?:string) => LIVE
+    ? real(async()=>{
+        // A template is the only thing that reaches someone who has not
+        // written in the last 24 hours, so the two are different endpoints
+        // rather than one with a flag.
+        const row=templateId ? await live.sendTemplate(toNumber,templateId) : await live.sendText(toNumber,body);
+        await hydrateMessages();
+        return row;
+      })
+    : update(()=> { const row:Message={id:'msg-'+id(),orgId,toNumber,body,templateId,status:'sent',sentAt:new Date().toISOString()};store.messages.unshift(row);return row; }),
+  /** Read straight from Meta each time: approval status changes on their schedule. */
+  getTemplates: (orgId:string) => LIVE
+    ? real(async()=>{ const rows=await live.templates(orgId); store.templates=rows; notify(); return clone(rows); })
+    : mock(()=>store.templates.filter(x=>x.orgId===orgId)),
 
   // ---- Billing and admin --------------------------------------------------
   /** Recordings are copied to the company's own Drive folder. */
-  connectDrive: (orgId:string,account:string,folderName:string) => update(()=> {
+  /**
+   * Connecting Drive is an OAuth round trip, so this cannot complete here: it
+   * returns the Google consent URL and the caller sends the browser there.
+   * The company approves in their own Google account and comes back to
+   * `?drive=connected`.
+   */
+  connectDrive: (orgId:string,account:string,folderName:string):Promise<Organization|{redirectTo:string}|undefined> => LIVE
+    ? real(async()=>{ const {url}=await live.connectDrive(window.location.href); return {redirectTo:url}; })
+    : update(()=> {
     const row=store.organizations.find(x=>x.id===orgId)!;
     Object.assign(row,{driveConnected:true,driveAccount:account,driveFolderName:folderName});
     logAudit(orgId,'Connected Google Drive for recordings','Organization',orgId); return row; }),
-  disconnectDrive: (orgId:string) => update(()=> {
+  disconnectDrive: (orgId:string) => LIVE
+    ? real(async()=>{ await live.disconnectDrive(); await hydrateCompany();
+        return clone(store.organizations.find(x=>x.id===orgId)!); })
+    : update(()=> {
     const row=store.organizations.find(x=>x.id===orgId)!;
     Object.assign(row,{driveConnected:false,driveAccount:undefined});
     logAudit(orgId,'Disconnected Google Drive','Organization',orgId); return row; }),
@@ -323,5 +467,33 @@ export const api = {
     delete store.settings[orgId];
     return true;
   }),
+  /**
+   * A URL that will actually play. Mock builds already hold a playable one on
+   * the call; live builds mint a short-lived token, because a media element
+   * cannot present a bearer token.
+   */
+  playbackUrl: (callId:string) => LIVE
+    ? real(()=>live.playbackUrl(callId))
+    : mock(()=>store.calls.find(x=>x.id===callId)?.recordingUrl||''),
+  /** Pull the carrier's copy of a recording into the company's own storage. */
+  fetchRecording: (callId:string) => LIVE
+    ? real(async()=>{ const result=await live.fetchRecording(callId); await hydrateCalls(); return result; })
+    : mock(()=>({status:'stored'})),
+  downloadRecording: (callId:string) => LIVE
+    ? real(()=>live.downloadRecording(callId))
+    : mock(()=>undefined),
+  uploadRecording: (callId:string,audio:Blob) => LIVE
+    ? real(async()=>{ const r=await live.uploadRecording(callId,audio); await hydrateCalls(); return r; })
+    : mock(()=>({status:'stored',bytes:0})),
+  reportRecordingProblem: (callId:string,reason:string,ok=false) => LIVE
+    ? real(()=>live.reportRecordingProblem(callId,reason,ok))
+    : mock(()=>({status:'noted'})),
+  downloadCallsWorkbook: () => LIVE
+    ? real(()=>live.downloadWorkbook())
+    : mock(()=>undefined),
+  /** Refresh the Google Sheet copy of the workbook and return its link. */
+  syncDriveReport: () => LIVE
+    ? real(()=>live.syncReport())
+    : mock(()=>({url:''})),
   snapshot: () => clone(store)
 };

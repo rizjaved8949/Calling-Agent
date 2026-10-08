@@ -112,10 +112,71 @@ def test_rotate_key_invalidates_the_old_one(client, tenant_factory, auth):
 
 
 def test_company_reads_itself(client, tenant_factory, auth):
-    _, key = tenant_factory("300", "Harbour Clinics")
+    _, key = tenant_factory("300", "Harbour Clinics", accessToken="super-secret-token")
     body = client.get("/api/companies/me", headers=auth(key)).json()
     assert body["name"] == "Harbour Clinics"
-    assert "accessToken" not in json.dumps(body)
+    # The credential status says a token is set; the token itself never leaves.
+    assert body["credentials"]["accessToken"]["set"] is True
+    assert "super-secret-token" not in json.dumps(body)
+
+
+def test_credential_hints_cannot_reconstruct_a_secret(client, tenant_factory, auth):
+    _, key = tenant_factory("300", accessToken="EAAGabcdefghijkl9999")
+    body = client.get("/api/companies/me", headers=auth(key)).json()
+    assert body["credentials"]["accessToken"]["hint"] == "…9999"
+
+
+def test_short_secrets_are_hidden_entirely(client, tenant_factory, auth):
+    """Showing the last four of a six-character secret gives away most of it."""
+    _, key = tenant_factory("300", appSecret="abcdef")
+    body = client.get("/api/companies/me", headers=auth(key)).json()
+    assert body["credentials"]["metaAppSecret"]["hint"] == "…"
+
+
+def test_a_company_connects_its_own_accounts(client, tenant_factory, auth):
+    """The settings screen: this is the whole self-serve onboarding flow."""
+    _, key = tenant_factory("300", accessToken="", appSecret="", wabaId="")
+
+    before = client.get("/api/companies/me", headers=auth(key)).json()
+    whatsapp = next(c for c in before["channels"] if c["id"] == "whatsapp_message")
+    assert whatsapp["connected"] is False
+    assert "accessToken" in whatsapp["missing"]
+
+    saved = client.patch(
+        "/api/companies/me",
+        headers=auth(key),
+        json={"accessToken": "EAAG-their-token", "businessAccountId": "waba-9"},
+    ).json()
+
+    whatsapp = next(c for c in saved["channels"] if c["id"] == "whatsapp_message")
+    assert whatsapp["connected"] is True
+    assert whatsapp["missing"] == []
+
+
+def test_settings_patch_leaves_unmentioned_credentials_alone(client, tenant_factory, auth):
+    """Changing the greeting must not blank the access token."""
+    _, key = tenant_factory("300", accessToken="keep-me")
+    client.patch("/api/companies/me", headers=auth(key), json={"agentGreeting": "Hello"})
+    body = client.get("/api/companies/me", headers=auth(key)).json()
+    assert body["credentials"]["accessToken"]["set"] is True
+    assert body["agentGreeting"] == "Hello"
+
+
+def test_a_company_cannot_move_itself_or_reissue_its_key(client, tenant_factory, auth):
+    _, key = tenant_factory("300")
+    for forbidden in ({"apiKey": "ca_mine"}, {"organizationId": "someone-else"},
+                      {"phoneNumberId": "999"}):
+        response = client.patch("/api/companies/me", headers=auth(key), json=forbidden)
+        assert response.status_code == 422, forbidden
+
+
+def test_the_webhook_url_is_shown_to_paste_into_meta(client, tenant_factory, auth, monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "public_base_url", "https://api.example.com")
+    _, key = tenant_factory("300")
+    body = client.get("/api/companies/me", headers=auth(key)).json()
+    assert body["webhookUrl"] == "https://api.example.com/api/webhooks/whatsapp"
 
 
 def test_no_key_is_unauthorised(client):
@@ -537,3 +598,123 @@ def test_validation_errors_name_the_field(client, tenant_factory, auth):
     body = client.post("/api/messages/text", headers=auth(key), json={"to": "+92300"}).json()
     assert body["error"]["code"] == "validation_error"
     assert any("body" in d["field"] for d in body["error"]["details"])
+
+
+# ---------------------------------------------------------------------------
+# Playback tokens — an <audio> element sends no Authorization header
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def recorded_call(client, tenant_factory, auth, monkeypatch):
+    import asyncio
+
+    from app.models.call import Call, RecordingState
+    from app.repositories import calls as call_repo
+    from app.services import storage
+
+    tenant, key = tenant_factory("900", "Recorded")
+    asyncio.run(
+        call_repo.save_call(
+            Call(
+                id="rec-1",
+                tenantId="900",
+                recordingPath="sb://calls/rec-1.mp3",
+                recordingMime="audio/mpeg",
+                recordingState=RecordingState.READY,
+            )
+        )
+    )
+
+    async def fake_get(_tenant, _reference):
+        return b"0123456789" * 10  # 100 bytes, so ranges are easy to assert
+
+    monkeypatch.setattr(storage, "get", fake_get)
+    return tenant, key
+
+
+def test_playback_link_lets_an_audio_element_in(client, recorded_call, auth):
+    _, key = recorded_call
+    url = client.post("/api/calls/rec-1/recording/link", headers=auth(key)).json()["url"]
+
+    # No Authorization header at all — this is what the <audio> element sends.
+    played = client.get(url)
+    assert played.status_code == 200
+    assert played.content == b"0123456789" * 10
+
+
+def test_recording_without_a_token_or_a_key_is_refused(client, recorded_call):
+    assert client.get("/api/calls/rec-1/recording").status_code == 401
+
+
+def test_a_playback_token_opens_only_its_own_recording(client, recorded_call, auth):
+    """Otherwise one link would play every call the company ever took."""
+    import asyncio
+
+    from app.models.call import Call, RecordingState
+    from app.repositories import calls as call_repo
+
+    _, key = recorded_call
+    asyncio.run(
+        call_repo.save_call(
+            Call(id="rec-2", tenantId="900", recordingPath="sb://calls/rec-2.mp3",
+                 recordingState=RecordingState.READY)
+        )
+    )
+    url = client.post("/api/calls/rec-1/recording/link", headers=auth(key)).json()["url"]
+    token = url.split("token=")[1]
+
+    assert client.get(f"/api/calls/rec-2/recording?token={token}").status_code == 403
+
+
+def test_a_forged_playback_token_is_refused(client, recorded_call):
+    assert client.get("/api/calls/rec-1/recording?token=bogus.token").status_code == 403
+
+
+def test_an_expired_playback_token_is_refused(client, recorded_call, auth):
+    from app.security import playback
+
+    _, key = recorded_call
+    expired = playback.mint("900", "rec-1", ttl=-1)
+    response = client.get(f"/api/calls/rec-1/recording?token={expired}")
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "expired_token"
+
+
+def test_range_requests_are_honoured(client, recorded_call, auth):
+    """Accept-Ranges without this is a promise the player believes and loses on."""
+    _, key = recorded_call
+    response = client.get(
+        "/api/calls/rec-1/recording", headers={**auth(key), "Range": "bytes=10-19"}
+    )
+    assert response.status_code == 206
+    assert response.content == b"0123456789"
+    assert response.headers["content-range"] == "bytes 10-19/100"
+
+
+def test_an_open_ended_range_runs_to_the_end(client, recorded_call, auth):
+    _, key = recorded_call
+    response = client.get(
+        "/api/calls/rec-1/recording", headers={**auth(key), "Range": "bytes=90-"}
+    )
+    assert response.status_code == 206
+    assert response.headers["content-range"] == "bytes 90-99/100"
+
+
+def test_a_suffix_range_returns_the_tail(client, recorded_call, auth):
+    _, key = recorded_call
+    response = client.get(
+        "/api/calls/rec-1/recording", headers={**auth(key), "Range": "bytes=-10"}
+    )
+    assert response.status_code == 206
+    assert response.headers["content-range"] == "bytes 90-99/100"
+
+
+def test_a_nonsense_range_returns_the_whole_file(client, recorded_call, auth):
+    """A player that gets the audio works; one that gets a 416 does not."""
+    _, key = recorded_call
+    response = client.get(
+        "/api/calls/rec-1/recording", headers={**auth(key), "Range": "bytes=abc-def"}
+    )
+    assert response.status_code == 200
+    assert len(response.content) == 100

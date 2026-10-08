@@ -15,7 +15,13 @@ import logging
 
 from fastapi import APIRouter, Response, status
 
+from ...config import settings
 from ...errors import Conflict, NotFound
+from ...models.credentials import (
+    CredentialsUpdate,
+    channel_readiness,
+    credential_status,
+)
 from ...models.tenant import Tenant, TenantCreate, TenantUpdate
 from ...repositories import tenants as tenant_repo
 from ..deps import AdminOnly, CurrentTenant
@@ -28,7 +34,61 @@ router = APIRouter(prefix="/companies", tags=["companies"])
 @router.get("/me")
 async def my_company(tenant: CurrentTenant) -> dict:
     """What this key belongs to. The onboarding screen's first request."""
-    return tenant.public()
+    return {
+        **tenant.public(),
+        "credentials": credential_status(tenant),
+        "channels": channel_readiness(tenant),
+        # Where the company pastes this into their own Meta console. Showing it
+        # here is the difference between a settings page and a support ticket.
+        "webhookUrl": _webhook_url(),
+    }
+
+
+@router.patch("/me")
+async def update_my_company(tenant: CurrentTenant, payload: CredentialsUpdate) -> dict:
+    """The settings screen: a company connecting its own accounts.
+
+    Each company brings its own Meta app and carrier account, so this is the
+    route that makes onboarding self-service. Deliberately narrower than the
+    admin PATCH: a company cannot move itself to another organisation, reissue
+    its own API key, or change the phone number id it is keyed on — that last
+    one would be a different company, not an edited one.
+    """
+    changes = payload.model_dump(exclude_unset=True)
+    for field, value in changes.items():
+        if value is None:
+            continue  # not mentioned; "" is how a field is cleared
+        if hasattr(tenant, field):
+            setattr(tenant, field, value)
+
+    await tenant_repo.save(tenant)
+    log.info(
+        "company %s updated its settings (%s)",
+        tenant.phone_number_id,
+        ", ".join(sorted(changes)) or "nothing",
+    )
+    return {
+        **tenant.public(),
+        "credentials": credential_status(tenant),
+        "channels": channel_readiness(tenant),
+        "webhookUrl": _webhook_url(),
+    }
+
+
+@router.get("/me/channels")
+async def my_channels(tenant: CurrentTenant) -> dict:
+    """Which channels can carry traffic, and what each is still missing."""
+    return {"channels": channel_readiness(tenant), "webhookUrl": _webhook_url()}
+
+
+def _webhook_url() -> str:
+    """The callback URL the company pastes into their Meta app.
+
+    Empty when PUBLIC_BASE_URL is unset rather than a guess: a wrong URL here
+    is pasted into Meta and then silently never delivers.
+    """
+    base = settings.public_base_url.strip().rstrip("/")
+    return f"{base}/api/webhooks/whatsapp" if base else ""
 
 
 @router.get("")

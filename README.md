@@ -12,18 +12,65 @@ frontend/   the React, TypeScript, Vite and Tailwind app
 backend/    the Python API: companies, calls, recordings, Google Drive, WhatsApp
 ```
 
-The two are not wired together yet. The frontend still serves itself from the
-in-memory mock store in `frontend/src/lib/api`; the backend runs, is tested, and
-is documented in [backend/README.md](backend/README.md).
+Nothing else lives at the root: each half owns its own dependencies, its own
+scripts and its own deployment, and neither needs the other installed to build.
 
-## Run
+The two are wired together at runtime. Set `VITE_API_URL` in
+`frontend/.env.local` and the app talks to the backend for everything the
+backend covers; leave it unset and it runs on its in-memory fixtures, as it
+always did.
 
-From the repository root, which forwards to `frontend/`:
+## Running both
 
-1. `npm --prefix frontend install`
-2. `npm run dev`
-3. Open http://localhost:5173/
-4. `npm run build` for a production bundle.
+```bash
+# Terminal 1 — the API on :8000
+cd backend
+cp .env.example .env            # fill in CREDENTIALS_SECRET and ADMIN_API_KEY
+pip install -r requirements-dev.txt
+python -m app.main
+
+# Terminal 2 — the app on :5173
+cd frontend
+cp .env.example .env.local
+npm run dev
+```
+
+Without Supabase credentials the backend keeps its rows in a local JSON file,
+so the whole stack runs with nothing else installed. `GET /health` says which
+store is in use.
+
+## Selling it to a company
+
+1. You register them: `POST /api/companies` with your `X-Admin-Key`. The
+   response carries their API key, **once**.
+2. They sign in and paste that key, then enter their own Meta and carrier
+   credentials on the settings screen. Each company brings its own Meta app, so
+   their traffic and their bill are theirs.
+3. They paste the webhook URL the settings screen shows into their Meta app.
+
+The credentials in `backend/.env` are the operator's own account. A customer
+never falls back to them — no carrier key, no calls, and the screen says so.
+
+See [backend/README.md](backend/README.md) for the API and what is not built yet.
+
+## Deploying
+
+The two halves deploy separately, each from its own folder.
+
+| | Host | Root directory | Config |
+|---|---|---|---|
+| API | Render | `backend` | [backend/render.yaml](backend/render.yaml) |
+| App | Vercel | `frontend` | [frontend/vercel.json](frontend/vercel.json) |
+
+They have to know about each other, and both directions matter:
+
+- Render needs `FRONTEND_URL` set to the Vercel domain, or the browser's
+  requests are refused by CORS.
+- Vercel needs `VITE_API_URL` set to the Render URL. It is baked in at build
+  time, so changing it needs a redeploy rather than a restart.
+
+[frontend/DEPLOY.md](frontend/DEPLOY.md) covers the Vercel side, including why
+the SPA rewrite is there. [backend/README.md](backend/README.md) covers Render.
 
 Running the commands inside `frontend/` directly works the same way.
 

@@ -37,13 +37,14 @@ define, so the TypeScript service and this API read and write the same rows.
 
 ```bash
 cd backend
-python -m venv .venv
-.venv/Scripts/python -m pip install -r requirements-dev.txt   # Windows
-# source .venv/bin/activate && pip install -r requirements-dev.txt   # macOS/Linux
-
+pip install -r requirements-dev.txt
 cp .env.example .env        # then fill it in — see below
 python -m app.main          # http://localhost:8000
 ```
+
+A virtual environment is optional and there is none checked in. If you want one,
+`python -m venv .venv` then activate it before the install; `.venv/` is already
+ignored.
 
 `GET /health` reports what this process can actually do:
 
@@ -72,12 +73,17 @@ Apply `supabase/migrations/` in the Supabase SQL editor. The `voice_tenants`
 and `voice_calls` tables come from Conversation-Agent and are **not**
 redefined here; this adds `voice_messages` and the indexes the lookups need.
 
+**Without Supabase**, rows go to `data/local-store.json` so the stack runs with
+nothing installed. It is a development convenience and says so at startup and
+in `/health` (`localStore: true`): on a host whose filesystem is replaced on
+deploy, every deploy erases it.
+
 ---
 
 ## Tests
 
 ```bash
-.venv/Scripts/python -m pytest        # 76 tests
+pytest        # 110 tests
 ```
 
 They run against an in-memory stand-in for PostgREST, so no network and no
@@ -123,19 +129,87 @@ customer without holding their key.
 | | |
 |---|---|
 | `GET /api/health` | Liveness and capabilities |
-| `GET /api/companies/me` | What this key belongs to |
+| `GET /api/companies/me` | What this key belongs to, with credential and channel state |
+| `PATCH /api/companies/me` | **The settings screen**: a company connecting its own accounts |
+| `GET /api/companies/me/channels` | Which channels work, and what each still needs |
 | `POST /api/companies` · `PATCH` · `DELETE` · `/rotate-key` | Onboarding (admin) |
 | `GET /api/calls` · `/stats` · `/{id}` · `/{id}/transcript` | The call log |
 | `POST /api/calls` | Place an outbound call |
 | `POST /api/calls/{id}/end` · `DELETE /api/calls/{id}` | Finish, remove |
 | `POST /api/calls/{id}/recording` | Upload audio the browser recorded |
-| `GET /api/calls/{id}/recording` | Play it. `?download=true`, `?link=true` |
+| `GET /api/calls/{id}/recording` | Play it. `?download=true`, `?link=true`, `?token=` |
+| `POST /api/calls/{id}/recording/link` | A short-lived URL an `<audio>` element can load |
 | `POST /api/calls/{id}/recording/fetch` | Pull the carrier's copy and keep it |
 | `POST /api/calls/{id}/recording/problem` | Why the browser could not record |
 | `GET/POST /api/messages` · `/text` · `/template` · `/templates` | WhatsApp messaging |
 | `GET /api/google/status` · `/connect` · `/disconnect` · `/sync-report` | Drive |
 | `GET /api/exports/calls.xlsx` | The master workbook |
 | `POST /api/webhooks/whatsapp` · `/infobip/{id}` | Inbound events |
+
+---
+
+## Deploying to Render
+
+`render.yaml` is the reference. It sits in this folder rather than at the
+repository root, which means Render's Blueprint will not pick it up
+automatically — create the service from the dashboard with **Root Directory**
+set to `backend` and runtime **Docker**, or copy the file to the root if you
+want Blueprint deploys.
+
+Docker rather than Render's Python runtime, because the recording path wants
+ffmpeg and the Dockerfile installs it. Without it the service still runs; audio
+is just stored exactly as it arrived, which means larger files and no seeking.
+
+Three things that are easy to get wrong:
+
+- **The container must listen on `$PORT`.** Render injects it. A container that
+  binds 8000 regardless passes its build, starts, and then fails the health
+  check with nothing useful in the log. The Dockerfile's `CMD` uses it.
+- **`PUBLIC_BASE_URL` must be the real service URL.** The Google OAuth redirect
+  is derived from it, Meta posts webhooks to it, and a wrong value fails only
+  at the moment a customer tries to connect something.
+- **`FRONTEND_URL` must list the Vercel domain**, or every request from the
+  browser is refused by CORS with an error that says nothing about the cause.
+
+After the first deploy, point Meta's webhook at
+`https://<service>.onrender.com/api/webhooks/whatsapp` and add
+`https://<service>.onrender.com/api/google/callback` to the OAuth client's
+authorised redirect URIs.
+
+One instance, deliberately: the Google Sheet sync debounces in process memory,
+so a second worker would mean two uploads racing for the same file. Scale with
+instances, not workers.
+
+---
+
+## Credentials: whose are whose
+
+`.env` holds **the operator's own** Meta and carrier credentials, for the
+operator's own number. A customer never falls back to them:
+
+- No carrier key of their own means they cannot place a call, and the API says
+  `telephony_not_configured`. Falling back would put their minutes on your bill
+  and your caller ID on their calls.
+- A webhook is verified against **that company's** app secret only. Verifying
+  against yours would let any company able to sign with it forge another's
+  traffic.
+
+Customer credentials are written through `PATCH /api/companies/me`, sealed
+before storage, and are **write-only**: what comes back is whether a value is
+set and its last four characters. No endpoint returns a secret, so a screenshot
+or a shared session gives nothing away.
+
+---
+
+## Playing a recording
+
+An `<audio>` element sends no `Authorization` header, so a recording URL behind
+bearer auth produces a player with controls that silently do nothing.
+
+`POST /api/calls/{id}/recording/link` mints a token that names one recording,
+for one company, for fifteen minutes, and puts it in the URL. The endpoint also
+honours `Range`, so seeking works against the server rather than only within
+whatever the browser has already buffered.
 
 ---
 

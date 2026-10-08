@@ -62,6 +62,8 @@ import {HomePage,ProductPage,SolutionsPage,PricingPage,AboutPage,ResourcesPage,C
 import {HistoryNavigationProvider} from './history-navigation';
 
 import {AppCtx,useApp} from './app-context';
+import {ApiKeyGate,ComingSoon,hasBackendKey} from './connect-backend';
+import {LIVE,hydrate} from './lib/api';
 
 function Provider({children}:{children:React.ReactNode}){
   const [store,setStore]=useState<Store>(()=>api.snapshot());
@@ -95,12 +97,27 @@ function Provider({children}:{children:React.ReactNode}){
   const [toasts,setToasts]=useState<{id:number;text:string}[]>([]);
   useEffect(()=>subscribe(()=>setStore(api.snapshot())),[]);
   useEffect(()=>subscribePending(setPending),[]);
+  // Against a real backend the fixtures are only a starting shape: the first
+  // load replaces the company, its channels, calls and messages with what the
+  // API actually holds. Failures are left to the screens, which each show
+  // their own error — a blank app with one global message is worse.
+  const [hydrated,setHydrated]=useState(!LIVE);
+  useEffect(()=>{
+    if(!LIVE||!hasBackendKey()){setHydrated(!LIVE);return}
+    let cancelled=false;
+    hydrate().finally(()=>{if(!cancelled)setHydrated(true)});
+    return()=>{cancelled=true};
+  },[]);
   // While impersonating, the workspace shown is the impersonated company's.
   const activeOrgId=sessionState?.impersonating?.orgId||sessionState?.orgId;
   const org=store.organizations.find(x=>x.id===activeOrgId)||store.organizations[0];
   const isPlatform=sessionState?.portal==='platform';
   const role:Role=useMemo(()=>{
     if(isPlatform)return 'owner';
+    // Live builds have no membership rows yet — roles arrive with sign-in.
+    // Whoever holds the company API key can already change everything through
+    // the API, so pretending they are read-only in the UI would be theatre.
+    if(LIVE)return 'owner';
     return store.memberships.find(m=>m.orgId===org.id&&m.userId===sessionState?.userId)?.role||'staff';
   },[store.memberships,org.id,sessionState?.userId,isPlatform]);
   const readOnly=!!sessionState?.impersonating;
@@ -139,7 +156,7 @@ function Provider({children}:{children:React.ReactNode}){
       routingReady:store.callSetups.some(x=>x.orgId===org.id&&x.enabled),
     };
   },[store,org.id]);
-  return <AppCtx.Provider value={{store,session:sessionState,setSession,org,setOrg,theme,setTheme,t,toast,run,readiness,connection,setConnection,role,isPlatform,canManage,readOnly}}>{pending>0&&<div className="progress-line"/>}{children}<div className="toast-wrap" aria-live="polite">{toasts.map(x=><div className="toast" key={x.id}>{x.text}<button aria-label="Dismiss" onClick={()=>setToasts(old=>old.filter(y=>y.id!==x.id))}><X size={16}/></button></div>)}</div></AppCtx.Provider>;
+  return <AppCtx.Provider value={{store,session:sessionState,setSession,org,setOrg,theme,setTheme,t,toast,run,readiness,connection,setConnection,role,isPlatform,canManage,readOnly,hydrated}}>{pending>0&&<div className="progress-line"/>}{children}<div className="toast-wrap" aria-live="polite">{toasts.map(x=><div className="toast" key={x.id}>{x.text}<button aria-label="Dismiss" onClick={()=>setToasts(old=>old.filter(y=>y.id!==x.id))}><X size={16}/></button></div>)}</div></AppCtx.Provider>;
 }
 
 export function Button({children,onClick,to,variant='',small=false,disabled=false,title,type='button'}:{children:React.ReactNode;onClick?:()=>void;to?:string;variant?:string;small?:boolean;disabled?:boolean;title?:string;type?:'button'|'submit'}){
@@ -228,10 +245,24 @@ function Shell({children,platform=false}:{children:React.ReactNode;platform?:boo
 
 function NotFound(){return <div className="route-loading"><h2>Page not found</h2><p className="muted">That page does not exist. <Link to="/">Go back</Link>.</p></div>}
 
+/**
+ * Live builds need the company API key before any workspace route can load,
+ * because every request to the backend is made with it. Returns the gate to
+ * render, or null to carry on. Marketing pages never reach here.
+ */
+function useBackendGate(){
+  const [key,setKey]=useState(()=>hasBackendKey());
+  if(!LIVE||key)return null;
+  return <ApiKeyGate onReady={()=>{setKey(true);window.location.reload()}}/>;
+}
+
 /** Company workspace. Staff-only accounts are pushed back to their queue. */
 function Protected({children,manage=false}:{children:React.ReactNode;manage?:boolean}){
-  const {session,role}=useApp();
+  const {session,role,hydrated}=useApp();
+  const gate=useBackendGate();
+  if(gate)return gate;
   if(!session)return <Navigate to="/login" replace/>;
+  if(!hydrated)return <div className="route-loading">Loading your workspace…</div>;
   if(session.portal==='platform'&&!session.impersonating)return <Navigate to="/platform/companies" replace/>;
   if(manage&&role==='staff')return <Navigate to="/app/queue" replace/>;
   return <Shell>{children}</Shell>;
@@ -241,10 +272,24 @@ function Protected({children,manage=false}:{children:React.ReactNode;manage?:boo
  * permission error, so the portal's existence is never advertised.
  */
 function PlatformOnly({children}:{children:React.ReactNode}){
-  const {session}=useApp();
+  const {session,hydrated}=useApp();
+  const gate=useBackendGate();
+  if(gate)return gate;
   if(!session)return <Navigate to="/login" replace/>;
+  if(!hydrated)return <div className="route-loading">Loading…</div>;
   if(session.portal!=='platform')return <NotFound/>;
   return <Shell platform>{children}</Shell>;
+}
+
+/**
+ * A screen whose data the backend does not serve yet.
+ *
+ * In a fixture build it renders as before, because there the fixtures are the
+ * honest answer. Against a real backend it says so instead of dressing sample
+ * records up as the company's own.
+ */
+function NotYet({title,detail,children}:{title:string;detail?:string;children:React.ReactNode}){
+  return LIVE?<ComingSoon title={title} detail={detail}/>:<>{children}</>;
 }
 
 function AppRoutes(){
@@ -264,37 +309,37 @@ function AppRoutes(){
 
     <Route path="/app/dashboard" element={<Protected manage><Dashboard/></Protected>}/>
     <Route path="/app/onboarding" element={<Protected manage><Onboarding/></Protected>}/>
-    <Route path="/app/agents" element={<Protected manage><Agents/></Protected>}/>
-    <Route path="/app/agents/:id" element={<Protected manage><AgentDetail/></Protected>}/>
-    <Route path="/app/knowledge" element={<Protected manage><Knowledge/></Protected>}/>
-    <Route path="/app/knowledge/:kbId" element={<Protected manage><KnowledgeDetail/></Protected>}/>
-    <Route path="/app/setups" element={<Protected><CallSetups/></Protected>}/>
-    <Route path="/app/campaigns" element={<Protected manage><Campaigns/></Protected>}/>
-    <Route path="/app/campaigns/:id" element={<Protected manage><CampaignDetail/></Protected>}/>
-    <Route path="/app/unanswered" element={<Protected manage><Unanswered/></Protected>}/>
+    <Route path="/app/agents" element={<Protected manage><NotYet title="Agents" detail={"Creating and tuning agents arrives with the voice engine. Your company settings, calls, recordings and messages are live now."}><Agents/></NotYet></Protected>}/>
+    <Route path="/app/agents/:id" element={<Protected manage><NotYet title="Agent" detail={"Creating and tuning agents arrives with the voice engine."}><AgentDetail/></NotYet></Protected>}/>
+    <Route path="/app/knowledge" element={<Protected manage><NotYet title="Knowledge base" detail={"Uploading documents for the agent to answer from arrives with the voice engine."}><Knowledge/></NotYet></Protected>}/>
+    <Route path="/app/knowledge/:kbId" element={<Protected manage><NotYet title="Knowledge base" detail={"Uploading documents for the agent to answer from arrives with the voice engine."}><KnowledgeDetail/></NotYet></Protected>}/>
+    <Route path="/app/setups" element={<Protected><NotYet title="Call setups" detail={"Routing rules per number arrive with the voice engine."}><CallSetups/></NotYet></Protected>}/>
+    <Route path="/app/campaigns" element={<Protected manage><NotYet title="Campaigns" detail={"Outbound campaigns are not connected yet."}><Campaigns/></NotYet></Protected>}/>
+    <Route path="/app/campaigns/:id" element={<Protected manage><NotYet title="Campaign" detail={"Outbound campaigns are not connected yet."}><CampaignDetail/></NotYet></Protected>}/>
+    <Route path="/app/unanswered" element={<Protected manage><NotYet title="Unanswered questions" detail={"This is produced by the agent during a call, which is not running yet."}><Unanswered/></NotYet></Protected>}/>
     <Route path="/app/channels" element={<Protected manage><Channels/></Protected>}/>
     <Route path="/app/channels/:id" element={<Protected manage><ChannelDetail/></Protected>}/>
     <Route path="/app/messages" element={<Protected manage><Messages/></Protected>}/>
-    <Route path="/app/team" element={<Protected manage><Team/></Protected>}/>
-    <Route path="/app/usage" element={<Protected manage><Usage/></Protected>}/>
+    <Route path="/app/team" element={<Protected manage><NotYet title="Team" detail={"Invitations and roles arrive with sign-in."}><Team/></NotYet></Protected>}/>
+    <Route path="/app/usage" element={<Protected manage><NotYet title="Usage and billing" detail={"Metering is not connected yet."}><Usage/></NotYet></Protected>}/>
     <Route path="/app/settings" element={<Protected manage><SettingsPage/></Protected>}/>
-    <Route path="/app/live" element={<Protected><Live/></Protected>}/>
+    <Route path="/app/live" element={<Protected><NotYet title="Live calls" detail="Watching a call as it happens arrives with the voice engine."><Live/></NotYet></Protected>}/>
     <Route path="/app/history" element={<Protected><HistoryPage/></Protected>}/>
     <Route path="/app/history/:id" element={<Protected><CallDetail/></Protected>}/>
-    <Route path="/app/guides" element={<Protected><Guides/></Protected>}/>
-    <Route path="/app/guides/:slug" element={<Protected><GuideDetail/></Protected>}/>
-    <Route path="/app/queue" element={<Protected><StaffQueue/></Protected>}/>
-    <Route path="/app/lookup" element={<Protected><StaffLookup/></Protected>}/>
-    <Route path="/app/ask" element={<Protected><StaffAsk/></Protected>}/>
+    <Route path="/app/guides" element={<Protected><NotYet title="Guides"><Guides/></NotYet></Protected>}/>
+    <Route path="/app/guides/:slug" element={<Protected><NotYet title="Guide"><GuideDetail/></NotYet></Protected>}/>
+    <Route path="/app/queue" element={<Protected><NotYet title="Staff queue" detail="Live call handling arrives with the voice engine."><StaffQueue/></NotYet></Protected>}/>
+    <Route path="/app/lookup" element={<Protected><NotYet title="Caller lookup" detail="Live call handling arrives with the voice engine."><StaffLookup/></NotYet></Protected>}/>
+    <Route path="/app/ask" element={<Protected><NotYet title="Ask the knowledge base" detail="This answers from the agent knowledge base, which is not connected yet."><StaffAsk/></NotYet></Protected>}/>
 
     <Route path="/platform/companies" element={<PlatformOnly><PlatformCompanies/></PlatformOnly>}/>
     <Route path="/platform/companies/:id" element={<PlatformOnly><PlatformCompanyDetail/></PlatformOnly>}/>
-    <Route path="/platform/provisioning" element={<PlatformOnly><PlatformProvisioning/></PlatformOnly>}/>
-    <Route path="/platform/technical" element={<PlatformOnly><PlatformTechnical/></PlatformOnly>}/>
-    <Route path="/platform/presets" element={<PlatformOnly><PlatformPresets/></PlatformOnly>}/>
-    <Route path="/platform/health" element={<PlatformOnly><PlatformHealth/></PlatformOnly>}/>
-    <Route path="/platform/search" element={<PlatformOnly><PlatformSearch/></PlatformOnly>}/>
-    <Route path="/platform/audit" element={<PlatformOnly><PlatformAuditPage/></PlatformOnly>}/>
+    <Route path="/platform/provisioning" element={<PlatformOnly><NotYet title="Provisioning" detail="Number provisioning is not connected yet."><PlatformProvisioning/></NotYet></PlatformOnly>}/>
+    <Route path="/platform/technical" element={<PlatformOnly><NotYet title="Technical settings" detail="Platform-wide tuning arrives with the voice engine."><PlatformTechnical/></NotYet></PlatformOnly>}/>
+    <Route path="/platform/presets" element={<PlatformOnly><NotYet title="Presets" detail="Shared agent presets arrive with the voice engine."><PlatformPresets/></NotYet></PlatformOnly>}/>
+    <Route path="/platform/health" element={<PlatformOnly><NotYet title="Platform health"><PlatformHealth/></NotYet></PlatformOnly>}/>
+    <Route path="/platform/search" element={<PlatformOnly><NotYet title="Search"><PlatformSearch/></NotYet></PlatformOnly>}/>
+    <Route path="/platform/audit" element={<PlatformOnly><NotYet title="Audit log" detail="The audit trail arrives with sign-in, so every entry can name a person."><PlatformAuditPage/></NotYet></PlatformOnly>}/>
 
     {/* Routes from the single-workspace layout, kept so old links still work. */}
     <Route path="/dashboard" element={<Navigate to="/app/dashboard" replace/>}/>

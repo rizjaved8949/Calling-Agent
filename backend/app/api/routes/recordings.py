@@ -22,8 +22,10 @@ from ...repositories import calls as call_repo
 from ...services import recordings as recording_service
 from ...services import reports, storage
 from ...services.audio import extension_for, is_audio
+from ...repositories import tenants as tenant_repo
+from ...security import playback
 from ...services.telephony import Infobip
-from ..deps import CurrentTenant
+from ..deps import CurrentTenant, current_tenant
 
 log = logging.getLogger(__name__)
 
@@ -119,21 +121,55 @@ async def report_problem(tenant: CurrentTenant, call_id: str, request: Request) 
     return {"status": "noted"}
 
 
+@router.post("/link", status_code=status.HTTP_200_OK)
+async def playback_link(tenant: CurrentTenant, call_id: str) -> dict:
+    """A URL an <audio> element can actually load.
+
+    A media element sends no Authorization header, so the credential has to be
+    in the URL. This mints a short-lived token that names this one recording
+    for this one company — see `security/playback.py`.
+    """
+    call = await call_repo.get_call(tenant.phone_number_id, call_id)
+    if call is None:
+        raise NotFound("Call")
+    if not call.recording_path:
+        raise NotFound("Recording")
+    token = playback.mint(tenant.phone_number_id, call_id)
+    return {
+        "url": f"/api/calls/{call_id}/recording?token={token}",
+        "expiresInSeconds": 900,
+    }
+
+
 @router.get("")
 async def get_recording(
-    tenant: CurrentTenant,
+    request: Request,
     call_id: str,
     download: bool = False,
     link: bool = False,
+    token: str = "",
 ) -> Response:
     """The call audio.
 
-    `?link=true` returns a signed URL the browser fetches directly from
-    storage: playback starts on the first chunk and seeking works through range
-    requests, instead of every byte crossing the network twice. Drive-stored
-    audio has no such link — a Drive URL needs the viewer signed in to the
-    company's own Google account — so it streams through here.
+    Reached two ways: with the company's bearer token, as every other route is,
+    or with a playback token in the query string, which is how an `<audio>`
+    element gets in.
+
+    `?link=true` redirects to a signed storage URL where one exists, so the
+    bytes go straight from storage to the browser instead of crossing the
+    network twice. Drive-stored audio has no such link — a Drive URL needs the
+    viewer signed in to the company's own Google account — so it streams here.
     """
+    if token:
+        tenant_id = playback.verify(token, call_id)
+        tenant = await tenant_repo.require(tenant_id)
+    else:
+        tenant = await current_tenant(
+            request,
+            request.headers.get("authorization"),
+            request.headers.get("x-admin-key"),
+        )
+
     call = await call_repo.get_call(tenant.phone_number_id, call_id)
     if call is None:
         raise NotFound("Call")
@@ -152,14 +188,60 @@ async def get_recording(
 
     mime = call.recording_mime or "audio/mpeg"
     headers = {
-        # Seeking in an <audio> element depends on the server advertising this.
+        # Seeking in an <audio> element depends on the server advertising this
+        # *and* honouring it below. Advertising it alone would be a lie the
+        # player believes.
         "Accept-Ranges": "bytes",
         "Cache-Control": "private, max-age=3600",
     }
     if download:
         name = f"call-{call_id}.{extension_for(mime)}"
         headers["Content-Disposition"] = content_disposition(name)
-    return Response(content=audio, media_type=mime, headers=headers)
+
+    span = _requested_range(request.headers.get("range"), len(audio))
+    if span is None:
+        headers["Content-Length"] = str(len(audio))
+        return Response(content=audio, media_type=mime, headers=headers)
+
+    start, end = span
+    headers["Content-Range"] = f"bytes {start}-{end}/{len(audio)}"
+    headers["Content-Length"] = str(end - start + 1)
+    return Response(
+        content=audio[start : end + 1],
+        media_type=mime,
+        headers=headers,
+        status_code=status.HTTP_206_PARTIAL_CONTENT,
+    )
+
+
+def _requested_range(header: str | None, size: int) -> tuple[int, int] | None:
+    """The byte span a player asked for, or None to send the whole file.
+
+    Only the single-span `bytes=start-end` form is handled, which is the only
+    form a media element sends. Anything malformed or unsatisfiable falls back
+    to the whole file rather than a 416: a player that gets the audio works,
+    and one that gets an error does not.
+    """
+    if not header or not header.startswith("bytes=") or size == 0:
+        return None
+    span = header[len("bytes="):].split(",")[0].strip()
+    start_text, _, end_text = span.partition("-")
+    try:
+        if not start_text:
+            # "bytes=-500" means the last 500 bytes.
+            length = int(end_text)
+            if length <= 0:
+                return None
+            start, end = max(0, size - length), size - 1
+        else:
+            start = int(start_text)
+            end = int(end_text) if end_text else size - 1
+    except ValueError:
+        return None
+    end = min(end, size - 1)
+    if start > end or start >= size:
+        return None
+    return start, end
 
 
 @router.post("/fetch", status_code=status.HTTP_202_ACCEPTED)

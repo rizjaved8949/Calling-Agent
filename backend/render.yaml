@@ -1,0 +1,84 @@
+# Render service definition for the API.
+#
+# This file lives in backend/ rather than at the repository root, so the repo
+# keeps exactly two project folders. Render's Blueprint feature only auto-reads
+# a render.yaml at the root, so create the service one of two ways:
+#
+#   * Dashboard: New > Web Service, pick this repo, set **Root Directory** to
+#     `backend`, runtime Docker. Everything below is then the reference for
+#     what to fill in.
+#   * Blueprint: copy this file to the repository root first.
+#
+# Docker rather than Render's Python runtime, because the recording path needs
+# ffmpeg and the Dockerfile installs it. Without ffmpeg the service still runs,
+# it just stores audio exactly as it arrived — larger files, and no seeking.
+
+services:
+  - type: web
+    name: calling-agent-api
+    runtime: docker
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    region: oregon
+    healthCheckPath: /health
+    # One instance. The Google Sheet sync debounces in process memory, so a
+    # second worker would mean two uploads racing for the same file. Scale with
+    # instances behind Render's load balancer, not workers inside the container.
+    numInstances: 1
+
+    envVars:
+      # ---- Set these in the Render dashboard; never commit them -------------
+      # sync: false means Render prompts for the value and keeps it out of git.
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      # Must match Conversation-Agent's value exactly, or neither service can
+      # read the customer credentials the other sealed.
+      - key: CREDENTIALS_SECRET
+        sync: false
+      - key: ADMIN_API_KEY
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+
+      # ---- Your own WhatsApp number (the single-tenant fallback) ------------
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: WHATSAPP_BUSINESS_ACCOUNT_ID
+        sync: false
+      - key: WHATSAPP_ACCESS_TOKEN
+        sync: false
+      - key: META_APP_SECRET
+        sync: false
+      - key: WHATSAPP_WEBHOOK_VERIFY_TOKEN
+        sync: false
+      - key: DEFAULT_COUNTRY_CODE
+        sync: false
+
+      # ---- Your own carrier account ----------------------------------------
+      - key: INFOBIP_BASE_URL
+        sync: false
+      - key: INFOBIP_API_KEY
+        sync: false
+
+      # ---- Set here, because they are not secret ---------------------------
+      - key: APP_ENV
+        value: production
+      # Render provides the service's own URL. Meta, Infobip and Google all
+      # need an absolute address, and the Google OAuth redirect is derived from
+      # this one — so getting it from Render keeps it right across renames.
+      - key: PUBLIC_BASE_URL
+        fromService:
+          type: web
+          name: calling-agent-api
+          envVarKey: RENDER_EXTERNAL_URL
+      # The Vercel domain. A browser treats every spelling as a different
+      # origin, so list each one the app is actually served from.
+      - key: FRONTEND_URL
+        value: https://calling-agent.vercel.app

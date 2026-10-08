@@ -43,10 +43,11 @@ async def lifespan(_app: FastAPI):
     # Said once, at boot, rather than discovered on the first call that needed
     # it. Each of these degrades quietly, and quiet degradation is only
     # acceptable if somebody was told.
-    if not supabase.configured:
+    if getattr(supabase, "is_local", False):
         log.warning(
-            "SUPABASE_URL / SUPABASE_SERVICE_KEY are not set — calls and companies "
-            "cannot be stored. The service will answer and forget."
+            "SUPABASE_URL / SUPABASE_SERVICE_KEY are not set — using the local JSON "
+            "store at data/local-store.json. Fine on a laptop; on a host with a "
+            "replaceable filesystem every deploy erases it."
         )
     if not encryption_configured():
         log.warning(

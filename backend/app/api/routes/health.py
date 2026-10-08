@@ -32,14 +32,22 @@ async def health() -> dict:
             # Persistence. Without this the service answers webhooks and
             # forgets them, so it is the first thing to check.
             "database": supabase.configured,
+            # True when rows are in a JSON file beside the app, not Postgres.
+            "localStore": getattr(supabase, "is_local", False),
             "credentialEncryption": encryption_configured(),
             # Recording. ffmpeg missing is not fatal — audio is stored as it
             # arrived — but it means no seeking and much larger files.
             "transcoding": ffmpeg_available(),
-            "objectStorage": supabase.configured,
+            "objectStorage": settings.supabase_configured,
             "googleOAuth": settings.google_oauth_configured,
             # Admin surface. False means company onboarding is switched off.
             "adminApi": bool(settings.admin_api_key.strip()),
             "publicBaseUrl": bool(settings.public_base_url.strip()),
+            # The voice engine has a key configured. It still cannot carry
+            # call audio — that is the media bridge, which this build lacks.
+            "agentKey": settings.agent_configured,
+            "agentEngine": settings.voice_engine,
+            # Honest about the gap, so nobody reads "agentKey" as "it answers".
+            "agentMediaBridge": False,
         },
     }

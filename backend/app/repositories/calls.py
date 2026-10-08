@@ -35,11 +35,113 @@ def _timestamp() -> str:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# The older row shape
+# ---------------------------------------------------------------------------
+#
+# `voice_calls` was first written by Conversation-Agent's TypeScript voice
+# service, which named things differently: `metaCallId` for the provider id,
+# `durationSec` for the length, `phoneNumber` for the other party, and ISO
+# strings where this service keeps epoch seconds.
+#
+# Those rows are history — a hundred real calls — and a dashboard that silently
+# shows none of them is worse than one that shows them imperfectly. So they are
+# translated on read. Nothing rewrites them: the translation is cheap and a
+# migration that touches a hundred rows of someone's call history to fix a
+# naming difference is not worth the risk.
+
+_LEGACY_STATUS = {
+    "COMPLETED": "COMPLETED",
+    "CONNECTED": "IN_PROGRESS",
+    "CONNECTING": "RINGING",
+    "RINGING": "RINGING",
+    "FAILED": "FAILED",
+    "NO_ANSWER": "NO_ANSWER",
+    "REJECTED": "FAILED",
+}
+
+
+def _epoch(value: Any) -> float | None:
+    """Epoch seconds from either an ISO string or a number."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        # Python before 3.11 cannot parse the trailing Z that JavaScript emits.
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def _is_legacy(data: dict[str, Any]) -> bool:
+    """A row from the TypeScript service, which used different field names."""
+    return "durationSeconds" not in data and (
+        "metaCallId" in data or "durationSec" in data
+    )
+
+
+def _from_legacy(data: dict[str, Any]) -> dict[str, Any]:
+    provider_id = str(data.get("metaCallId") or "")
+    started = _epoch(data.get("startedAt")) or _epoch(data.get("createdAt")) or 0.0
+
+    # `recordingObject` is the key inside the recordings bucket; `recordingPath`
+    # is a display path and not something storage can fetch. Only the first is
+    # a reference this service can actually read back.
+    recording_object = str(data.get("recordingObject") or "")
+    if recording_object:
+        reference = f"sb://{recording_object}"
+        state = "READY"
+    else:
+        reference = ""
+        # An ended call with no audio is absent, not merely "none": it was
+        # supposed to have been recorded and was not.
+        state = "ABSENT" if data.get("endedAt") else "NONE"
+
+    return {
+        "id": str(data.get("id") or ""),
+        "tenantId": str(data.get("tenantId") or ""),
+        # Every legacy row came from WhatsApp Business Calling — the only
+        # channel that service carried.
+        "channel": "WHATSAPP_CALL",
+        "direction": str(data.get("direction") or "INBOUND").upper(),
+        "status": _LEGACY_STATUS.get(str(data.get("status") or "").upper(), "FAILED"),
+        "counterparty": str(data.get("phoneNumber") or ""),
+        "providerCallId": provider_id,
+        "startedAt": started,
+        "answeredAt": _epoch(data.get("answeredAt")),
+        "endedAt": _epoch(data.get("endedAt")),
+        "durationSeconds": int(data.get("durationSec") or 0),
+        "recordingState": state,
+        "recordingPath": reference,
+        "recordingMime": str(data.get("recordingMime") or ""),
+        "transcript": str(data.get("transcript") or ""),
+        "summary": str(data.get("summary") or ""),
+        "handledBy": str(data.get("mode") or "agent"),
+        # `outcome` is the carrier's own word for how it ended. It is not an
+        # error on a call that completed, so it is only surfaced as one when
+        # the call did not.
+        "error": (
+            str(data.get("outcome") or "")
+            if str(data.get("status") or "").upper() in {"FAILED", "REJECTED"}
+            else ""
+        ),
+        "metadata": {
+            "legacy": True,
+            "outcome": data.get("outcome"),
+            "lastEvent": data.get("lastEvent"),
+            "recordingScope": data.get("recordingScope"),
+            "recordingDisplayPath": data.get("recordingPath"),
+        },
+    }
+
+
 def _call_from_row(row: dict[str, Any]) -> Call | None:
     data = row.get("data")
     if not isinstance(data, dict):
         return None
-    payload = {**data, "id": str(row.get("id") or data.get("id") or "")}
+    payload = _from_legacy(data) if _is_legacy(data) else dict(data)
+    payload["id"] = str(row.get("id") or data.get("id") or "")
     if row.get("tenant_id") and not payload.get("tenantId"):
         payload["tenantId"] = row["tenant_id"]
     try:
@@ -49,11 +151,41 @@ def _call_from_row(row: dict[str, Any]) -> Call | None:
         return None
 
 
+def _legacy_aliases(call: Call) -> dict[str, Any]:
+    """The field names the TypeScript service reads.
+
+    Written alongside the canonical ones so a call created here is still
+    visible in the older dashboard — the mirror of the problem that made a
+    hundred existing calls invisible in this one. The canonical fields remain
+    authoritative; these are derived on every write and never read back.
+    """
+    def iso(epoch: float | None) -> str | None:
+        return (
+            datetime.fromtimestamp(epoch, timezone.utc).isoformat().replace("+00:00", "Z")
+            if epoch
+            else None
+        )
+
+    return {
+        "metaCallId": call.provider_call_id or None,
+        "phoneNumber": call.counterparty,
+        "durationSec": call.duration_seconds,
+        "mode": call.handled_by,
+        "createdAt": iso(call.started_at),
+        "startedAtIso": iso(call.started_at),
+        "answeredAtIso": iso(call.answered_at),
+        "endedAtIso": iso(call.ended_at),
+    }
+
+
 async def save_call(call: Call) -> Call:
     row = {
         "id": call.id,
         "tenant_id": call.tenant_id or None,
-        "data": call.model_dump(by_alias=True, mode="json", exclude={"id"}),
+        "data": {
+            **call.model_dump(by_alias=True, mode="json", exclude={"id"}),
+            **_legacy_aliases(call),
+        },
         "updated_at": _timestamp(),
     }
     await supabase.upsert(CALLS_TABLE, row)

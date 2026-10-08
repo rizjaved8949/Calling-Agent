@@ -519,7 +519,7 @@ export function ChannelDetail(){
 // ---------------------------------------------------------------- settings --
 
 export function SettingsPage(){
-  const {store,org,run,canManage,t}=useApp();
+  const {store,org,run,canManage,t,toast}=useApp();
   const [tab,setTab]=useState('Company');
   const [confirmName,setConfirmName]=useState('');
   const save=(patch:Record<string,unknown>)=>run(()=>api.updateOrganization(org.id,patch),'Saved');
@@ -589,7 +589,15 @@ export function SettingsPage(){
           :<div className="stack">
             <Field label="Folder name" value={org.driveFolderName} onChange={v=>save({driveFolderName:v})} disabled={!canManage}/>
             <div className="row"><Button disabled={!canManage}
-              onClick={()=>run(()=>api.connectDrive(org.id,'records@'+org.slug+'.example',org.driveFolderName),'Google Drive connected.')}>
+              onClick={async()=>{
+                const result=await run(()=>api.connectDrive(org.id,'records@'+org.slug+'.example',org.driveFolderName));
+                // Against the real backend this is an OAuth round trip: the
+                // company approves in their own Google account and returns to
+                // this page. The prototype has already finished by now.
+                const redirect=(result as {redirectTo?:string})?.redirectTo;
+                if(redirect) window.location.assign(redirect);
+                else toast('Google Drive connected.');
+              }}>
               <HardDrive size={15}/> Connect Google Drive</Button>
               <span className="small muted">{t('You will be asked to sign in and approve one folder.')}</span></div>
           </div>}

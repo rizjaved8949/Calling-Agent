@@ -74,8 +74,14 @@ class Infobip:
 
     def __init__(self, tenant: Tenant) -> None:
         self.tenant = tenant
-        self.api_key = (tenant.infobip_api_key or settings.infobip_api_key).strip()
-        base = (tenant.infobip_base_url or settings.infobip_base_url).strip()
+        # A customer's calls go out on *their* carrier account, never the
+        # platform's. Falling back to the environment here would put their
+        # minutes on our bill and their caller ID on our number — so a company
+        # that has not entered its own key simply cannot place a call, and is
+        # told so. The env values are the platform owner's own account and are
+        # reached only through the legacy single-tenant row.
+        self.api_key = tenant.infobip_api_key.strip()
+        base = tenant.infobip_base_url.strip()
         self.base_url = base.rstrip("/") if base else ""
 
     @property
@@ -117,6 +123,9 @@ class Infobip:
         return response
 
     async def place_call(self, to: str, *, from_number: str = "") -> dict[str, Any]:
+        # Credentials before caller ID: a company that has connected nothing
+        # should be told that, not sent to look for a missing phone number.
+        self._require()
         caller = (from_number or self.tenant.infobip_phone_number).strip()
         if not caller:
             raise AppError(

@@ -14,6 +14,9 @@ from typing import Any
 import pytest
 
 # Set before any app module is imported: Settings reads the environment once.
+# Pointed at a file that does not exist, so the suite never picks up the
+# developer's own .env and start passing or failing on local configuration.
+os.environ["APP_ENV_FILE"] = "tests/.env.absent"
 os.environ.setdefault("SUPABASE_URL", "https://example.supabase.co")
 os.environ.setdefault("SUPABASE_SERVICE_KEY", "test-service-key")
 os.environ.setdefault("CREDENTIALS_SECRET", "test-credentials-secret")

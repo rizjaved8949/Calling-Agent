@@ -301,3 +301,236 @@ def test_expired_state_is_refused(monkeypatch):
     monkeypatch.setattr(oauth.time, "time", lambda: 9_999_999_999)
     with pytest.raises(AppError):
         oauth.read_state(state)
+
+
+# ---------------------------------------------------------------------------
+# The platform owner's credentials are the platform owner's
+# ---------------------------------------------------------------------------
+#
+# Each company brings its own Meta app and its own carrier account. The values
+# in .env belong to the operator's own number. A customer must never ride on
+# them: that would put their minutes on our bill, their caller ID on our
+# number, and let any company holding our app secret forge another's webhooks.
+
+
+def test_a_company_without_a_carrier_key_cannot_use_the_platforms(monkeypatch):
+    from app.config import settings
+    from app.models.tenant import Tenant
+    from app.services.telephony import Infobip
+
+    monkeypatch.setattr(settings, "infobip_api_key", "PLATFORM-OWNER-KEY")
+    monkeypatch.setattr(settings, "infobip_base_url", "https://owner.api.infobip.com")
+
+    carrier = Infobip(Tenant(phoneNumberId="customer-1"))
+    assert carrier.configured is False
+    assert carrier.api_key == ""
+
+
+def test_a_company_uses_its_own_carrier_key(monkeypatch):
+    from app.config import settings
+    from app.models.tenant import Tenant
+    from app.services.telephony import Infobip
+
+    monkeypatch.setattr(settings, "infobip_api_key", "PLATFORM-OWNER-KEY")
+
+    carrier = Infobip(
+        Tenant(
+            phoneNumberId="customer-1",
+            infobipApiKey="THEIR-KEY",
+            infobipBaseUrl="https://theirs.api.infobip.com",
+        )
+    )
+    assert carrier.configured is True
+    assert carrier.api_key == "THEIR-KEY"
+
+
+def test_placing_a_call_without_carrier_credentials_is_refused():
+    import asyncio
+
+    from app.errors import AppError
+    from app.models.tenant import Tenant
+    from app.services.telephony import Infobip
+
+    with pytest.raises(AppError) as raised:
+        asyncio.run(Infobip(Tenant(phoneNumberId="customer-1")).place_call("+923001112222"))
+    assert raised.value.code == "telephony_not_configured"
+
+
+def test_the_platform_secret_does_not_validate_a_customers_webhook(monkeypatch):
+    from app.config import settings
+    from app.models.tenant import Tenant
+    from app.services.whatsapp import signature_ok
+
+    monkeypatch.setattr(settings, "meta_app_secret", "PLATFORM-OWNER-SECRET")
+
+    body = b'{"entry":[]}'
+    signed_with_ours = hmac.new(b"PLATFORM-OWNER-SECRET", body, hashlib.sha256).hexdigest()
+    customer = Tenant(phoneNumberId="customer-1", appSecret="their-secret")
+
+    assert not signature_ok(customer, body, f"sha256={signed_with_ours}")
+
+    signed_with_theirs = hmac.new(b"their-secret", body, hashlib.sha256).hexdigest()
+    assert signature_ok(customer, body, f"sha256={signed_with_theirs}")
+
+
+# ---------------------------------------------------------------------------
+# Rows written by the TypeScript voice service
+# ---------------------------------------------------------------------------
+#
+# `voice_calls` already holds a hundred real calls in an older shape. A
+# dashboard that silently shows none of them is worse than one that shows them
+# imperfectly, so they are translated on read.
+
+LEGACY_ROW = {
+    "id": "793rl146ghb43o06ehc83n86jhd0nilc",
+    "tenantId": "674871172379324",
+    "metaCallId": "wacid.IhggMDBGMUEzNEEzNzI3NEQ4",
+    "phoneNumber": "+923001112222",
+    "direction": "INBOUND",
+    "status": "COMPLETED",
+    "mode": "agent",
+    "outcome": "REMOTE_TERMINATED",
+    "lastEvent": "call_ended",
+    "durationSec": 18,
+    "startedAt": "2026-09-14T21:29:57.707Z",
+    "answeredAt": "2026-09-14T21:29:59.555Z",
+    "endedAt": "2026-09-14T21:30:15.246Z",
+    "recordingObject": "674871172379324/wacid.IhggMDBGMUEzNEEz",
+    "recordingPath": "storage/voice/recordings/wacid.IhggMDBGMUEzNEE",
+    "recordingMime": "audio/wav",
+    "recordingScope": "two_way",
+}
+
+
+def _read(data):
+    from app.repositories.calls import _call_from_row
+
+    return _call_from_row({"id": data["id"], "tenant_id": data.get("tenantId"), "data": data})
+
+
+def test_a_legacy_call_is_readable():
+    call = _read(LEGACY_ROW)
+    assert call is not None
+    assert call.counterparty == "+923001112222"
+    assert call.duration_seconds == 18
+    assert call.provider_call_id == "wacid.IhggMDBGMUEzNEEzNzI3NEQ4"
+
+
+def test_legacy_iso_timestamps_become_epoch_seconds():
+    """JavaScript writes ISO with a trailing Z; this service keeps numbers."""
+    call = _read(LEGACY_ROW)
+    assert isinstance(call.started_at, float)
+    assert call.answered_at and call.ended_at
+    assert round(call.ended_at - call.answered_at) == 16
+
+
+@pytest.mark.parametrize(
+    "legacy,expected",
+    [("COMPLETED", "COMPLETED"), ("CONNECTED", "IN_PROGRESS"),
+     ("CONNECTING", "RINGING"), ("RINGING", "RINGING"), ("FAILED", "FAILED")],
+)
+def test_legacy_statuses_map(legacy, expected):
+    call = _read({**LEGACY_ROW, "status": legacy})
+    assert call.status.value == expected
+
+
+def test_legacy_recording_points_at_the_object_not_the_display_path():
+    """recordingPath is for a human; recordingObject is what storage can fetch."""
+    call = _read(LEGACY_ROW)
+    assert call.recording_path == "sb://674871172379324/wacid.IhggMDBGMUEzNEEz"
+    assert call.recording_state.value == "READY"
+
+
+def test_a_legacy_call_with_no_recording_reads_as_absent():
+    row = {k: v for k, v in LEGACY_ROW.items() if k != "recordingObject"}
+    call = _read(row)
+    assert call.recording_state.value == "ABSENT"
+    assert call.recording_path == ""
+
+
+def test_an_outcome_is_not_an_error_on_a_call_that_completed():
+    assert _read(LEGACY_ROW).error == ""
+    assert _read({**LEGACY_ROW, "status": "FAILED"}).error == "REMOTE_TERMINATED"
+
+
+def test_our_own_rows_are_not_mistaken_for_legacy_ones():
+    from app.models.call import Call
+    from app.repositories.calls import _is_legacy, _legacy_aliases
+
+    call = Call(id="x", tenantId="1", counterparty="+9230011", durationSeconds=5)
+    data = {**call.model_dump(by_alias=True, mode="json"), **_legacy_aliases(call)}
+    assert not _is_legacy(data)
+    assert _read({**data, "id": "x", "tenantId": "1"}).duration_seconds == 5
+
+
+def test_we_write_the_aliases_the_older_service_reads():
+    """Otherwise a call made here is invisible there — the mirror of this bug."""
+    from app.models.call import Call
+    from app.repositories.calls import _legacy_aliases
+
+    call = Call(id="x", tenantId="1", counterparty="+9230011", durationSeconds=42,
+                providerCallId="wacid.9", startedAt=1_760_000_000.0)
+    aliases = _legacy_aliases(call)
+    assert aliases["durationSec"] == 42
+    assert aliases["phoneNumber"] == "+9230011"
+    assert aliases["metaCallId"] == "wacid.9"
+    assert aliases["createdAt"].endswith("Z")
+
+
+# ---------------------------------------------------------------------------
+# Supabase Storage headers
+# ---------------------------------------------------------------------------
+#
+# Getting these wrong returns 404 on a file that exists, which sends you
+# looking for a missing object rather than a missing header.
+
+
+def test_a_legacy_jwt_key_is_sent_as_a_bearer_token(monkeypatch):
+    from app.config import settings
+    from app.db.supabase import SupabaseClient
+
+    monkeypatch.setattr(settings, "supabase_url", "https://x.supabase.co")
+    monkeypatch.setattr(settings, "supabase_service_key", "eyJhbGciOiJIUzI1NiJ9.aaa.bbb")
+    headers = SupabaseClient().storage().headers
+    assert headers["apikey"].startswith("eyJ")
+    assert headers["authorization"] == "Bearer eyJhbGciOiJIUzI1NiJ9.aaa.bbb"
+
+
+def test_a_new_secret_key_is_not_sent_as_a_bearer_token(monkeypatch):
+    """Storage rejects a non-JWT there with "Invalid Compact JWS"."""
+    from app.config import settings
+    from app.db.supabase import SupabaseClient
+
+    monkeypatch.setattr(settings, "supabase_url", "https://x.supabase.co")
+    monkeypatch.setattr(settings, "supabase_service_key", "sb_secret_abcdef")
+    headers = SupabaseClient().storage().headers
+    assert headers["apikey"] == "sb_secret_abcdef"
+    assert "authorization" not in headers
+
+
+def test_a_missing_table_names_the_migration(monkeypatch):
+    """PGRST205 means a migration was not applied, not that credentials are wrong."""
+    import asyncio
+
+    import httpx
+
+    from app.config import settings
+    from app.db.supabase import SupabaseClient
+    from app.errors import UpstreamError
+
+    monkeypatch.setattr(settings, "supabase_url", "https://x.supabase.co")
+    monkeypatch.setattr(settings, "supabase_service_key", "eyJa.b.c")
+
+    client = SupabaseClient()
+    body = ('{"code":"PGRST205","message":"Could not find the table '
+            '\'public.voice_messages\' in the schema cache"}')
+
+    async def fake_request(*_args, **_kwargs):
+        return httpx.Response(404, text=body, request=httpx.Request("GET", "https://x"))
+
+    monkeypatch.setattr(client.rest(), "request", fake_request)
+
+    with pytest.raises(UpstreamError) as raised:
+        asyncio.run(client.select("voice_messages"))
+    assert "voice_messages" in raised.value.message
+    assert "migrations" in raised.value.message

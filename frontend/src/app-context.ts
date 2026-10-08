@@ -25,6 +25,8 @@ export type AppContextType = {
   isPlatform: boolean;
   canManage: boolean;
   readOnly: boolean;
+  /** False while the first load from the backend is still in flight. */
+  hydrated: boolean;
 };
 
 export const AppCtx = createContext<AppContextType | null>(null);

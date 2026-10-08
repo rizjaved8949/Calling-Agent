@@ -79,7 +79,7 @@ async def put(
             log.warning("Drive upload for call %s failed: %s", call_id, exc)
             # Fall through to Supabase rather than lose the recording.
 
-    if supabase.configured:
+    if settings.supabase_configured:
         if len(data) > settings.supabase_max_upload_bytes:
             log.warning(
                 "recording for %s is %.0f MB — over the bucket limit, leaving it "
@@ -133,7 +133,7 @@ async def signed_url(reference: str, seconds: int | None = None) -> str | None:
     account that owns the folder, which the company's staff are not. Those are
     streamed through the API instead.
     """
-    if not reference.startswith(REMOTE_PREFIX) or not supabase.configured:
+    if not reference.startswith(REMOTE_PREFIX) or not settings.supabase_configured:
         return None
     key = reference[len(REMOTE_PREFIX):]
     ttl = seconds or settings.supabase_signed_url_ttl_seconds
@@ -162,7 +162,7 @@ async def get(tenant: Tenant, reference: str) -> bytes | None:
         return await drive.download(reference[len(DRIVE_PREFIX):])
 
     if reference.startswith(REMOTE_PREFIX):
-        if not supabase.configured:
+        if not settings.supabase_configured:
             return None
         key = reference[len(REMOTE_PREFIX):]
         try:
@@ -192,7 +192,7 @@ async def delete(tenant: Tenant, reference: str) -> None:
         return
 
     if reference.startswith(REMOTE_PREFIX):
-        if supabase.configured:
+        if settings.supabase_configured:
             key = reference[len(REMOTE_PREFIX):]
             with contextlib.suppress(httpx.HTTPError):
                 await supabase.storage().delete(

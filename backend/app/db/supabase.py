@@ -65,11 +65,29 @@ class SupabaseClient:
         return self._rest
 
     def storage(self) -> httpx.AsyncClient:
+        """Supabase Storage.
+
+        The headers differ from PostgREST's by key style, and getting this
+        wrong is a 404 on a file that exists:
+
+        * A **legacy JWT key** (`eyJ…`) must be sent as `Authorization: Bearer`.
+          Without it a private bucket returns "Object not found" rather than a
+          permission error, which sends you looking for the wrong bug.
+        * A **new secret key** (`sb_secret_…`) is not a JWT, and Storage
+          rejects it in an Authorization header with "Invalid Compact JWS".
+          For those, `apikey` alone is what authenticates.
+
+        So `apikey` always, and `Authorization` only when the key is a JWT.
+        """
         self._require()
         if self._storage is None:
+            key = settings.supabase_service_key.strip()
+            headers = {"apikey": key}
+            if key.startswith("eyJ"):
+                headers["Authorization"] = f"Bearer {key}"
             self._storage = httpx.AsyncClient(
                 base_url=f"{settings.supabase_url.rstrip('/')}/storage/v1",
-                headers={"apikey": settings.supabase_service_key.strip()},
+                headers=headers,
                 timeout=60.0,
             )
         return self._storage
@@ -155,6 +173,18 @@ class SupabaseClient:
                 "supabase %s %s -> %s: %s",
                 method, path, response.status_code, response.text[:300],
             )
+            # A missing table is a setup step, not a bug, and saying so saves
+            # the half hour otherwise spent reading "the database rejected the
+            # request" and checking credentials that were never wrong.
+            # PGRST205 is PostgREST's "no such table", and the only 404 that
+            # means a migration has not been applied.
+            if response.status_code == 404 and "PGRST205" in response.text:
+                table = path.lstrip("/")
+                raise UpstreamError(
+                    f"The table {table!r} does not exist in this Supabase project. "
+                    f"Apply backend/supabase/migrations/ in the SQL editor.",
+                    details=_safe_detail(response.text),
+                )
             raise UpstreamError(
                 f"The database rejected the request ({response.status_code}).",
                 details=_safe_detail(response.text),
@@ -168,4 +198,19 @@ def _safe_detail(text: str) -> str | None:
     return cleaned[:300] or None
 
 
-supabase = SupabaseClient()
+def _choose() -> Any:
+    """Supabase when it is configured, otherwise the local file.
+
+    Resolved once at import. A deployment that forgot its Supabase variables
+    should fail loudly on the first write rather than quietly write rows to a
+    container filesystem that the next deploy erases — which is why `/health`
+    reports which one is in use and startup logs it.
+    """
+    if settings.supabase_configured:
+        return SupabaseClient()
+    from .local import LocalStore
+
+    return LocalStore()
+
+
+supabase = _choose()

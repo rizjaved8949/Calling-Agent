@@ -89,11 +89,20 @@ def signature_ok(tenant: Tenant | None, raw: bytes, header: str | None) -> bool:
     Compared in constant time. If no app secret is configured the request is
     refused outright rather than waved through — an unauthenticated webhook is
     not a degraded mode, it is an open door.
+
+    Each company brings its own Meta app, so the secret is theirs. There is no
+    fall back to the platform's: verifying a customer's delivery against our
+    secret would mean any company able to sign with it could forge traffic for
+    any other. The env value is the platform owner's own number and is reached
+    only through the legacy single-tenant row, which carries it as that row's
+    own `app_secret`.
     """
-    secret = (tenant.app_secret if tenant else "") or settings.meta_app_secret
-    secret = secret.strip()
+    secret = (tenant.app_secret if tenant else settings.meta_app_secret).strip()
     if not secret:
-        log.error("no app secret for this webhook — refusing it unverified")
+        log.error(
+            "no app secret for %s — refusing the webhook unverified",
+            tenant.phone_number_id if tenant else "an unknown number",
+        )
         return False
     if not header or not header.startswith("sha256="):
         return False

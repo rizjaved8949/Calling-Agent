@@ -67,8 +67,11 @@ export function ConnectionSetup({orgId, channelId, intro = true}: {orgId: string
     const key = field(chId, spec.key);
     const value = draft[key] || '';
     if (value.trim().length < 4) { toast('That value looks too short.'); return; }
-    await run(() => api.setCredential(orgId, chId, spec.key, value.trim().slice(-4)),
-      spec.label + ' saved. We kept only the last four characters.');
+    // The whole value goes to the server, which seals it and stores it; what
+    // comes back is only whether it is set and its last four characters. The
+    // draft is cleared either way, so the secret does not linger in the form.
+    await run(() => api.setCredential(orgId, chId, spec.key, value.trim()),
+      spec.label + ' saved. Only its last four characters are ever shown again.');
     setDraft(d => ({...d, [key]: ''}));
     setShown(s => ({...s, [key]: false}));
   };
