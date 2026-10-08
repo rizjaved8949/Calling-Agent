@@ -239,3 +239,67 @@ def test_feeding_after_the_end_is_ignored(side):
     rec.finish()
     rec.feed(side, b"\x01\x02" * 50)        # must not raise or resurrect files
     assert rec.closed
+
+
+# ---------------------------------------------------------------------------
+# The transcript
+# ---------------------------------------------------------------------------
+#
+# The model streams a sentence in fragments and does not consistently include
+# the leading space. Joined raw they become "mainvirtualassistanthoon", which
+# is what the first real call produced.
+
+
+def _session():
+    from app.services.agent.gemini import AgentPersona, LiveSettings
+    from app.services.agent.session import CallSession
+
+    return CallSession(
+        "c1",
+        send_to_caller=lambda _f: None,
+        live_settings=LiveSettings(model="m", api_key="k"),
+        persona=AgentPersona(instructions="be helpful"),
+        record=False,
+    )
+
+
+def test_fragments_are_joined_with_spaces():
+    s = _session()
+    for piece in ("Assalam o", "Alaikum!", "main", "virtual", "assistant", "hoon"):
+        s._note("agent", piece)
+    assert s.transcript_text() == "agent: Assalam o Alaikum! main virtual assistant hoon"
+
+
+def test_a_fragment_that_brings_its_own_space_is_not_doubled():
+    s = _session()
+    s._note("agent", "hello")
+    s._note("agent", " there")
+    assert s.transcript_text() == "agent: hello there"
+
+
+def test_punctuation_is_not_pushed_away_from_its_word():
+    s = _session()
+    s._note("agent", "yes")
+    s._note("agent", ", of course")
+    assert s.transcript_text() == "agent: yes, of course"
+
+
+def test_each_speaker_gets_their_own_line():
+    s = _session()
+    s._note("caller", "what are the fees")
+    s._note("agent", "they are")
+    s._note("agent", "120,000")
+    s._note("caller", "thanks")
+    assert s.transcript_text().splitlines() == [
+        "caller: what are the fees",
+        "agent: they are 120,000",
+        "caller: thanks",
+    ]
+
+
+def test_empty_fragments_are_dropped():
+    s = _session()
+    s._note("agent", "hello")
+    s._note("agent", "   ")
+    s._note("agent", "there")
+    assert s.transcript_text() == "agent: hello there"

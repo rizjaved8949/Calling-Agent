@@ -66,6 +66,11 @@ async def lifespan(_app: FastAPI):
     try:
         yield
     finally:
+        # A call still running when the process goes away would otherwise
+        # leave a row IN_PROGRESS forever and its recording unwritten.
+        from .services.agent import live
+
+        await live.end_all("the service is restarting")
         await supabase.close()
         await drive.close()
 

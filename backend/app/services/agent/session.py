@@ -222,16 +222,33 @@ class CallSession:
                 self.on_transcript(who, text)
 
     def transcript_text(self) -> str:
-        """The conversation as one block, which is how a call record keeps it."""
+        """The conversation as one block, which is how a call record keeps it.
+
+        The model streams a sentence in fragments — "Assalam o", "Alaikum!",
+        "main" — and whether a fragment carries its own leading space is not
+        consistent. Joining them raw produces "mainvirtualassistanthoon", so a
+        space is added only where neither side already has one, and never
+        before punctuation.
+        """
         lines: list[str] = []
         for who, text in self.transcript:
-            text = text.strip()
-            if not text:
+            if not text.strip():
                 continue
             if lines and lines[-1].startswith(f"{who}:"):
-                lines[-1] += text          # the model emits a sentence in pieces
+                previous = lines[-1]
+                piece = text.strip()
+                # The fragment is stripped either way, so its own leading space
+                # cannot double as the separator — decide that from what is
+                # already there and what the fragment starts with.
+                joiner = (
+                    ""
+                    if previous.endswith((" ", "\n"))
+                    or piece.startswith((",", ".", "!", "?", ":", ";", "،", "۔"))
+                    else " "
+                )
+                lines[-1] = previous + joiner + piece
             else:
-                lines.append(f"{who}: {text}")
+                lines.append(f"{who}: {text.strip()}")
         return "\n".join(lines)
 
     @property

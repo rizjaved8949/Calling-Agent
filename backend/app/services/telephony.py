@@ -12,6 +12,7 @@ the other person spoke.
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 from typing import Any
 
@@ -146,6 +147,45 @@ class Infobip:
 
     async def hangup(self, provider_call_id: str) -> None:
         await self._request("POST", f"/calls/1/calls/{provider_call_id}/hangup", json={})
+
+    async def answer(self, provider_call_id: str) -> None:
+        """Pick up an inbound call so media can start flowing."""
+        await self._request("POST", f"/calls/1/calls/{provider_call_id}/answer", json={})
+
+    async def start_media_stream(self, provider_call_id: str, websocket_url: str) -> None:
+        """Point the call's audio at one of our sockets.
+
+        Started per call rather than configured once, because the URL carries a
+        token scoped to this one call — a single static URL would have to be
+        either unauthenticated or hold a long-lived secret, and this endpoint
+        receives a customer's conversation.
+
+        Infobip sends and expects linear PCM16 at the rate given here, which is
+        the rate `CallSession` already works in, so nothing resamples the
+        caller.
+        """
+        await self._request(
+            "POST",
+            f"/calls/1/calls/{provider_call_id}/start-media-stream",
+            json={
+                "mediaStream": {
+                    "audioProperties": {
+                        "mediaStreamConfigId": None,
+                        "replaceMedia": False,
+                    },
+                },
+                "webSocketEndpointConfig": {
+                    "url": websocket_url,
+                    "sampleRate": 16000,
+                },
+            },
+        )
+
+    async def stop_media_stream(self, provider_call_id: str) -> None:
+        with contextlib.suppress(Exception):
+            await self._request(
+                "POST", f"/calls/1/calls/{provider_call_id}/stop-media-stream", json={}
+            )
 
     async def dialog_recordings(self, dialog_id: str) -> list[dict]:
         response = await self._request("GET", f"/calls/1/recordings/dialogs/{dialog_id}")

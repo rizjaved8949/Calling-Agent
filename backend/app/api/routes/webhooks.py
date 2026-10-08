@@ -36,8 +36,10 @@ from ...models.tenant import Tenant
 from ...repositories import calls as call_repo
 from ...repositories import knowledge
 from ...repositories import tenants as tenant_repo
+from ...security import playback
 from ...services import reports
 from ...services.agent import reply
+from ...services.telephony import Infobip
 from ...services.whatsapp import WhatsApp, mask, signature_ok
 
 log = logging.getLogger(__name__)
@@ -342,6 +344,43 @@ async def infobip_events(phone_number_id: str, request: Request) -> dict:
     return {"status": "received"}
 
 
+def name_of(event: dict[str, Any]) -> str:
+    return str(event.get("name") or event.get("type") or "").upper()
+
+
+async def _attach_media(tenant: Tenant, call: Call) -> None:
+    """Put the agent on a SIM call that has just connected.
+
+    Detached from the webhook for the usual reason — the carrier wants a quick
+    200 and retries anything slower — and silent on failure beyond the log,
+    because there is nowhere to report to and the call row already says what
+    happened.
+    """
+    base = settings.public_base_url.strip().rstrip("/")
+    if not base:
+        log.error("call %s: PUBLIC_BASE_URL is not set, so no media socket exists", call.id)
+        return
+    url = (
+        base.replace("https://", "wss://").replace("http://", "ws://")
+        + f"/api/media/infobip/{call.id}?token="
+        + playback.mint(tenant.phone_number_id, call.id, ttl=4 * 3600)
+    )
+    try:
+        await Infobip(tenant).start_media_stream(call.provider_call_id, url)
+        log.info("call %s: carrier media stream attached", call.id)
+    except Exception:  # noqa: BLE001
+        log.exception("call %s: could not attach the media stream", call.id)
+
+
+async def _answer_inbound(tenant: Tenant, call: Call) -> None:
+    """Answer a SIM call the carrier is offering."""
+    try:
+        await Infobip(tenant).answer(call.provider_call_id)
+        log.info("call %s: answered on the carrier", call.id)
+    except Exception:  # noqa: BLE001
+        log.exception("call %s: could not answer", call.id)
+
+
 async def _handle_infobip(tenant: Tenant, payload: dict[str, Any]) -> None:
     results = payload.get("results") if isinstance(payload, dict) else None
     events = results if isinstance(results, list) else [payload]
@@ -357,11 +396,35 @@ async def _handle_infobip(tenant: Tenant, payload: dict[str, Any]) -> None:
 
         call = await call_repo.find_by_provider_id(tenant.phone_number_id, provider_call_id)
         if call is None:
-            log.debug("Infobip event for a call we do not have: %s", provider_call_id)
-            continue
+            # An inbound call is the one event that legitimately arrives for a
+            # call we have never seen: the caller dialled, so nothing on our
+            # side created a row first.
+            if name_of(event) not in {"CALL_RECEIVED", "CALL_RINGING"}:
+                log.debug("Infobip event for a call we do not have: %s", provider_call_id)
+                continue
+            caller = str(call_payload.get("from") or event.get("from") or "")
+            call = Call(
+                tenantId=tenant.phone_number_id,
+                channel=Channel.PHONE,
+                direction=Direction.INBOUND,
+                status=CallStatus.RINGING,
+                counterparty=caller,
+                providerCallId=provider_call_id,
+                recordingState=(
+                    RecordingState.PENDING if tenant.record_calls else RecordingState.NONE
+                ),
+            )
+            await call_repo.save_call(call)
+            log.info("inbound SIM call %s from %s", call.id, mask(caller))
+            asyncio.create_task(_answer_inbound(tenant, call))
 
         name = str(event.get("name") or event.get("type") or "").upper()
         if name in {"CALL_ESTABLISHED", "CALL_ANSWERED"}:
+            # Established means audio can flow. Attaching the stream here
+            # rather than on RECEIVED is deliberate: a stream started before
+            # the line is up is refused, and the retry lands after the caller
+            # has already heard silence and gone.
+            asyncio.create_task(_attach_media(tenant, call))
             call.status = CallStatus.IN_PROGRESS
             call.answered_at = call.answered_at or time.time()
             if call_payload.get("dialogId"):
