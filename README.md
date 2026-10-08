@@ -64,6 +64,52 @@ never falls back to them — no carrier key, no calls, and the screen says so.
 
 See [backend/README.md](backend/README.md) for the API and what is not built yet.
 
+## What still needs doing
+
+Live today: **https://calling-agent-amber.vercel.app** → **https://calling-agent-juk1.onrender.com**
+
+### Needs you — blocking
+
+- [ ] **Google Cloud Console — add the redirect URI.** Credentials → your OAuth
+      client (project `strategic-insights-hub`) → Authorised redirect URIs →
+      `https://calling-agent-juk1.onrender.com/api/google/callback`. Keep the
+      localhost one alongside. **Verified failing today**: Google answers
+      `redirect_uri_mismatch`, so no company can connect their Drive.
+- [ ] **Infobip — point call webhooks here.** Calls configuration
+      *"Conversaigent Voice Agent"* → notification URL →
+      `https://calling-agent-juk1.onrender.com/api/webhooks/infobip/674871172379324`.
+      Without it a SIM call really connects and the row never leaves `RINGING`.
+- [ ] **Render — upgrade to Starter.** Free sleeps after 15 minutes, so a call
+      arriving at a sleeping instance is a missed call, and 0.1 vCPU cannot do
+      real-time audio. This blocks the media bridge from working at all.
+- [ ] **Run `supabase/migrations/20261009000000_lock_down_remaining_tables.sql`.**
+      Seventeen tables — including call transcripts, emails and phone numbers —
+      are readable with the published anon key. See
+      [backend/SECURITY.md](backend/SECURITY.md).
+
+### Needs you — before real customers
+
+- [ ] **Supabase — upgrade from Free.** It pauses after about a week idle, and
+      a paused project does not error: it goes silent and every screen empties.
+- [ ] **Publish the Google consent screen.** Testing mode caps you at 100
+      users, and publishing needs a privacy policy URL.
+- [ ] **Decide the wording of the privacy and data-deletion pages.** Google
+      requires one, Meta requires both. The pages can be built once the
+      commitments are yours to make.
+- [ ] **Decide the auth model.** The company API key currently lives in browser
+      storage — fine for you, not for selling.
+- [ ] **Click through the app.** Nobody has yet.
+- [ ] **Decide about `calls` webhooks.** They now point here, and this build
+      logs calls without answering them, so the WhatsApp number rings
+      unanswered until the media bridge lands.
+- [ ] Billing and usage limits — nothing counts minutes or messages.
+
+### Being built
+
+SIM media bridge → WhatsApp media bridge → operator takeover. The shared core
+(`app/services/agent/`) is written and tested; what is missing is the transport
+that carries audio into it.
+
 ## Deploying
 
 The two halves deploy separately, each from its own folder.
