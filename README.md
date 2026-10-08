@@ -10,10 +10,11 @@ and Contact pages.
 ```
 frontend/   the React, TypeScript, Vite and Tailwind app
 backend/    the Python API: companies, calls, recordings, Google Drive, WhatsApp
+app.py      runs both, for development
 ```
 
-Nothing else lives at the root: each half owns its own dependencies, its own
-scripts and its own deployment, and neither needs the other installed to build.
+Each half owns its own dependencies, its own scripts and its own deployment,
+and neither needs the other installed to build. `app.py` only starts them.
 
 The two are wired together at runtime. Set `VITE_API_URL` in
 `frontend/.env.local` and the app talks to the backend for everything the
@@ -23,17 +24,27 @@ always did.
 ## Running both
 
 ```bash
-# Terminal 1 — the API on :8000
-cd backend
-cp .env.example .env            # fill in CREDENTIALS_SECRET and ADMIN_API_KEY
-pip install -r requirements-dev.txt
-python -m app.main
-
-# Terminal 2 — the app on :5173
-cd frontend
-cp .env.example .env.local
-npm run dev
+python app.py
 ```
+
+One process runs both halves, prefixes their output with `[api]` and `[web]`,
+and stops both on Ctrl+C. It checks the dependencies first, and waits until the
+API actually answers before printing its URL rather than printing one and
+leaving you to find out. `--install` installs dependencies, `--api-only` /
+`--web-only` run one half, `--api-port` / `--web-port` move the ports.
+
+First time:
+
+```bash
+cp backend/.env.example backend/.env         # CREDENTIALS_SECRET, ADMIN_API_KEY
+cp frontend/.env.example frontend/.env.local
+python app.py --install
+```
+
+Running each half yourself works the same way — `python -m app.main` in
+`backend/`, `npm run dev` in `frontend/`. `app.py` is for working on both at
+once and has no part in deployment: Render builds `backend/Dockerfile`, Vercel
+builds `frontend/`, and neither knows it exists.
 
 Without Supabase credentials the backend keeps its rows in a local JSON file,
 so the whole stack runs with nothing else installed. `GET /health` says which

@@ -27,17 +27,29 @@ create index if not exists voice_messages_provider_idx
 create index if not exists voice_messages_updated_idx
   on public.voice_messages (updated_at desc);
 
+-- Locked to service_role from the start, rather than inheriting the permissive
+-- policy its sibling tables were created with.
+--
+-- A WhatsApp message carries a phone number and what somebody said. Nothing
+-- reaches this table from a browser: both the Python API and Conversation-
+-- Agent's TypeScript service hold the service key and talk to PostgREST from
+-- the server. So there is no reason for anon to see it, and the anon key is
+-- published in client bundles by design.
 do $$
 begin
   execute 'alter table public.voice_messages enable row level security';
   execute 'drop policy if exists prototype_temp_anon_access on public.voice_messages';
-  -- Matches the sibling tables. The API always reaches this with the
-  -- service_role key, which bypasses RLS; narrow this to service_role before
-  -- any client talks to PostgREST directly.
+  -- No policy for anon or authenticated on purpose: with RLS on and no policy
+  -- that matches, those roles see nothing and can write nothing.
+  execute 'drop policy if exists service_role_only on public.voice_messages';
   execute
-    'create policy prototype_temp_anon_access on public.voice_messages '
-    'for all to anon, authenticated using (true) with check (true)';
+    'create policy service_role_only on public.voice_messages '
+    'for all to service_role using (true) with check (true)';
 end $$;
+
+-- Belt and braces: PostgREST checks column privileges as well as RLS, so
+-- revoking here means a misconfigured policy later cannot quietly re-expose it.
+revoke all on public.voice_messages from anon, authenticated;
 
 -- A carrier webhook identifies a call by the provider's id, not ours, and has
 -- to find the row within the life of an HTTP request.

@@ -534,3 +534,22 @@ def test_a_missing_table_names_the_migration(monkeypatch):
         asyncio.run(client.select("voice_messages"))
     assert "voice_messages" in raised.value.message
     assert "migrations" in raised.value.message
+
+
+def test_the_supabase_object_survives_a_rewrite():
+    """Otherwise the first save of a legacy row hides it from the older dashboard."""
+    from app.repositories.calls import _legacy_aliases
+
+    call = _read(LEGACY_ROW)
+    assert call.metadata["supabaseObject"] == "674871172379324/wacid.IhggMDBGMUEzNEEz"
+    assert _legacy_aliases(call)["recordingObject"] == "674871172379324/wacid.IhggMDBGMUEzNEEz"
+
+
+def test_the_backup_pointer_outlives_the_move_to_drive():
+    """After the audio moves, Supabase is the backup — and still findable."""
+    from app.repositories.calls import _legacy_aliases
+
+    call = _read(LEGACY_ROW)
+    call.recording_path = "gd://drive-file-id"
+    aliases = _legacy_aliases(call)
+    assert aliases["recordingObject"] == "674871172379324/wacid.IhggMDBGMUEzNEEz"

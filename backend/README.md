@@ -73,6 +73,16 @@ Apply `supabase/migrations/` in the Supabase SQL editor. The `voice_tenants`
 and `voice_calls` tables come from Conversation-Agent and are **not**
 redefined here; this adds `voice_messages` and the indexes the lookups need.
 
+Two of those migrations are not optional before real customers:
+
+- `..._voice_messages_and_indexes.sql` creates the message log and the indexes
+  the webhook lookups need. Without it `/api/messages` returns a 502 that says
+  so.
+- `..._lock_down_voice_calls.sql` closes the `anon` policy the call log was
+  created with. A call row holds a phone number, a transcript and a recording
+  key, and the anon key is published in client bundles by design. Both services
+  reach PostgREST with the service key from the server, so nothing breaks.
+
 **Without Supabase**, rows go to `data/local-store.json` so the stack runs with
 nothing installed. It is a development convenience and says so at startup and
 in `/health` (`localStore: true`): on a host whose filesystem is replaced on
@@ -198,6 +208,35 @@ Customer credentials are written through `PATCH /api/companies/me`, sealed
 before storage, and are **write-only**: what comes back is whether a value is
 set and its last four characters. No endpoint returns a secret, so a screenshot
 or a shared session gives nothing away.
+
+---
+
+## Moving recordings into Drive
+
+`scripts/drive_migration.py` copies recordings that are in Supabase Storage
+into a company's Drive and repoints their rows.
+
+```bash
+# Attach a refresh token you already have, instead of the consent screen.
+python scripts/drive_migration.py connect --tenant <id> --credentials <file>
+
+python scripts/drive_migration.py migrate --tenant <id> --dry-run
+python scripts/drive_migration.py migrate --tenant <id>
+```
+
+**Nothing is deleted.** After a row moves, the audio exists in both places and
+the row remembers both: `recordingPath` points at Drive, and `recordingObject`
+still points at the bucket. That is what makes Supabase the backup rather than
+a previous location — and it is also what keeps the recording visible in
+Conversation-Agent's dashboard, which has never heard of a `gd://` reference.
+
+Each upload is read back and its length checked against the original before the
+row is repointed, so an interrupted run leaves rows still playing from Supabase
+rather than rows pointing at a half-written file. Re-running skips what is
+already in Drive.
+
+`--delete-source` removes the Supabase copy as well. It is not the default and
+it asks for confirmation; leave it alone until you trust the copies.
 
 ---
 

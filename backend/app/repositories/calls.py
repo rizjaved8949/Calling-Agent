@@ -132,6 +132,10 @@ def _from_legacy(data: dict[str, Any]) -> dict[str, Any]:
             "lastEvent": data.get("lastEvent"),
             "recordingScope": data.get("recordingScope"),
             "recordingDisplayPath": data.get("recordingPath"),
+            # Kept so the object survives this row being rewritten, and so it
+            # is still findable after the audio moves to Drive: it becomes the
+            # backup copy rather than an orphan.
+            "supabaseObject": recording_object or None,
         },
     }
 
@@ -166,6 +170,15 @@ def _legacy_aliases(call: Call) -> dict[str, Any]:
             else None
         )
 
+    # Where the TypeScript service looks for the audio. Carried through even
+    # after the recording moves to Drive, because the Supabase object is still
+    # there as the backup and that service has no idea what a gd:// reference
+    # is. Dropping it would make a hundred recordings vanish from the older
+    # dashboard the moment this one rewrote a row.
+    supabase_object = call.metadata.get("supabaseObject")
+    if not supabase_object and call.recording_path.startswith("sb://"):
+        supabase_object = call.recording_path[len("sb://"):]
+
     return {
         "metaCallId": call.provider_call_id or None,
         "phoneNumber": call.counterparty,
@@ -175,6 +188,7 @@ def _legacy_aliases(call: Call) -> dict[str, Any]:
         "startedAtIso": iso(call.started_at),
         "answeredAtIso": iso(call.answered_at),
         "endedAtIso": iso(call.ended_at),
+        "recordingObject": supabase_object or None,
     }
 
 
