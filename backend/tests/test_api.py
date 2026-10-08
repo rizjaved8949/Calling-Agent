@@ -718,3 +718,17 @@ def test_a_nonsense_range_returns_the_whole_file(client, recorded_call, auth):
     )
     assert response.status_code == 200
     assert len(response.content) == 100
+
+
+def test_the_settings_screen_can_read_back_what_was_entered(client, tenant_factory, auth):
+    """A field that cannot be read back is a field nobody can correct."""
+    _, key = tenant_factory("950")
+    client.patch("/api/companies/me", headers=auth(key), json={
+        "persona": "You are Ayesha from admissions.",
+        "agentGreeting": "Assalam-o-Alaikum.",
+        "autoReply": True,
+    })
+    body = client.get("/api/companies/me", headers=auth(key)).json()
+    assert body["persona"] == "You are Ayesha from admissions."
+    assert body["agentGreeting"] == "Assalam-o-Alaikum."
+    assert body["autoReply"] is True

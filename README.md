@@ -102,6 +102,11 @@ Everything in this list needs an account you own. None of it is code.
       rings unanswered meanwhile.
 - [ ] Billing and usage limits — nothing counts minutes or messages.
 
+- [ ] **Run `supabase/migrations/20261009000100_knowledge_many_documents.sql`.**
+      `voice_knowledge` has a unique index on `tenant_id` — one document per
+      company — so uploading a second one fails with a duplicate-key error.
+      A company wants a price list *and* an FAQ.
+
 ~~Run the RLS lockdown migration~~ — **done**, all 21 tables now refuse the
 public anon key.
 

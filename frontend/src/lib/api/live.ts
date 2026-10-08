@@ -41,7 +41,9 @@ export type WireCompany = {
   language: string | null;
   ttsVoice: string | null;
   agentGreeting: string | null;
+  persona?: string | null;
   recordCalls: boolean;
+  autoReply: boolean;
   googleDrive: {
     connected: boolean;
     accountEmail: string | null;
@@ -380,6 +382,30 @@ export const live = {
       variables: [],
     }));
   },
+
+  // ---- The company's own material ---------------------------------------
+
+  knowledge: () =>
+    request<{ documents: { id: string; name: string; chars: number; updatedAt: number }[];
+              totalChars: number; limitChars: number }>('/api/knowledge'),
+
+  /** Upload a document. The raw file is the body; PDFs are parsed server-side. */
+  uploadKnowledge: (file: File) =>
+    request<{ id: string; name: string; chars: number }>('/api/knowledge', {
+      method: 'POST',
+      query: { name: file.name },
+      raw: file,
+      contentType: file.type || 'application/octet-stream',
+    }),
+
+  deleteKnowledge: (documentId: string) =>
+    request<void>(`/api/knowledge/${encodeURIComponent(documentId)}`, { method: 'DELETE' }),
+
+  /** Exactly what the agent will be given, which is worth seeing before trusting it. */
+  knowledgePreview: () =>
+    request<{ chars: number; limitChars: number; preview: string; truncated: boolean }>(
+      '/api/knowledge/preview',
+    ),
 
   driveStatus: () =>
     request<{ connected: boolean; accountEmail: string | null; folderName: string | null; oauthConfigured: boolean }>(

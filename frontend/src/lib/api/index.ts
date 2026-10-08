@@ -467,6 +467,35 @@ export const api = {
     delete store.settings[orgId];
     return true;
   }),
+  // ---- Knowledge ----------------------------------------------------------
+  // Only real against the backend: the fixtures model knowledge as several
+  // bases with chunks and scores, which is a different shape from the one
+  // document list the API actually has.
+  getKnowledgeDocuments: () => LIVE
+    ? real(()=>live.knowledge())
+    : mock(()=>({documents:[],totalChars:0,limitChars:120000})),
+  uploadKnowledgeDocument: (file:File) => LIVE
+    ? real(()=>live.uploadKnowledge(file))
+    : mock(()=>({id:'doc',name:file.name,chars:0})),
+  deleteKnowledgeDocument: (documentId:string) => LIVE
+    ? real(()=>live.deleteKnowledge(documentId))
+    : mock(()=>undefined),
+  previewKnowledge: () => LIVE
+    ? real(()=>live.knowledgePreview())
+    : mock(()=>({chars:0,limitChars:120000,preview:'',truncated:false})),
+
+  /** The agent's own settings: who it is, how it answers, what it records. */
+  getAgentSettings: () => LIVE
+    ? real(async()=>{ const c=await live.company(); return {
+        persona:c.persona??'', greeting:c.agentGreeting??'', language:c.language??'',
+        voice:c.ttsVoice??'', autoReply:c.autoReply, recordCalls:c.recordCalls,
+        webhookUrl:c.webhookUrl, configured:c.configured }; })
+    : mock(()=>({persona:'',greeting:'',language:'',voice:'',autoReply:false,
+                 recordCalls:true,webhookUrl:'',configured:false})),
+  updateAgentSettings: (patch:Record<string,unknown>) => LIVE
+    ? real(async()=>{ await live.updateCompany(patch); await hydrateCompany(); return true; })
+    : update(()=>true),
+
   /**
    * A URL that will actually play. Mock builds already hold a playable one on
    * the call; live builds mint a short-lived token, because a media element

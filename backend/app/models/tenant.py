@@ -112,6 +112,10 @@ class Tenant(BaseModel):
             "language": self.language or None,
             "ttsVoice": self.tts_voice or None,
             "agentGreeting": self.agent_greeting or None,
+            # Returned so the settings screen can show what was entered. Not a
+            # secret — it is the company's own description of its agent, and a
+            # field that cannot be read back is a field nobody can correct.
+            "persona": self.persona or None,
             "knowledgeBasePdf": self.knowledge_base_pdf or None,
             "recordCalls": self.record_calls,
             "autoReply": self.auto_reply,

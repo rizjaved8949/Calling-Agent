@@ -63,6 +63,7 @@ import {HistoryNavigationProvider} from './history-navigation';
 
 import {AppCtx,useApp} from './app-context';
 import {ApiKeyGate,ComingSoon,hasBackendKey} from './connect-backend';
+import {AgentScreen,KnowledgeScreen} from './pages-agent';
 import {LIVE,hydrate} from './lib/api';
 
 function Provider({children}:{children:React.ReactNode}){
@@ -292,6 +293,15 @@ function NotYet({title,detail,children}:{title:string;detail?:string;children:Re
   return LIVE?<ComingSoon title={title} detail={detail}/>:<>{children}</>;
 }
 
+/**
+ * A screen with two implementations: the fixture one the design was built
+ * against, and the one that talks to the API. Which you get depends on whether
+ * there is an API to talk to.
+ */
+function WhenLive({real,children}:{real:React.ReactNode;children:React.ReactNode}){
+  return LIVE?<>{real}</>:<>{children}</>;
+}
+
 function AppRoutes(){
   return <Routes>
     <Route path="/" element={<HomePage/>}/>
@@ -309,10 +319,10 @@ function AppRoutes(){
 
     <Route path="/app/dashboard" element={<Protected manage><Dashboard/></Protected>}/>
     <Route path="/app/onboarding" element={<Protected manage><Onboarding/></Protected>}/>
-    <Route path="/app/agents" element={<Protected manage><NotYet title="Agents" detail={"Creating and tuning agents arrives with the voice engine. Your company settings, calls, recordings and messages are live now."}><Agents/></NotYet></Protected>}/>
-    <Route path="/app/agents/:id" element={<Protected manage><NotYet title="Agent" detail={"Creating and tuning agents arrives with the voice engine."}><AgentDetail/></NotYet></Protected>}/>
-    <Route path="/app/knowledge" element={<Protected manage><NotYet title="Knowledge base" detail={"Uploading documents for the agent to answer from arrives with the voice engine."}><Knowledge/></NotYet></Protected>}/>
-    <Route path="/app/knowledge/:kbId" element={<Protected manage><NotYet title="Knowledge base" detail={"Uploading documents for the agent to answer from arrives with the voice engine."}><KnowledgeDetail/></NotYet></Protected>}/>
+    <Route path="/app/agents" element={<Protected manage><WhenLive real={<AgentScreen/>}><Agents/></WhenLive></Protected>}/>
+    <Route path="/app/agents/:id" element={<Protected manage><WhenLive real={<AgentScreen/>}><AgentDetail/></WhenLive></Protected>}/>
+    <Route path="/app/knowledge" element={<Protected manage><WhenLive real={<KnowledgeScreen/>}><Knowledge/></WhenLive></Protected>}/>
+    <Route path="/app/knowledge/:kbId" element={<Protected manage><WhenLive real={<KnowledgeScreen/>}><KnowledgeDetail/></WhenLive></Protected>}/>
     <Route path="/app/setups" element={<Protected><NotYet title="Call setups" detail={"Routing rules per number arrive with the voice engine."}><CallSetups/></NotYet></Protected>}/>
     <Route path="/app/campaigns" element={<Protected manage><NotYet title="Campaigns" detail={"Outbound campaigns are not connected yet."}><Campaigns/></NotYet></Protected>}/>
     <Route path="/app/campaigns/:id" element={<Protected manage><NotYet title="Campaign" detail={"Outbound campaigns are not connected yet."}><CampaignDetail/></NotYet></Protected>}/>

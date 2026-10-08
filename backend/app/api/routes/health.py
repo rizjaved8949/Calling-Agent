@@ -16,6 +16,7 @@ from fastapi import APIRouter
 from ...config import settings
 from ...db.supabase import supabase
 from ...security.secret_box import encryption_configured
+from ...services.agent import live, whatsapp_media
 from ...services.audio import ffmpeg_available
 
 router = APIRouter(tags=["health"])
@@ -43,11 +44,17 @@ async def health() -> dict:
             # Admin surface. False means company onboarding is switched off.
             "adminApi": bool(settings.admin_api_key.strip()),
             "publicBaseUrl": bool(settings.public_base_url.strip()),
-            # The voice engine has a key configured. It still cannot carry
-            # call audio — that is the media bridge, which this build lacks.
+            # The voice engine has a key configured.
             "agentKey": settings.agent_configured,
             "agentEngine": settings.voice_engine,
-            # Honest about the gap, so nobody reads "agentKey" as "it answers".
-            "agentMediaBridge": False,
+            # Whether WhatsApp calls can be answered: aiortc terminates Meta's
+            # WebRTC leg, and without it an inbound call is logged and
+            # nothing more. Reported rather than assumed, because the wheel
+            # not building on a host is otherwise only discovered by a caller.
+            "agentMediaBridge": whatsapp_media.available(),
+            # SIM calls and operator takeover need no WebRTC — a carrier
+            # websocket carries PCM directly — so they are listed apart.
+            "carrierMedia": True,
+            "callsInProgress": live.active(),
         },
     }
