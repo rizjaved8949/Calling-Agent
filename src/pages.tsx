@@ -5,7 +5,9 @@ import {Area,AreaChart,Bar,BarChart,CartesianGrid,Legend,ResponsiveContainer,Too
 import {api} from './lib/api';
 import {exportCallsXlsx} from './lib/exportXlsx';
 import type {Call,ChannelType,Persona,Role} from './lib/types';
-import {Badge,Button,Empty,Field,PageHead,Tabs,formatDate,formatDuration,useApp} from './app';
+import {Badge,Button,Empty,Field,PageHead,Tabs} from './app';
+import {useApp} from './app-context';
+import {formatDate,formatDuration} from './lib/format';
 import {HistoryControls} from './history-navigation';
 
 const channelNames:Record<ChannelType,string>={sim:'Phone number',whatsapp_call:'WhatsApp calling',whatsapp_message:'WhatsApp messaging'};

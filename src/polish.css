@@ -165,3 +165,35 @@ hr { border: 0; border-top: 1px solid var(--border); }
 /* A disabled history button should read as unavailable, not just faint. */
 .history-controls button:disabled { opacity: .38; cursor: not-allowed; filter: grayscale(1); }
 .history-controls button:not(:disabled) { cursor: pointer; }
+
+/* --- Concept screens: number capabilities, Drive, operator dial ---------- */
+.use-row { padding: 13px 0; border-bottom: 1px solid var(--border); gap: 20px; align-items: flex-start; }
+.use-row:last-of-type { border-bottom: 0; }
+.switch {
+  appearance: none; flex: none; width: 46px; height: 26px; border-radius: 100px; cursor: pointer;
+  background: var(--border); position: relative; transition: background-color .18s ease;
+}
+.switch::after {
+  content: ""; position: absolute; top: 3px; inset-inline-start: 3px; width: 20px; height: 20px;
+  border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.28);
+  transition: transform .18s ease;
+}
+.switch:checked { background: var(--success); }
+.switch:checked::after { transform: translateX(20px); }
+.switch:disabled { opacity: .45; cursor: not-allowed; }
+.drive-block {
+  display: grid; gap: 12px; padding: 15px 16px; border-radius: 12px;
+  border: 1px solid var(--border); background: var(--surface); margin-top: 6px;
+}
+
+/* --- Call setups --------------------------------------------------------- */
+.setup-group { padding: 14px 0; border-top: 1px solid var(--border); display: grid; gap: 10px; }
+.setup-group:first-of-type { border-top: 0; padding-top: 4px; }
+.setup-row {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 16px;
+  padding: 12px 14px; border: 1px solid var(--border); border-radius: 11px; background: var(--card);
+}
+.setup-row + .setup-row { margin-top: 8px; }
+.setup-row.off { opacity: .6; }
+.setup-row-main { display: grid; gap: 3px; min-width: 0; }
+@media (max-width: 760px) { .setup-row { flex-direction: column; } }

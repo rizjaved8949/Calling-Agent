@@ -1,7 +1,9 @@
 import {useState} from 'react';
 import {Link,useNavigate,useParams} from 'react-router-dom';
 import {AlertTriangle,CheckCircle2,Clock,MessageSquare,Sparkles} from 'lucide-react';
-import {Badge,Button,Empty,Field,PageHead,Tabs,useApp,formatDate,formatDuration} from './app';
+import {Badge,Button,Empty,Field,PageHead,Tabs} from './app';
+import {useApp} from './app-context';
+import {formatDate,formatDuration} from './lib/format';
 import {api} from './lib/api';
 import type {ChannelType} from './lib/types';
 
@@ -130,7 +132,7 @@ export function CallDetail(){
   const transcript=store.transcripts.filter(x=>x.callId===id&&x.text.toLowerCase().includes(query.toLowerCase()));
   const lookups=store.ragQueries.filter(x=>x.callId===id);
   const declined=lookups.filter(x=>!x.answered);
-  const resolution={explicit:'chosen for this call',rule:'chosen by a routing rule',agent:'the agent default',company:'your company default'}[call.resolvedBy];
+  const resolution={setup:'the call setup for this number',explicit:'chosen for this call',agent:'the agent default',company:'your company default'}[call.resolvedBy];
   const RECORDING:Record<string,[string,string]>={
     RECORDING:['warning','This call is still going, so there is nothing to play yet.'],
     PENDING:['warning','The recording is still being prepared. It is usually ready within a few minutes.'],
@@ -155,7 +157,7 @@ export function CallDetail(){
     <div className="card stack">
       <h2>{t('Which material answered this call')}</h2>
       <div className="row between">
-        <span><strong>{call.knowledgeBaseName}</strong> <span className="small muted">— {t(resolution)}</span></span>
+        <span><strong>{call.knowledgeBaseName}</strong> <span className="small muted">— {t(resolution||'your company default')}</span></span>
         <Button small variant="outline" to={'/app/knowledge/'+call.knowledgeBaseId}>Open it</Button>
       </div>
       {lookups.length>0&&<div className="small muted">{t('Your agent looked something up')} {lookups.length} {t('times on this call')}{declined.length>0?', '+t('and could not answer')+' '+declined.length+'.':''}</div>}

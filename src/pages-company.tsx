@@ -1,8 +1,10 @@
 import {useEffect,useMemo,useState} from 'react';
 import {Link,useNavigate,useParams} from 'react-router-dom';
-import {Activity,AlertTriangle,BrainCircuit,CheckCircle2,Clock,FileText,ListChecks,MessageSquare,Mic2,Phone,PhoneOutgoing,Plus,Radio,Route as RouteIcon,Sparkles,Trash2,X} from 'lucide-react';
+import {Activity,AlertTriangle,BrainCircuit,CheckCircle2,Clock,FileText,ListChecks,MessageSquare,Mic2,Phone,PhoneOutgoing,Plus,Radio,Route as RouteIcon,HardDrive,Sparkles,Trash2,X} from 'lucide-react';
 import {Area,AreaChart,CartesianGrid,ResponsiveContainer,Tooltip,XAxis,YAxis} from 'recharts';
-import {Badge,Button,Empty,Field,PageHead,PresetPicker,Tabs,useApp,formatDate,formatDuration} from './app';
+import {Badge,Button,Empty,Field,PageHead,PresetPicker,Tabs} from './app';
+import {useApp} from './app-context';
+import {formatDate,formatDuration} from './lib/format';
 import {api} from './lib/api';
 import {ConnectionSetup} from './connection-setup';
 import {presetKindHelp,presetKindLabel,presetsOfKind} from './lib/presets';
@@ -158,7 +160,7 @@ export function Knowledge(){
         const [tone,label]=KB_STATE[kb.status];
         const docs=store.documents.filter(d=>d.kbId===kb.id);
         const agents=store.agents.filter(a=>a.orgId===org.id&&(a.defaultKnowledgeBaseId===kb.id||a.knowledgeBaseIds.includes(kb.id)));
-        const rules=store.routingRules.filter(r=>r.orgId===org.id&&r.outcome.knowledgeBaseIds?.includes(kb.id));
+        const rules=store.callSetups.filter(r=>r.orgId===org.id&&r.knowledgeBaseIds.includes(kb.id));
         return <Link className="card lift stack" to={'/app/knowledge/'+kb.id} key={kb.id}>
           <div className="row between">
             <strong>{kb.name}{kb.isDefault&&<span className="small muted"> · {t('default')}</span>}</strong>
@@ -171,7 +173,7 @@ export function Knowledge(){
           </div>
           <div className="small muted">
             {agents.length>0&&<>{t('Used by')} {agents.map(a=>a.name).join(', ')}</>}
-            {rules.length>0&&<> · {rules.length} {t('routing rules')}</>}
+            {rules.length>0&&<> · {rules.length} {t('call setups')}</>}
             {agents.length===0&&rules.length===0&&t('Not used by any agent yet')}
           </div>
         </Link>;
@@ -281,7 +283,7 @@ export function AgentDetail(){
             </div>
           </div>;
         })}</div>}
-      <div className="notice"><RouteIcon size={15}/> {t('A routing rule can override this for particular calls.')} <Link to="/app/routing">{t('Set up routing')}</Link></div>
+      <div className="notice"><RouteIcon size={15}/> {t('A call setup decides what a particular number actually uses.')} <Link to="/app/setups">{t('Open call setups')}</Link></div>
     </div>}
 
     {tab==='Where it answers'&&<div className="card stack">
@@ -430,13 +432,13 @@ export function ChannelDetail(){
   const calls=store.calls.filter(c=>c.channelId===id);
   const [usage,setUsage]=useState<{agents:string[];rules:string[];campaigns:string[]}|null>(null);
   const [confirmRemove,setConfirmRemove]=useState(false);
-  useEffect(()=>{if(id)api.channelUsage(id).then(setUsage)},[id,store.agents,store.routingRules,store.campaigns]);
+  useEffect(()=>{if(id)api.channelUsage(id).then(setUsage)},[id,store.agents,store.callSetups,store.campaigns]);
   if(!channel)return <Empty icon={Radio} title="Number not found" body="It may have been removed." action={<Button to="/app/channels">Your numbers</Button>}/>;
   const steps:[string,string][]=[['requested','Requested'],['setting_up','Being set up'],['testing','Testing'],['active','Active']];
   const currentStep=task?steps.findIndex(s=>s[0]===task.state):(channel.status==='connected'?3:0);
   const [tone,statusLabel,blurb]=STATUS_VIEW[channel.status]||STATUS_VIEW.disconnected;
   const agents=store.agents.filter(a=>a.orgId===org.id&&a.channelIds.includes(channel.id));
-  const rules=store.routingRules.filter(r=>r.orgId===org.id&&r.condition.kind==='number'&&r.condition.value===channel.id);
+  const rules=store.callSetups.filter(r=>r.orgId===org.id&&r.channelId===channel.id);
   const inUse=(usage?.agents.length||0)+(usage?.rules.length||0)+(usage?.campaigns.length||0);
   const remove=async()=>{await run(()=>api.removeChannel(channel.id),'Number removed.');navigate('/app/channels')};
 
@@ -467,20 +469,38 @@ export function ChannelDetail(){
       <div className="card"><div className="stat-label">{t('Last checked')}</div><div>{formatDate(channel.lastCheckedAt)}</div></div>
     </div>
 
+    <div className="card stack">
+      <h2>{t('How this number is used')}</h2>
+      <p className="small muted">{t('Turn each of these on only when you are ready. Nothing happens on this number until at least one is on.')}</p>
+      {([
+        ['inboundEnabled','Answer incoming calls','People who ring this number reach your agent.'],
+        ['outboundEnabled','Make outgoing calls','Your agent and your campaigns can call out from this number.'],
+        ['operatorEnabled','Let your team answer instead','Your staff can take a call on this number themselves, or step into one the agent is handling.'],
+      ] as [ 'inboundEnabled'|'outboundEnabled'|'operatorEnabled', string, string ][]).map(([key,label,blurb])=>{
+        const on=!!channel.config[key];
+        return <label className="row between use-row" key={key}>
+          <span><strong>{t(label)}</strong><div className="small muted">{t(blurb)}</div></span>
+          <input type="checkbox" className="switch" checked={on} disabled={!canManage||channel.status!=='connected'}
+            onChange={e=>run(()=>api.setChannelCapability(channel.id,key,e.target.checked), e.target.checked?t(label)+' is on.':t(label)+' is off.')}/>
+        </label>;
+      })}
+      {channel.status!=='connected'&&<div className="notice warning"><AlertTriangle size={15}/> {t('Finish the setup below before turning these on.')}</div>}
+    </div>
+
     <ConnectionSetup orgId={org.id} channelId={channel.id}/>
 
     <div className="card stack">
       <h2>{t('What happens when this number rings')}</h2>
       {agents.length===0&&rules.length===0
-        ?<div className="notice"><AlertTriangle size={15}/> {t('No agent answers this number yet, so calls fall through to your default agent.')} <Link to="/app/agents">{t('Assign an agent')}</Link></div>
+        ?<div className="notice"><AlertTriangle size={15}/> {t('Nothing is set up for this number yet, so calls fall back to your default agent and knowledge.')} <Link to="/app/setups">{t('Create a call setup')}</Link></div>
         :<div className="stack">
           {agents.map(a=><div className="row between" key={a.id}>
             <span>{t('Answered by')} <strong>{a.name}</strong></span>
             <Link className="small" to={'/app/agents/'+a.id}>{t('Open agent')}</Link>
           </div>)}
           {rules.map(r=><div className="row between" key={r.id}>
-            <span>{t('Routing rule')} <strong>{r.name}</strong></span>
-            <Link className="small" to="/app/routing">{t('Open routing')}</Link>
+            <span>{t('Call setup')} <strong>{r.name}</strong></span>
+            <Link className="small" to="/app/setups">{t('Open call setups')}</Link>
           </div>)}
         </div>}
     </div>
@@ -488,7 +508,7 @@ export function ChannelDetail(){
     {confirmRemove&&<div className="modal-backdrop" onClick={()=>setConfirmRemove(false)}><div className="modal" onClick={e=>e.stopPropagation()}>
       <div className="row between"><h2>{t('Remove')} {channel.label}?</h2><button className="icon-btn" onClick={()=>setConfirmRemove(false)}><X size={18}/></button></div>
       {inUse>0
-        ?<div className="notice warning"><strong>{usage?.agents.length} {t('agents')}, {usage?.rules.length} {t('routing rules')} {t('and')} {usage?.campaigns.length} {t('campaigns')} {t('use this number.')}</strong><p>{t('They will fall back to your main number.')}</p></div>
+        ?<div className="notice warning"><strong>{usage?.agents.length} {t('agents')}, {usage?.rules.length} {t('call setups')} {t('and')} {usage?.campaigns.length} {t('campaigns')} {t('use this number.')}</strong><p>{t('They will fall back to your main number.')}</p></div>
         :<p>{t('Nothing is using this number.')}</p>}
       <p className="small muted">{t('Calls already made on it stay in your history.')}</p>
       <div className="row"><Button variant="outline" onClick={()=>setConfirmRemove(false)}>Cancel</Button><Button variant="danger" onClick={remove}>Remove it</Button></div>
@@ -551,6 +571,29 @@ export function SettingsPage(){
         <select className="select" value={org.retentionDays} disabled={!canManage} onChange={e=>save({retentionDays:Number(e.target.value)})}>
           {[30,90,180,365].map(d=><option key={d} value={d}>{d} {t('days')}</option>)}
         </select></div>
+
+      <div className="drive-block">
+        <div className="row between">
+          <span className="row"><HardDrive size={18}/><span><strong>{t('Save recordings to Google Drive')}</strong>
+            <div className="small muted">{t('Every finished recording is copied to a folder in your own Drive, so you keep them even after they expire here.')}</div></span></span>
+          <Badge tone={org.driveConnected?'success':''}>{t(org.driveConnected?'Connected':'Not connected')}</Badge>
+        </div>
+        {org.driveConnected
+          ?<div className="stack">
+            <div className="row between small"><span>{t('Account')}</span><strong className="mono">{org.driveAccount}</strong></div>
+            <Field label="Folder name" value={org.driveFolderName} onChange={v=>save({driveFolderName:v})} disabled={!canManage}
+              help="Recordings land here, in dated subfolders."/>
+            <div className="row"><Button small variant="outline" disabled={!canManage}
+              onClick={()=>run(()=>api.disconnectDrive(org.id),'Google Drive disconnected. Recordings stay here only.')}>Disconnect</Button></div>
+          </div>
+          :<div className="stack">
+            <Field label="Folder name" value={org.driveFolderName} onChange={v=>save({driveFolderName:v})} disabled={!canManage}/>
+            <div className="row"><Button disabled={!canManage}
+              onClick={()=>run(()=>api.connectDrive(org.id,'records@'+org.slug+'.example',org.driveFolderName),'Google Drive connected.')}>
+              <HardDrive size={15}/> Connect Google Drive</Button>
+              <span className="small muted">{t('You will be asked to sign in and approve one folder.')}</span></div>
+          </div>}
+      </div>
     </div>}
 
     {tab==='Danger zone'&&<div className="card stack">

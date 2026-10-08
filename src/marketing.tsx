@@ -1,7 +1,7 @@
 import React,{useEffect,useState} from 'react';
 import {Link,NavLink,useLocation} from 'react-router-dom';
 import {Activity,ArrowRight,ArrowUpRight,AudioLines,BarChart3,BookOpen,BrainCircuit,Check,CheckCircle2,ChevronDown,Clock3,Headphones,LockKeyhole,Menu,MessageSquare,Mic2,Phone,Search,ShieldCheck,Users,Workflow,X} from 'lucide-react';
-import {useApp} from './app';
+import {useApp} from './app-context';
 
 const nav=[['Home','/'],['Product','/product'],['Solutions','/solutions'],['Pricing','/pricing'],['Resources','/resources'],['About','/about'],['Contact','/contact']] as const;
 const channels=[{icon:Phone,title:'Phone calls',copy:'Answer inbound calls and place outbound calls on a number your customers already know.'},{icon:Headphones,title:'WhatsApp calling',copy:'Bring voice conversations into the same workspace, with a clear path to human takeover.'},{icon:MessageSquare,title:'WhatsApp messaging',copy:'Send approved templates and keep delivery history connected to the conversation.'}];

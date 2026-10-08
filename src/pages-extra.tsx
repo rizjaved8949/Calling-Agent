@@ -1,18 +1,16 @@
 import {useEffect,useMemo,useState} from 'react';
 import {Link,useNavigate,useParams} from 'react-router-dom';
 import {ArrowDown,ArrowUp,BookOpen,BrainCircuit,CheckCircle2,FileText,Headphones,ListChecks,Pause,PhoneOutgoing,Play,Plus,Route as RouteIcon,Search,Trash2,Upload,X} from 'lucide-react';
-import {Badge,Button,Empty,Field,PageHead,useApp,formatDate,formatDuration} from './app';
+import {Badge,Button,Empty,Field,PageHead} from './app';
+import {useApp} from './app-context';
+import {formatDate,formatDuration} from './lib/format';
 import {api} from './lib/api';
-import type {Call,Campaign,KbDocument,KnowledgeBase,RoutingRule,RuleConditionKind,UnansweredQuestion} from './lib/types';
+import type {Call,Campaign,KbDocument,UnansweredQuestion} from './lib/types';
 
 const CHANNEL_LABEL:Record<string,string>={sim:'Phone line',whatsapp_call:'WhatsApp call',whatsapp_message:'WhatsApp message'};
 const KB_STATE:Record<string,[string,string]>={ready:['success','Ready'],indexing:['warning','Preparing'],failed:['danger','Needs attention'],empty:['','No documents yet']};
 
-/** Why a given call used the knowledge base it used, in words. */
-export const resolutionLabel=(r:Call['resolvedBy'])=>({
-  explicit:'chosen for this call',rule:'chosen by a routing rule',
-  agent:'the agent default',company:'your company default',
-}[r]);
+
 
 // ---------------------------------------------------------------- knowledge --
 
@@ -27,7 +25,7 @@ export function KnowledgeDetail(){
   const [answer,setAnswer]=useState<{answered:boolean;text:string;source?:string;page?:number}|null>(null);
   const [asking,setAsking]=useState(false);
   const [confirmDelete,setConfirmDelete]=useState(false);
-  useEffect(()=>{if(kbId)api.knowledgeUsage(kbId).then(setUsage)},[kbId,store.agents,store.routingRules]);
+  useEffect(()=>{if(kbId)api.knowledgeUsage(kbId).then(setUsage)},[kbId,store.agents,store.callSetups]);
   if(!kb)return <Empty icon={BrainCircuit} title="Knowledge base not found" body="It may have been deleted." action={<Button to="/app/knowledge">Back to knowledge</Button>}/>;
   const [tone,label]=KB_STATE[kb.status];
 
@@ -112,212 +110,47 @@ export function KnowledgeDetail(){
     {confirmDelete&&<div className="modal-backdrop" onClick={()=>setConfirmDelete(false)}><div className="modal" onClick={e=>e.stopPropagation()}>
       <div className="row between"><h2>{t('Delete')} {kb.name}?</h2><button className="icon-btn" onClick={()=>setConfirmDelete(false)}><X size={18}/></button></div>
       {inUse>0
-        ?<div className="notice warning"><strong>{usage?.agents.length} {t('agents')}, {usage?.rules.length} {t('routing rules')} {t('and')} {usage?.campaigns.length} {t('campaigns')} {t('use this.')}</strong><p>{t('Deleting it will send those calls to your default knowledge base instead.')}</p></div>
+        ?<div className="notice warning"><strong>{usage?.agents.length} {t('agents')}, {usage?.rules.length} {t('call setups')} {t('and')} {usage?.campaigns.length} {t('campaigns')} {t('use this.')}</strong><p>{t('Deleting it will send those calls to your default knowledge base instead.')}</p></div>
         :<p>{t('Nothing is using this knowledge base. Its documents will be removed permanently.')}</p>}
       <div className="row"><Button variant="outline" onClick={()=>setConfirmDelete(false)}>Cancel</Button><Button variant="danger" onClick={remove}>Delete it</Button></div>
     </div></div>}
   </div>;
 }
 
-// ------------------------------------------------------------------ routing --
-
-const CONDITION_LABEL:Record<RuleConditionKind,string>={
-  number:'The call came in on',
-  channel:'The call came in on this channel',
-  prefix:'The caller’s number starts with',
-  contactList:'The caller is in this list',
-  hours:'The call came in',
-};
-
-export function Routing(){
-  const {store,org,run,canManage,t}=useApp();
-  const rules=useMemo(()=>store.routingRules.filter(x=>x.orgId===org.id).sort((a,b)=>a.order-b.order),[store.routingRules,org.id]);
-  const bases=store.knowledgeBases.filter(x=>x.orgId===org.id);
-  const agents=store.agents.filter(x=>x.orgId===org.id);
-  const [editing,setEditing]=useState<RoutingRule|null>(null);
-  const numbers=store.channels.filter(x=>x.orgId===org.id);
-  const [testChannelId,setTestChannelId]=useState(numbers[0]?.id||'');
-  const [testCaller,setTestCaller]=useState('+92 300 123 4567');
-  const [testOutside,setTestOutside]=useState(false);
-  const [testResult,setTestResult]=useState<Awaited<ReturnType<typeof api.testRoute>>|null>(null);
-
-  const move=(rule:RoutingRule,delta:number)=>{
-    const movable=rules.filter(x=>!x.isFallback);
-    const index=movable.findIndex(x=>x.id===rule.id);
-    const next=index+delta;
-    if(next<0||next>=movable.length)return;
-    const reordered=[...movable];
-    [reordered[index],reordered[next]]=[reordered[next],reordered[index]];
-    run(()=>api.reorderRoutingRules(org.id,reordered.map(x=>x.id)));
-  };
-  const blank=():RoutingRule=>({id:'rule-'+Math.random().toString(36).slice(2,8),orgId:org.id,name:'',order:rules.filter(x=>!x.isFallback).length,enabled:true,isFallback:false,condition:{kind:'number',value:''},outcome:{agentId:agents[0]?.id,knowledgeBaseIds:bases[0]?[bases[0].id]:[]},matchCount30d:0});
-
-  return <div className="stack">
-    <PageHead eyebrow="Routing" title="Which agent and material each call uses"
-      description="Rules are read from the top. The first one that matches wins."
-      action={canManage&&<Button onClick={()=>setEditing(blank())}><Plus size={15}/> New rule</Button>}/>
-
-    <div className="card stack">
-      {rules.map((rule,i)=>{
-        const kbNames=(rule.outcome.knowledgeBaseIds||[]).map(k=>bases.find(b=>b.id===k)?.name).filter(Boolean);
-        const agentName=agents.find(a=>a.id===rule.outcome.agentId)?.name;
-        const assigned=store.profiles.find(p=>p.id===rule.outcome.assignToUserId)?.fullName;
-        return <div className={'rule-row '+(rule.enabled?'':'disabled')} key={rule.id}>
-          <div className="rule-order mono">{rule.isFallback?'—':i+1}</div>
-          <div className="rule-body">
-            <div className="row between">
-              <strong>{rule.name}{rule.isFallback&&<span className="small muted"> · {t('always last')}</span>}</strong>
-              <span className="small muted">{t('matched')} {rule.matchCount30d} {t('calls in 30 days')}</span>
-            </div>
-            <div className="small muted">
-              {rule.isFallback
-                ?t('Every call that no rule above has matched')
-                :<>{t(CONDITION_LABEL[rule.condition.kind])} <strong>{
-                  rule.condition.kind==='channel'?t(CHANNEL_LABEL[rule.condition.value])
-                  :rule.condition.kind==='number'?(store.channels.find(c=>c.id===rule.condition.value)?.label||t('a number that no longer exists'))
-                  :rule.condition.kind==='hours'?t(rule.condition.value==='outside'?'outside business hours':'inside business hours')
-                  :rule.condition.value}</strong></>}
-            </div>
-            <div className="small">
-              {agentName&&<>{t('Answered by')} <strong>{agentName}</strong>{' '}</>}
-              {assigned&&<>{t('Sent to')} <strong>{assigned}</strong>{' '}</>}
-              {kbNames.length>0&&<>{t('using')} <strong>{kbNames.join(t(' first, then '))}</strong></>}
-            </div>
-          </div>
-          {canManage&&<div className="rule-actions">
-            {!rule.isFallback&&<>
-              <button className="icon-btn" title={t('Move up')} onClick={()=>move(rule,-1)}><ArrowUp size={15}/></button>
-              <button className="icon-btn" title={t('Move down')} onClick={()=>move(rule,1)}><ArrowDown size={15}/></button>
-            </>}
-            <Button small variant="outline" onClick={()=>setEditing(rule)}>Edit</Button>
-            {!rule.isFallback&&<button className="icon-btn" title={t('Delete')} onClick={()=>run(()=>api.deleteRoutingRule(rule.id),'Rule deleted.')}><Trash2 size={15}/></button>}
-          </div>}
-        </div>;
-      })}
-    </div>
-
-    <div className="card stack">
-      <h2>{t('Try a call')}</h2>
-      <p className="small muted">{t('See which rule would win before a real caller finds out.')}</p>
-      <div className="field-grid">
-        <div className="field"><label>{t('Which of your numbers they call')}</label>
-          <select className="select" value={testChannelId} onChange={e=>setTestChannelId(e.target.value)}>
-            {numbers.map(c=><option key={c.id} value={c.id}>{c.label} — {c.displayNumber||t('not assigned')}</option>)}
-          </select></div>
-        <Field label="Caller's number" value={testCaller} onChange={setTestCaller}/>
-        <div className="field"><label>{t('Time of day')}</label>
-          <select className="select" value={testOutside?'outside':'inside'} onChange={e=>setTestOutside(e.target.value==='outside')}>
-            <option value="inside">{t('Inside business hours')}</option>
-            <option value="outside">{t('Outside business hours')}</option>
-          </select></div>
-      </div>
-      <div className="row"><Button onClick={async()=>setTestResult(await api.testRoute(org.id,testChannelId,testCaller,testOutside))}>Try it</Button></div>
-      {testResult&&<div className="result-card">
-        <strong>{t('This call would match')} “{testResult.rule.name}”</strong>
-        <div className="small">
-          {testResult.agentName&&<>{t('Answered by')} <strong>{testResult.agentName}</strong>. </>}
-          {testResult.assignedTo&&<>{t('Sent to')} <strong>{testResult.assignedTo}</strong>. </>}
-          {testResult.knowledgeBaseNames.length>0&&<>{t('It would look in')} <strong>{testResult.knowledgeBaseNames.join(t(' first, then '))}</strong>.</>}
-        </div>
-      </div>}
-    </div>
-
-    {editing&&<RuleEditor rule={editing} onClose={()=>setEditing(null)}/>}
-  </div>;
-}
-
-function RuleEditor({rule,onClose}:{rule:RoutingRule;onClose:()=>void}){
-  const {store,org,run,t}=useApp();
-  const [draft,setDraft]=useState<RoutingRule>(rule);
-  const numbers=store.channels.filter(x=>x.orgId===org.id);
-  const bases=store.knowledgeBases.filter(x=>x.orgId===org.id);
-  const agents=store.agents.filter(x=>x.orgId===org.id);
-  const staff=store.memberships.filter(m=>m.orgId===org.id).map(m=>store.profiles.find(p=>p.id===m.userId)).filter(Boolean);
-  const selected=draft.outcome.knowledgeBaseIds||[];
-  const toggleKb=(id:string)=>setDraft(d=>{
-    const list=d.outcome.knowledgeBaseIds||[];
-    return {...d,outcome:{...d.outcome,knowledgeBaseIds:list.includes(id)?list.filter(x=>x!==id):[...list,id]}};
-  });
-  const save=async()=>{await run(()=>api.saveRoutingRule(draft),'Rule saved.');onClose()};
-  return <div className="modal-backdrop" onClick={onClose}><div className="modal wide" onClick={e=>e.stopPropagation()}>
-    <div className="row between"><h2>{draft.name?t('Edit rule'):t('New rule')}</h2><button className="icon-btn" onClick={onClose}><X size={18}/></button></div>
-    <Field label="Rule name" value={draft.name} onChange={v=>setDraft(d=>({...d,name:v}))} placeholder="Fee questions line"/>
-    {!draft.isFallback&&<div className="field-grid">
-      <div className="field"><label>{t('When')}</label>
-        <select className="select" value={draft.condition.kind} onChange={e=>setDraft(d=>({...d,condition:{kind:e.target.value as RuleConditionKind,value:''}}))}>
-          {Object.entries(CONDITION_LABEL).map(([k,v])=><option key={k} value={k}>{t(v)}</option>)}
-        </select></div>
-      <div className="field"><label>{t('Matches')}</label>
-        {draft.condition.kind==='number'
-          ?<select className="select" value={draft.condition.value} onChange={e=>setDraft(d=>({...d,condition:{...d.condition,value:e.target.value}}))}>
-            <option value="">{t('Choose one of your numbers')}</option>
-            {numbers.map(c=><option key={c.id} value={c.id}>{c.label} — {c.displayNumber||t('not assigned')}</option>)}
-          </select>
-          :draft.condition.kind==='channel'
-          ?<select className="select" value={draft.condition.value} onChange={e=>setDraft(d=>({...d,condition:{...d.condition,value:e.target.value}}))}>
-            <option value="">{t('Choose a channel')}</option>
-            {Object.entries(CHANNEL_LABEL).map(([k,v])=><option key={k} value={k}>{t(v)}</option>)}
-          </select>
-          :draft.condition.kind==='hours'
-          ?<select className="select" value={draft.condition.value} onChange={e=>setDraft(d=>({...d,condition:{...d.condition,value:e.target.value}}))}>
-            <option value="inside">{t('Inside business hours')}</option>
-            <option value="outside">{t('Outside business hours')}</option>
-          </select>
-          :<input className="input" value={draft.condition.value} onChange={e=>setDraft(d=>({...d,condition:{...d.condition,value:e.target.value}}))} placeholder="+92 21 555 0142"/>}
-      </div>
-    </div>}
-    <div className="field"><label>{t('Answered by')}</label>
-      <select className="select" value={draft.outcome.agentId||''} onChange={e=>setDraft(d=>({...d,outcome:{...d.outcome,agentId:e.target.value||undefined}}))}>
-        <option value="">{t('No agent — send to a person')}</option>
-        {agents.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}
-      </select></div>
-    {!draft.outcome.agentId&&<div className="field"><label>{t('Send to')}</label>
-      <select className="select" value={draft.outcome.assignToUserId||''} onChange={e=>setDraft(d=>({...d,outcome:{...d.outcome,assignToUserId:e.target.value||undefined}}))}>
-        <option value="">{t('Anyone on the team')}</option>
-        {staff.map(p=><option key={p!.id} value={p!.id}>{p!.fullName}</option>)}
-      </select></div>}
-    <div className="field"><label>{t('Knowledge it should use')}</label>
-      <div className="chip-row">{bases.map(b=>
-        <button type="button" key={b.id} className={'chip '+(selected.includes(b.id)?'on':'')} onClick={()=>toggleKb(b.id)}>
-          {selected.includes(b.id)&&<CheckCircle2 size={14}/>}{b.name}
-        </button>)}</div>
-      {selected.length>1&&<div className="help">{t('The agent looks in')} <strong>{selected.map(id=>bases.find(b=>b.id===id)?.name).join(t(' first, then '))}</strong>.</div>}
-      {selected.length===0&&<div className="help">{t('With none chosen, the call uses the agent default.')}</div>}
-    </div>
-    <label className="row small"><input type="checkbox" checked={draft.enabled} onChange={e=>setDraft(d=>({...d,enabled:e.target.checked}))}/> {t('This rule is active')}</label>
-    <div className="row"><Button variant="outline" onClick={onClose}>Cancel</Button><Button onClick={save} disabled={!draft.name.trim()}>Save rule</Button></div>
-  </div></div>;
-}
-
 // ---------------------------------------------------------------- campaigns --
 
 const CAMPAIGN_TONE:Record<Campaign['status'],string>={running:'live',paused:'warning',draft:'',done:'success'};
 
+/** A campaign is a list of numbers worked through using one outgoing setup. */
 export function Campaigns(){
   const {store,org,run,canManage,t}=useApp();
   const campaigns=store.campaigns.filter(x=>x.orgId===org.id);
-  const agents=store.agents.filter(x=>x.orgId===org.id);
-  const bases=store.knowledgeBases.filter(x=>x.orgId===org.id);
+  const setups=store.callSetups.filter(x=>x.orgId===org.id&&x.direction==='OUTBOUND');
   const [creating,setCreating]=useState(false);
   const [name,setName]=useState('');
-  const [agentId,setAgentId]=useState(agents[0]?.id||'');
-  const [kbIds,setKbIds]=useState<string[]>(bases[0]?[bases[0].id]:[]);
-  const numbers=store.channels.filter(x=>x.orgId===org.id&&x.status==='connected');
-  const [fromChannelId,setFromChannelId]=useState(numbers.find(n=>n.isPrimary)?.id||numbers[0]?.id||'');
+  const [setupId,setSetupId]=useState(setups[0]?.id||'');
+  const describe=(id:string)=>{
+    const sp=store.callSetups.find(x=>x.id===id); if(!sp)return t('No setup');
+    const ch=store.channels.find(c=>c.id===sp.channelId);
+    const kb=sp.knowledgeBaseIds.map(k=>store.knowledgeBases.find(b=>b.id===k)?.name).filter(Boolean).join(', ');
+    return sp.name+' · '+(ch?.label||'')+(kb?' · '+kb:'');
+  };
   const create=async()=>{
-    await run(()=>api.createCampaign(org.id,{name,agentId,fromChannelId,knowledgeBaseIds:kbIds,total:0}),'Campaign created as a draft.');
+    await run(()=>api.createCampaign(org.id,{name,setupId}),'Campaign created as a draft.');
     setCreating(false);setName('');
   };
   return <div className="stack">
-    <PageHead eyebrow="Outbound" title="Campaigns" description="Work through a list of numbers with the agent you choose, using the material you choose."
-      action={canManage&&<Button onClick={()=>setCreating(true)}><Plus size={15}/> New campaign</Button>}/>
-    {campaigns.length===0
-      ?<Empty icon={PhoneOutgoing} title="No campaigns yet" body="A campaign calls through a list for you. Pick the agent, pick the material it should use, and set the hours you are happy to call within." action={canManage&&<Button onClick={()=>setCreating(true)}>Create one</Button>}/>
+    <PageHead eyebrow="Outbound" title="Campaigns" description="Work through a list of numbers using one of your outgoing call setups."
+      action={canManage&&setups.length>0&&<Button onClick={()=>setCreating(true)}><Plus size={15}/> New campaign</Button>}/>
+    {setups.length===0
+      ?<Empty icon={PhoneOutgoing} title="No outgoing setups yet" body="A campaign runs on an outgoing setup, which decides the agent, the knowledge and the tone." action={<Button to="/app/setups">Create one</Button>}/>
+      :campaigns.length===0
+      ?<Empty icon={PhoneOutgoing} title="No campaigns yet" body="Pick an outgoing setup, upload your list, and the agent works through it." action={canManage&&<Button onClick={()=>setCreating(true)}>Create one</Button>}/>
       :<div className="grid cols-2">{campaigns.map(c=>{
         const progress=c.total?Math.round(c.attempted/c.total*100):0;
         return <Link className="card lift" to={'/app/campaigns/'+c.id} key={c.id}>
           <div className="row between"><strong>{c.name}</strong><Badge tone={CAMPAIGN_TONE[c.status]}>{t(c.status)}</Badge></div>
-          <div className="small muted">{agents.find(a=>a.id===c.agentId)?.name} · {c.knowledgeBaseIds.map(k=>bases.find(b=>b.id===k)?.name).filter(Boolean).join(', ')}</div>
+          <div className="small muted">{describe(c.setupId)}</div>
           <div className="meter"><span style={{width:progress+'%'}}/></div>
           <div className="row between small"><span className="mono">{c.attempted} / {c.total} {t('called')}</span><span className="mono success">{c.connected} {t('connected')}</span></div>
         </Link>;
@@ -325,14 +158,12 @@ export function Campaigns(){
     {creating&&<div className="modal-backdrop" onClick={()=>setCreating(false)}><div className="modal" onClick={e=>e.stopPropagation()}>
       <div className="row between"><h2>{t('New campaign')}</h2><button className="icon-btn" onClick={()=>setCreating(false)}><X size={18}/></button></div>
       <Field label="Campaign name" value={name} onChange={setName} placeholder="Merit list follow-up"/>
-      <div className="field"><label>{t('Agent')}</label><select className="select" value={agentId} onChange={e=>setAgentId(e.target.value)}>{agents.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select></div>
-      <div className="field"><label>{t('Call from')}</label><select className="select" value={fromChannelId} onChange={e=>setFromChannelId(e.target.value)}>{numbers.map(c=><option key={c.id} value={c.id}>{c.label} — {c.displayNumber}</option>)}</select>
-        <div className="help">{t('This is the number people will see calling them.')}</div></div>
-      <div className="field"><label>{t('Knowledge it should use')}</label>
-        <div className="chip-row">{bases.map(b=><button type="button" key={b.id} className={'chip '+(kbIds.includes(b.id)?'on':'')} onClick={()=>setKbIds(x=>x.includes(b.id)?x.filter(y=>y!==b.id):[...x,b.id])}>{kbIds.includes(b.id)&&<CheckCircle2 size={14}/>}{b.name}</button>)}</div>
-        {kbIds.length>1&&<div className="help">{t('The agent looks in')} <strong>{kbIds.map(id=>bases.find(b=>b.id===id)?.name).join(t(' first, then '))}</strong>.</div>}
-      </div>
-      <div className="row"><Button variant="outline" onClick={()=>setCreating(false)}>Cancel</Button><Button onClick={create} disabled={!name.trim()}>Create draft</Button></div>
+      <div className="field"><label>{t('Which outgoing setup')}</label>
+        <select className="select" value={setupId} onChange={e=>setSetupId(e.target.value)}>
+          {setups.map(sp=><option key={sp.id} value={sp.id}>{describe(sp.id)}</option>)}
+        </select>
+        <div className="help">{t('The setup decides the agent, the knowledge and the tone, so there is nothing else to choose here.')}</div></div>
+      <div className="row"><Button variant="outline" onClick={()=>setCreating(false)}>Cancel</Button><Button onClick={create} disabled={!name.trim()||!setupId}>Create draft</Button></div>
     </div></div>}
   </div>;
 }
@@ -344,18 +175,26 @@ export function CampaignDetail(){
   const [confirmDelete,setConfirmDelete]=useState(false);
   const campaign=store.campaigns.find(x=>x.id===id&&x.orgId===org.id);
   const contacts=store.campaignContacts.filter(x=>x.campaignId===id);
-  const bases=store.knowledgeBases.filter(x=>x.orgId===org.id);
   if(!campaign)return <Empty icon={PhoneOutgoing} title="Campaign not found" body="It may have been deleted." action={<Button to="/app/campaigns">Back to campaigns</Button>}/>;
-  const agent=store.agents.find(a=>a.id===campaign.agentId);
+  const setup=store.callSetups.find(x=>x.id===campaign.setupId);
+  const agent=store.agents.find(a=>a.id===setup?.agentId);
+  const channel=store.channels.find(c=>c.id===setup?.channelId);
+  const kbNames=(setup?.knowledgeBaseIds||[]).map(k=>store.knowledgeBases.find(b=>b.id===k)?.name).filter(Boolean);
   const progress=campaign.total?Math.round(campaign.attempted/campaign.total*100):0;
   return <div className="stack">
     <PageHead eyebrow="Campaign" title={campaign.name}
-      description={'Calling from '+(store.channels.find(c=>c.id===campaign.fromChannelId)?.label||'your main number')+' with '+(agent?.name||'an agent')+', using '+campaign.knowledgeBaseIds.map(k=>bases.find(b=>b.id===k)?.name).filter(Boolean).join(' then ')}
+      description={setup?t('Using the setup')+' "'+setup.name+'"':t('This campaign has no setup any more.')}
       action={canManage&&<div className="row">
         {campaign.status!=='running'&&<Button onClick={()=>run(()=>api.setCampaignStatus(campaign.id,'running'),'Campaign started.')}><Play size={15}/> Start</Button>}
         {campaign.status==='running'&&<Button variant="outline" onClick={()=>run(()=>api.setCampaignStatus(campaign.id,'paused'),'Campaign paused.')}><Pause size={15}/> Pause</Button>}
         <Button variant="outline" onClick={()=>setConfirmDelete(true)}><Trash2 size={15}/> Delete</Button>
       </div>}/>
+    {setup&&<div className="card stack">
+      <div className="row between"><span>{t('Calling from')}</span><strong>{channel?.label} · <span className="mono">{channel?.displayNumber}</span></strong></div>
+      <div className="row between"><span>{t('Answered by')}</span><strong>{agent?.name||'—'}</strong></div>
+      <div className="row between"><span>{t('Knowledge used')}</span><strong>{kbNames.join(t(' first, then '))||t('your default')}</strong></div>
+      <div className="row"><Button small variant="outline" to="/app/setups">Change the setup</Button></div>
+    </div>}
     <div className="grid cols-4">
       <div className="card"><div className="stat-label">{t('Called')}</div><div className="stat-number mono">{campaign.attempted}</div><div className="small muted">{t('of')} {campaign.total}</div></div>
       <div className="card"><div className="stat-label">{t('Connected')}</div><div className="stat-number mono success">{campaign.connected}</div></div>
@@ -374,7 +213,7 @@ export function CampaignDetail(){
     </div>
     {confirmDelete&&<div className="modal-backdrop" onClick={()=>setConfirmDelete(false)}><div className="modal" onClick={e=>e.stopPropagation()}>
       <div className="row between"><h2>{t('Delete')} {campaign.name}?</h2><button className="icon-btn" onClick={()=>setConfirmDelete(false)}><X size={18}/></button></div>
-      <p>{t('This removes the campaign and its contact list. Calls already made stay in your history.')}</p>
+      <p>{t('This removes the campaign and its contact list. The setup it used stays, and calls already made stay in your history.')}</p>
       <div className="row"><Button variant="outline" onClick={()=>setConfirmDelete(false)}>Cancel</Button>
         <Button variant="danger" onClick={async()=>{await run(()=>api.deleteCampaign(campaign.id),'Campaign deleted.');navigate('/app/campaigns')}}>Delete it</Button></div>
     </div></div>}
@@ -445,6 +284,7 @@ export function StaffQueue(){
       <h2>{t('Lists being worked')}</h2>
       {campaigns.map(c=><div className="row between" key={c.id}><span>{c.name}</span><span className="small mono muted">{c.attempted}/{c.total}</span></div>)}
     </div>}
+    <OperatorDial/>
     <div className="card stack">
       <h2>{t('My recent calls')}</h2>
       {recent.length===0
@@ -454,6 +294,37 @@ export function StaffQueue(){
           <tbody>{recent.map(c=><tr key={c.id}><td>{formatDate(c.startedAt)}</td><td className="mono"><Link to={'/app/history/'+c.id}>{c.phoneNumber}</Link></td><td className="mono">{formatDuration(c.durationSeconds)}</td><td>{c.outcome}</td></tr>)}</tbody>
         </table></div>}
     </div>
+  </div>;
+}
+
+/** A person places the call themselves, from one of the company's numbers. */
+export function OperatorDial(){
+  const {store,org,session,run,t}=useApp();
+  const navigate=useNavigate();
+  const numbers=store.channels.filter(c=>c.orgId===org.id&&c.status==='connected'&&!!c.config.operatorEnabled);
+  const [fromId,setFromId]=useState(numbers.find(n=>n.isPrimary)?.id||numbers[0]?.id||'');
+  const [to,setTo]=useState('');
+  if(numbers.length===0)return <div className="card stack">
+    <h2>{t('Call someone yourself')}</h2>
+    <Empty icon={PhoneOutgoing} title="No number is set up for this yet"
+      body="Ask an admin to turn on 'Let your team answer instead' for one of your numbers."/>
+  </div>;
+  const dial=async()=>{
+    const row=await run(()=>api.createOperatorCall(org.id,fromId,to.trim(),session?.userId||''),'Calling now. You are on the line.');
+    if(row)navigate('/app/live');
+  };
+  return <div className="card stack">
+    <div><h2>{t('Call someone yourself')}</h2>
+      <p className="small muted">{t('You speak, not the agent. The call still shows in history and is recorded like any other.')}</p></div>
+    <div className="field-grid">
+      <div className="field"><label>{t('Call from')}</label>
+        <select className="select" value={fromId} onChange={e=>setFromId(e.target.value)}>
+          {numbers.map(c=><option key={c.id} value={c.id}>{c.label} — {c.displayNumber}</option>)}
+        </select>
+        <div className="help">{t('This is the number they will see calling.')}</div></div>
+      <Field label="Number to call" value={to} onChange={setTo} placeholder="+92 300 123 4567"/>
+    </div>
+    <div className="row"><Button disabled={!to.trim()||!fromId} onClick={dial}><PhoneOutgoing size={15}/> Call now</Button></div>
   </div>;
 }
 

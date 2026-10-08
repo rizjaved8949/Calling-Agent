@@ -1,6 +1,8 @@
 import {useState} from 'react';
 import {Check, ChevronDown, Copy, Eye, EyeOff, ServerCog, Trash2} from 'lucide-react';
-import {Badge, Button, Empty, useApp, formatDate} from './app';
+import {Badge,Button,Empty} from './app';
+import {useApp} from './app-context';
+import {formatDate} from './lib/format';
 import {api} from './lib/api';
 import type {ChannelType} from './lib/types';
 

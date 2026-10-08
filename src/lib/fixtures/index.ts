@@ -61,8 +61,8 @@ const channelForCall = (i: number): [string, 'sim'|'whatsapp_call'] => {
   return i % 8 === 0 ? ['ch-wa-alumni', 'whatsapp_call'] : ['ch-wa-main', 'whatsapp_call'];
 };
 const kbForCall = (i: number): [string, string, Call['resolvedBy']] => {
-  if (i % 5 === 0) return ['kb-fees', 'Fees and scholarships', 'rule'];
-  if (i % 7 === 0) return ['kb-campus', 'Hostel and transport', 'rule'];
+  if (i % 5 === 0) return ['kb-fees', 'Fees and scholarships', 'setup'];
+  if (i % 7 === 0) return ['kb-campus', 'Hostel and transport', 'setup'];
   if (i % 11 === 0) return ['kb-admissions', 'Admissions 2026', 'explicit'];
   if (i % 3 === 0) return ['kb-admissions', 'Admissions 2026', 'agent'];
   return ['kb-admissions', 'Admissions 2026', 'company'];
@@ -149,8 +149,8 @@ const guides: Guide[] = guideInfo.map(([slug, title, category, bodyMd]) => ({ sl
 
 export const initialStore: Store = {
   organizations: [
-    { id: orgId, name: 'Northstar University', slug: 'northstar', accentColor: 'oklch(0.58 0.13 245)', plan: 'Growth', countryCode: '+92', defaultLanguage: 'ur', timezone: 'Asia/Karachi', createdAt: date(85), trialEndsAt: date(-7), onboardingStep: 6, status: 'active', provisioningMode: 'managed', strictnessPreset: 'balanced', pacePreset: 'natural', voiceQualityPreset: 'premium', recordCalls: true, recordBothSides: true, retentionDays: 90, endCallsAfterMinutes: 15, businessHoursStart: '09:00', businessHoursEnd: '17:00' },
-    { id: 'org-harbor', name: 'Harbor Health', slug: 'harbor', accentColor: 'oklch(0.56 0.11 165)', plan: 'Starter', countryCode: '+92', defaultLanguage: 'en', timezone: 'Asia/Karachi', createdAt: date(24), trialEndsAt: date(-6), onboardingStep: 2, status: 'setup', provisioningMode: 'managed', strictnessPreset: 'strict', pacePreset: 'patient', voiceQualityPreset: 'standard', recordCalls: false, recordBothSides: false, retentionDays: 30, endCallsAfterMinutes: 10, businessHoursStart: '08:00', businessHoursEnd: '20:00' },
+    { id: orgId, name: 'Northstar University', slug: 'northstar', accentColor: 'oklch(0.58 0.13 245)', plan: 'Growth', countryCode: '+92', defaultLanguage: 'ur', timezone: 'Asia/Karachi', createdAt: date(85), trialEndsAt: date(-7), onboardingStep: 6, status: 'active', provisioningMode: 'managed', strictnessPreset: 'balanced', pacePreset: 'natural', voiceQualityPreset: 'premium', recordCalls: true, recordBothSides: true, retentionDays: 90, driveConnected: true, driveFolderName: 'Northstar call recordings', driveAccount: 'records@northstar.edu', endCallsAfterMinutes: 15, businessHoursStart: '09:00', businessHoursEnd: '17:00' },
+    { id: 'org-harbor', name: 'Harbor Health', slug: 'harbor', accentColor: 'oklch(0.56 0.11 165)', plan: 'Starter', countryCode: '+92', defaultLanguage: 'en', timezone: 'Asia/Karachi', createdAt: date(24), trialEndsAt: date(-6), onboardingStep: 2, status: 'setup', provisioningMode: 'managed', strictnessPreset: 'strict', pacePreset: 'patient', voiceQualityPreset: 'standard', recordCalls: false, recordBothSides: false, retentionDays: 30, driveConnected: false, driveFolderName: 'Call recordings', endCallsAfterMinutes: 10, businessHoursStart: '08:00', businessHoursEnd: '20:00' },
   ],
   profile: { id: 'user-1', fullName: 'Samira Khan', email: 'samira@northstar.edu' },
   profiles: [
@@ -176,28 +176,30 @@ export const initialStore: Store = {
   presets: defaultPresets,
   knowledgeBases, documents, chunks,
   channels: [
-    { id: 'ch-main-line', orgId, type: 'sim', label: 'Main admissions line', isPrimary: true, status: 'connected', displayNumber: '+92 21 555 0142', provider: 'Infobip', lastCheckedAt: date(0.04), config: { maxCallDurationSeconds: 900, callConnectTimeoutSeconds: 30, wrapUpWarningSeconds: 30, hangupGraceSeconds: 10 } },
-    { id: 'ch-fee-line', orgId, type: 'sim', label: 'Fee office line', isPrimary: false, status: 'connected', displayNumber: '+92 21 555 0188', provider: 'Infobip', lastCheckedAt: date(0.2), config: { maxCallDurationSeconds: 900, callConnectTimeoutSeconds: 30 } },
-    { id: 'ch-hostel-line', orgId, type: 'sim', label: 'Hostel and transport', isPrimary: false, status: 'verifying', displayNumber: '+92 21 555 0193', provider: 'Infobip', lastCheckedAt: date(0.5), config: {} },
-    { id: 'ch-wa-main', orgId, type: 'whatsapp_call', label: 'Admissions WhatsApp', isPrimary: true, status: 'connected', displayNumber: '+92 300 555 0129', provider: 'Meta', lastCheckedAt: date(0.1), config: { callingEnabled: true, callingAutoAccept: true, preAcceptCalls: false, mediaRelayEnabled: true, outboundEnabled: true, operatorCallingEnabled: true, recordTwoWay: true, recordAgentAudio: true, mediaSampleRate: 24000 } },
-    { id: 'ch-wa-alumni', orgId, type: 'whatsapp_call', label: 'Alumni WhatsApp', isPrimary: false, status: 'pending', displayNumber: '+92 300 555 0174', provider: 'Meta', lastCheckedAt: date(1.2), config: { callingEnabled: false } },
-    { id: 'ch-wa-msg', orgId, type: 'whatsapp_message', label: 'Admissions messages', isPrimary: true, status: 'error', displayNumber: '+92 300 555 0129', provider: 'Meta', lastCheckedAt: date(0.3), errorCode: 'E-TEMPLATE', errorDetail: 'Template namespace not verified (code 132001).', config: { inboundEnabled: false, topicMaxChars: 180, detailsMaxChars: 600 } },
+    { id: 'ch-main-line', orgId, type: 'sim', label: 'Main admissions line', isPrimary: true, status: 'connected', displayNumber: '+92 21 555 0142', provider: 'Infobip', lastCheckedAt: date(0.04), config: { inboundEnabled: true, outboundEnabled: true, operatorEnabled: true, maxCallDurationSeconds: 900, callConnectTimeoutSeconds: 30, wrapUpWarningSeconds: 30, hangupGraceSeconds: 10 } },
+    { id: 'ch-fee-line', orgId, type: 'sim', label: 'Fee office line', isPrimary: false, status: 'connected', displayNumber: '+92 21 555 0188', provider: 'Infobip', lastCheckedAt: date(0.2), config: { inboundEnabled: true, outboundEnabled: false, operatorEnabled: true, maxCallDurationSeconds: 900, callConnectTimeoutSeconds: 30 } },
+    { id: 'ch-hostel-line', orgId, type: 'sim', label: 'Hostel and transport', isPrimary: false, status: 'verifying', displayNumber: '+92 21 555 0193', provider: 'Infobip', lastCheckedAt: date(0.5), config: { inboundEnabled: true, outboundEnabled: false, operatorEnabled: false } },
+    { id: 'ch-wa-main', orgId, type: 'whatsapp_call', label: 'Admissions WhatsApp', isPrimary: true, status: 'connected', displayNumber: '+92 300 555 0129', provider: 'Meta', lastCheckedAt: date(0.1), config: { inboundEnabled: true, outboundEnabled: true, operatorEnabled: true, callingAutoAccept: true, preAcceptCalls: false, mediaRelayEnabled: true, recordTwoWay: true, recordAgentAudio: true, mediaSampleRate: 24000 } },
+    { id: 'ch-wa-alumni', orgId, type: 'whatsapp_call', label: 'Alumni WhatsApp', isPrimary: false, status: 'pending', displayNumber: '+92 300 555 0174', provider: 'Meta', lastCheckedAt: date(1.2), config: { inboundEnabled: false, outboundEnabled: false, operatorEnabled: false } },
+    { id: 'ch-wa-msg', orgId, type: 'whatsapp_message', label: 'Admissions messages', isPrimary: true, status: 'error', displayNumber: '+92 300 555 0129', provider: 'Meta', lastCheckedAt: date(0.3), errorCode: 'E-TEMPLATE', errorDetail: 'Template namespace not verified (code 132001).', config: { inboundEnabled: false, outboundEnabled: true, operatorEnabled: false, topicMaxChars: 180, detailsMaxChars: 600 } },
     { id: 'ch-harbor-line', orgId: 'org-harbor', type: 'sim', label: 'Main line', isPrimary: true, status: 'pending', provider: 'Infobip', config: {} },
     { id: 'ch-harbor-wa', orgId: 'org-harbor', type: 'whatsapp_call', label: 'Patient WhatsApp', isPrimary: true, status: 'verifying', provider: 'Meta', config: {} },
     { id: 'ch-harbor-msg', orgId: 'org-harbor', type: 'whatsapp_message', label: 'Appointment reminders', isPrimary: true, status: 'disconnected', provider: 'Meta', config: {} },
   ],
   credentials: [{ id: 'cred-1', orgId, channelId: 'ch-main-line', keyName: 'apiKey', lastFour: '7f3a', setBy: 'Platform Operations', setAt: date(9) }],
   calls, transcripts, ragQueries,
-  routingRules: [
-    { id: 'rule-1', orgId, name: 'Fee office line', order: 0, enabled: true, isFallback: false, condition: { kind: 'number', value: 'ch-fee-line' }, outcome: { agentId: 'agent-1', knowledgeBaseIds: ['kb-fees', 'kb-admissions'] }, matchCount30d: 212 },
-    { id: 'rule-2', orgId, name: 'Alumni WhatsApp goes to Nora', order: 1, enabled: true, isFallback: false, condition: { kind: 'number', value: 'ch-wa-alumni' }, outcome: { agentId: 'agent-2', knowledgeBaseIds: ['kb-campus'] }, matchCount30d: 148 },
-    { id: 'rule-3', orgId, name: 'Out of hours to a person', order: 2, enabled: false, isFallback: false, condition: { kind: 'hours', value: 'outside' }, outcome: { assignToUserId: 'user-2' }, matchCount30d: 0 },
-    { id: 'rule-fallback', orgId, name: 'Everything else', order: 99, enabled: true, isFallback: true, condition: { kind: 'channel', value: 'any' }, outcome: { agentId: 'agent-1', knowledgeBaseIds: ['kb-admissions'] }, matchCount30d: 496 },
+  callSetups: [
+    { id: 'setup-in-main', orgId, channelId: 'ch-main-line', direction: 'INBOUND', name: 'Incoming on the main line', agentId: 'agent-1', knowledgeBaseIds: ['kb-admissions', 'kb-fees'], tonePreset: 'natural', strictnessPreset: 'balanced', enabled: true, createdBy: 'Samira Khan', createdAt: date(60), usedLast30d: 212 },
+    { id: 'setup-in-fee', orgId, channelId: 'ch-fee-line', direction: 'INBOUND', name: 'Incoming on the fee office line', agentId: 'agent-3', knowledgeBaseIds: ['kb-fees'], tonePreset: 'natural', strictnessPreset: 'strict', enabled: true, createdBy: 'Samira Khan', createdAt: date(40), usedLast30d: 148 },
+    { id: 'setup-in-wa', orgId, channelId: 'ch-wa-main', direction: 'INBOUND', name: 'Incoming on admissions WhatsApp', agentId: 'agent-1', knowledgeBaseIds: ['kb-admissions'], tonePreset: 'patient', strictnessPreset: 'balanced', enabled: true, createdBy: 'Omar Farooq', createdAt: date(30), usedLast30d: 233 },
+    { id: 'setup-out-merit', orgId, channelId: 'ch-main-line', direction: 'OUTBOUND', name: 'Merit list follow-up', agentId: 'agent-1', knowledgeBaseIds: ['kb-admissions'], tonePreset: 'natural', strictnessPreset: 'balanced', enabled: true, createdBy: 'Samira Khan', createdAt: date(12), usedLast30d: 268 },
+    { id: 'setup-out-fees', orgId, channelId: 'ch-fee-line', direction: 'OUTBOUND', name: 'Scholarship reminders', agentId: 'agent-3', knowledgeBaseIds: ['kb-fees'], tonePreset: 'quick', strictnessPreset: 'strict', enabled: true, createdBy: 'Omar Farooq', createdAt: date(9), usedLast30d: 54 },
+    { id: 'setup-out-openday', orgId, channelId: 'ch-wa-main', direction: 'OUTBOUND', name: 'Open day invitations', agentId: 'agent-1', knowledgeBaseIds: ['kb-admissions', 'kb-campus'], tonePreset: 'natural', strictnessPreset: 'flexible', enabled: false, createdBy: 'Samira Khan', createdAt: date(2), usedLast30d: 0 },
   ],
   campaigns: [
-    { id: 'camp-1', orgId, name: 'Merit list follow-up', agentId: 'agent-1', fromChannelId: 'ch-main-line', knowledgeBaseIds: ['kb-admissions', 'kb-fees'], status: 'running', total: 420, attempted: 268, connected: 173, unanswered: 95, windowStart: '10:00', windowEnd: '18:00', maxAttempts: 3, retryAfterMinutes: 240, createdAt: date(6) },
-    { id: 'camp-2', orgId, name: 'Scholarship reminder', agentId: 'agent-3', fromChannelId: 'ch-fee-line', knowledgeBaseIds: ['kb-fees'], status: 'paused', total: 180, attempted: 54, connected: 31, unanswered: 23, windowStart: '11:00', windowEnd: '17:00', maxAttempts: 2, retryAfterMinutes: 1440, createdAt: date(14) },
-    { id: 'camp-3', orgId, name: 'Open day invites', agentId: 'agent-1', fromChannelId: 'ch-wa-main', knowledgeBaseIds: ['kb-admissions'], status: 'draft', total: 96, attempted: 0, connected: 0, unanswered: 0, windowStart: '09:00', windowEnd: '17:00', maxAttempts: 2, retryAfterMinutes: 720, createdAt: date(1) },
+    { id: 'camp-1', orgId, name: 'Merit list follow-up', setupId: 'setup-out-merit', status: 'running', total: 420, attempted: 268, connected: 173, unanswered: 95, windowStart: '10:00', windowEnd: '18:00', maxAttempts: 3, retryAfterMinutes: 240, createdAt: date(6) },
+    { id: 'camp-2', orgId, name: 'Scholarship reminder', setupId: 'setup-out-fees', status: 'paused', total: 180, attempted: 54, connected: 31, unanswered: 23, windowStart: '11:00', windowEnd: '17:00', maxAttempts: 2, retryAfterMinutes: 1440, createdAt: date(14) },
+    { id: 'camp-3', orgId, name: 'Open day invites', setupId: 'setup-out-openday', status: 'draft', total: 96, attempted: 0, connected: 0, unanswered: 0, windowStart: '09:00', windowEnd: '17:00', maxAttempts: 2, retryAfterMinutes: 720, createdAt: date(1) },
   ],
   campaignContacts: Array.from({ length: 24 }, (_, i) => ({ id: 'cc-' + i, campaignId: i < 16 ? 'camp-1' : 'camp-2', number: calls[i + 40].phoneNumber, name: ['Hamza', 'Fatima', 'Bilal', 'Ayesha'][i % 4] + ' ' + ['Ali', 'Khan', 'Sheikh'][i % 3], attempts: i % 3, lastOutcome: i % 4 === 0 ? 'No answer' : 'Connected', callIds: [] })),
   unanswered,

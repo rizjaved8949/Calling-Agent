@@ -1,4 +1,4 @@
-import React,{createContext,useContext,useEffect,useMemo,useState} from 'react';
+import React,{useEffect,useMemo,useState} from 'react';
 import {BrowserRouter,Link,NavLink,Navigate,Route,Routes,useLocation,useNavigate} from 'react-router-dom';
 import {Activity,BookOpen,BrainCircuit,Building2,ChartNoAxesCombined,ChevronDown,Command,Headphones,History,LayoutDashboard,LifeBuoy,ListChecks,Menu,MessageSquare,Mic2,Moon,PhoneOutgoing,Radio,Route as RouteIcon,ServerCog,Settings,ShieldCheck,Sun,Users,X,Search,LogOut,HelpCircle} from 'lucide-react';
 import {api,subscribe,subscribePending} from './lib/api';
@@ -39,7 +39,7 @@ const CallDetail=lazySetup(m=>m.CallDetail);
 const loadExtra=()=>import('./pages-extra');
 const lazyExtra=(pick:(m:Awaited<ReturnType<typeof loadExtra>>)=>React.ComponentType<Record<string,never>>)=>React.lazy(()=>loadExtra().then(m=>({default:pick(m)})));
 const KnowledgeDetail=lazyExtra(m=>m.KnowledgeDetail);
-const Routing=lazyExtra(m=>m.Routing);
+const CallSetups=React.lazy(()=>import('./call-setups').then(m=>({default:m.CallSetups})));
 const Campaigns=lazyExtra(m=>m.Campaigns);
 const CampaignDetail=lazyExtra(m=>m.CampaignDetail);
 const Unanswered=lazyExtra(m=>m.Unanswered);
@@ -61,10 +61,7 @@ const PlatformAuditPage=lazyPlatform(m=>m.PlatformAuditPage);
 import {HomePage,ProductPage,SolutionsPage,PricingPage,AboutPage,ResourcesPage,ContactPage} from './marketing';
 import {HistoryNavigationProvider} from './history-navigation';
 
-type AppContextType={store:Store;session:Session|null;setSession:(s:Session|null)=>void;org:Organization;setOrg:(id:string)=>void;theme:'light'|'dark';setTheme:(v:'light'|'dark')=>void;t:(text:string)=>string;toast:(text:string)=>void;run:<T,>(action:()=>Promise<T>,success?:string)=>Promise<T|undefined>;readiness:Record<string,boolean>;connection:'live'|'reconnecting'|'offline';setConnection:(v:'live'|'reconnecting'|'offline')=>void;role:Role;isPlatform:boolean;canManage:boolean;readOnly:boolean};
-const Ctx=createContext<AppContextType|null>(null);
-export const useApp=()=>{const c=useContext(Ctx);if(!c)throw new Error('App context unavailable');return c};
-export const useOrgReadiness=()=>useApp().readiness;
+import {AppCtx,useApp} from './app-context';
 
 function Provider({children}:{children:React.ReactNode}){
   const [store,setStore]=useState<Store>(()=>api.snapshot());
@@ -139,10 +136,10 @@ function Provider({children}:{children:React.ReactNode}){
       operatorCallingReady:wa?.status==='connected'&&!!wa.config.operatorCallingEnabled,
       personaReady:agents.some(x=>{const p=store.personas.find(p=>p.id===x.personaId);return !!p?.greeting&&!!p.roleDescription}),
       agentLive:agents.some(x=>x.status==='live'),
-      routingReady:store.routingRules.some(x=>x.orgId===org.id&&x.enabled),
+      routingReady:store.callSetups.some(x=>x.orgId===org.id&&x.enabled),
     };
   },[store,org.id]);
-  return <Ctx.Provider value={{store,session:sessionState,setSession,org,setOrg,theme,setTheme,t,toast,run,readiness,connection,setConnection,role,isPlatform,canManage,readOnly}}>{pending>0&&<div className="progress-line"/>}{children}<div className="toast-wrap" aria-live="polite">{toasts.map(x=><div className="toast" key={x.id}>{x.text}<button aria-label="Dismiss" onClick={()=>setToasts(old=>old.filter(y=>y.id!==x.id))}><X size={16}/></button></div>)}</div></Ctx.Provider>;
+  return <AppCtx.Provider value={{store,session:sessionState,setSession,org,setOrg,theme,setTheme,t,toast,run,readiness,connection,setConnection,role,isPlatform,canManage,readOnly}}>{pending>0&&<div className="progress-line"/>}{children}<div className="toast-wrap" aria-live="polite">{toasts.map(x=><div className="toast" key={x.id}>{x.text}<button aria-label="Dismiss" onClick={()=>setToasts(old=>old.filter(y=>y.id!==x.id))}><X size={16}/></button></div>)}</div></AppCtx.Provider>;
 }
 
 export function Button({children,onClick,to,variant='',small=false,disabled=false,title,type='button'}:{children:React.ReactNode;onClick?:()=>void;to?:string;variant?:string;small?:boolean;disabled?:boolean;title?:string;type?:'button'|'submit'}){
@@ -175,17 +172,16 @@ export function PresetPicker({options,value,onChange,disabled}:{options:{id:stri
       <em>{opt.consequence}</em>
     </button>)}</div>;
 }
-export function formatDate(value?:string){return value?new Date(value).toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'—'}
-export function formatDuration(seconds:number){return Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0')}
+
 
 type NavGroup=[string,[React.ComponentType<{size?:number}>,string,string][]][];
 const ADMIN_NAV:NavGroup=[
-  ['Workspace',[[LayoutDashboard,'Dashboard','/app/dashboard'],[Mic2,'Agents','/app/agents'],[BrainCircuit,'Knowledge','/app/knowledge'],[RouteIcon,'Routing','/app/routing'],[Radio,'Numbers','/app/channels']]],
+  ['Workspace',[[LayoutDashboard,'Dashboard','/app/dashboard'],[Mic2,'Agents','/app/agents'],[BrainCircuit,'Knowledge','/app/knowledge'],[RouteIcon,'Call setups','/app/setups'],[Radio,'Numbers','/app/channels']]],
   ['Operations',[[Activity,'Live','/app/live'],[PhoneOutgoing,'Campaigns','/app/campaigns'],[History,'History','/app/history'],[MessageSquare,'Messages','/app/messages'],[ListChecks,'Unanswered','/app/unanswered']]],
   ['Manage',[[BookOpen,'Guides','/app/guides'],[Users,'Team','/app/team'],[ChartNoAxesCombined,'Usage','/app/usage'],[Settings,'Settings','/app/settings']]],
 ];
 const STAFF_NAV:NavGroup=[
-  ['My work',[[Headphones,'My queue','/app/queue'],[Activity,'Live','/app/live'],[History,'My calls','/app/history']]],
+  ['My work',[[Headphones,'My queue','/app/queue'],[Activity,'Live','/app/live'],[RouteIcon,'Call setups','/app/setups'],[History,'My calls','/app/history']]],
   ['Help me',[[Search,'Customer lookup','/app/lookup'],[HelpCircle,'Ask the documents','/app/ask'],[BookOpen,'Guides','/app/guides']]],
 ];
 const PLATFORM_NAV:NavGroup=[
@@ -272,7 +268,7 @@ function AppRoutes(){
     <Route path="/app/agents/:id" element={<Protected manage><AgentDetail/></Protected>}/>
     <Route path="/app/knowledge" element={<Protected manage><Knowledge/></Protected>}/>
     <Route path="/app/knowledge/:kbId" element={<Protected manage><KnowledgeDetail/></Protected>}/>
-    <Route path="/app/routing" element={<Protected manage><Routing/></Protected>}/>
+    <Route path="/app/setups" element={<Protected><CallSetups/></Protected>}/>
     <Route path="/app/campaigns" element={<Protected manage><Campaigns/></Protected>}/>
     <Route path="/app/campaigns/:id" element={<Protected manage><CampaignDetail/></Protected>}/>
     <Route path="/app/unanswered" element={<Protected manage><Unanswered/></Protected>}/>

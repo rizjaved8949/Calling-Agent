@@ -1,5 +1,5 @@
 import { initialStore } from '../fixtures';
-import type { Store, Organization, Agent, Persona, Voice, KnowledgeBase, KbDocument, Channel, Call, Message, Invitation, Role, WebhookEndpoint, Guide, RoutingRule, Campaign, ChannelType, ProvisioningTask, Preset, KnowledgeResolution } from '../types';
+import type { Store, Organization, Agent, Persona, Voice, KnowledgeBase, KbDocument, Channel, Call, Message, Invitation, Role, WebhookEndpoint, Guide, CallSetup, Campaign, ChannelType, ProvisioningTask, Preset, KnowledgeResolution } from '../types';
 
 export const USE_MOCK = true;
 let store: Store = structuredClone(initialStore);
@@ -30,20 +30,16 @@ const logPlatform = (action:string, detail:string, orgId?:string) => {
 };
 
 /**
- * Resolve which knowledge base a call should use. First match wins:
- * an explicit choice, then a routing rule, then the agent's default, then the
- * company default. The reason is recorded so call detail can explain itself.
+ * Which knowledge a call uses. There is now one answer, not three: the call
+ * setup for that number and direction. The agent and company defaults remain
+ * only as a safety net for a number with no setup yet.
  */
-function resolveKnowledge(orgId:string, agentId:string, explicitKbId?:string, channelId?:string, toNumber?:string):{kbId:string;kbName:string;resolvedBy:KnowledgeResolution} {
+function resolveKnowledge(orgId:string, agentId:string, setupId?:string, channelId?:string):{kbId:string;kbName:string;resolvedBy:KnowledgeResolution} {
   const named = (kbId:string, resolvedBy:KnowledgeResolution) => ({kbId,kbName:store.knowledgeBases.find(x=>x.id===kbId)?.name||'Default',resolvedBy});
-  if (explicitKbId) return named(explicitKbId,'explicit');
-  const rules = store.routingRules.filter(x=>x.orgId===orgId&&x.enabled&&!x.isFallback).sort((a,b)=>a.order-b.order);
-  for (const rule of rules) {
-    const c = rule.condition;
-      const channelType=store.channels.find(x=>x.id===channelId)?.type;
-      const hit = (c.kind==='number'&&channelId===c.value) || (c.kind==='channel'&&channelType===c.value) || (c.kind==='prefix'&&!!toNumber&&toNumber.startsWith(c.value));
-    if (hit && rule.outcome.knowledgeBaseIds?.length) return named(rule.outcome.knowledgeBaseIds[0],'rule');
-  }
+  const setup = setupId
+    ? store.callSetups.find(x=>x.id===setupId)
+    : store.callSetups.find(x=>x.orgId===orgId&&x.channelId===channelId&&x.direction==='INBOUND'&&x.enabled);
+  if (setup?.knowledgeBaseIds.length) return named(setup.knowledgeBaseIds[0], setupId?'explicit':'setup');
   const agent = store.agents.find(x=>x.id===agentId);
   if (agent?.defaultKnowledgeBaseId) return named(agent.defaultKnowledgeBaseId,'agent');
   const fallback = store.knowledgeBases.find(x=>x.orgId===orgId&&x.isDefault)||store.knowledgeBases.find(x=>x.orgId===orgId);
@@ -81,7 +77,7 @@ export const api = {
     store.agents=store.agents.filter(x=>x.id!==agentId);
     store.personas=store.personas.filter(x=>x.id!==row.personaId);
     store.voices=store.voices.filter(x=>x.id!==row.voiceId);
-    store.routingRules.filter(r=>r.orgId===row.orgId).forEach(r=>{ if(r.outcome.agentId===agentId) r.outcome.agentId=undefined; });
+    store.callSetups=store.callSetups.filter(r=>r.agentId!==agentId);
     logAudit(row.orgId,'Deleted the agent '+row.name,'Agent',agentId); return true; }),
   getPersona: (id:string) => mock(()=>store.personas.find(x=>x.id===id)),
   updatePersona: (id:string,patch:Partial<Persona>) => update(()=> { const row=store.personas.find(x=>x.id===id)!; Object.assign(row,patch); return row; }),
@@ -105,7 +101,7 @@ export const api = {
     const row=store.knowledgeBases.find(x=>x.id===kbId); if(!row) return false;
     const fallback=store.knowledgeBases.find(x=>x.orgId===row.orgId&&x.id!==kbId&&x.isDefault)||store.knowledgeBases.find(x=>x.orgId===row.orgId&&x.id!==kbId);
     store.agents.filter(a=>a.orgId===row.orgId).forEach(a=>{ if(a.defaultKnowledgeBaseId===kbId)a.defaultKnowledgeBaseId=fallback?.id||''; a.knowledgeBaseIds=a.knowledgeBaseIds.filter(x=>x!==kbId); });
-    store.routingRules.filter(r=>r.orgId===row.orgId).forEach(r=>{ if(r.outcome.knowledgeBaseIds) r.outcome.knowledgeBaseIds=r.outcome.knowledgeBaseIds.filter(x=>x!==kbId); });
+    store.callSetups.filter(r=>r.orgId===row.orgId).forEach(r=>{ r.knowledgeBaseIds=r.knowledgeBaseIds.filter(x=>x!==kbId); });
     store.knowledgeBases=store.knowledgeBases.filter(x=>x.id!==kbId);
     store.documents=store.documents.filter(x=>x.kbId!==kbId);
     store.chunks=store.chunks.filter(x=>x.kbId!==kbId);
@@ -113,8 +109,8 @@ export const api = {
   /** Which agents and rules depend on a base, so deletion can warn properly. */
   knowledgeUsage: (kbId:string) => mock(()=>({
     agents: store.agents.filter(a=>a.defaultKnowledgeBaseId===kbId||a.knowledgeBaseIds.includes(kbId)).map(a=>a.name),
-    rules: store.routingRules.filter(r=>r.outcome.knowledgeBaseIds?.includes(kbId)).map(r=>r.name),
-    campaigns: store.campaigns.filter(c=>c.knowledgeBaseIds.includes(kbId)).map(c=>c.name),
+    rules: store.callSetups.filter(r=>r.knowledgeBaseIds.includes(kbId)).map(r=>r.name),
+    campaigns: store.campaigns.filter(c=>{const sp=store.callSetups.find(x=>x.id===c.setupId);return !!sp&&sp.knowledgeBaseIds.includes(kbId)}).map(c=>c.name),
   })),
   getDocuments: (kbId:string) => mock(()=>store.documents.filter(x=>x.kbId===kbId)),
   uploadDocuments: (kbId:string,files:{name:string;size:number;type:string}[]) => update(()=> {
@@ -127,26 +123,26 @@ export const api = {
   reindex: (kbId:string) => update(()=> { const kb=store.knowledgeBases.find(x=>x.id===kbId)!; kb.status='indexing'; setTimeout(()=>{kb.status='ready';kb.lastIndexedAt=new Date().toISOString();notify();},2000); return kb; }),
   searchKnowledge: (kbId:string,query:string) => mock(()=> { const words=query.toLowerCase().split(/\W+/).filter(Boolean); return store.chunks.filter(x=>x.kbId===kbId).map((x,i)=>({...x,score:Math.min(0.96,Math.max(0.44,x.score+(words.some(w=>x.section.toLowerCase().includes(w)||x.preview.toLowerCase().includes(w))?0.09:-0.16)-(i%3)*0.015))})).sort((a,b)=>b.score-a.score).slice(0,8); }),
 
-  // ---- Routing ------------------------------------------------------------
-  getRoutingRules: (orgId:string) => mock(()=>store.routingRules.filter(x=>x.orgId===orgId).sort((a,b)=>a.order-b.order)),
-  saveRoutingRule: (rule:RoutingRule) => update(()=> { const existing=store.routingRules.find(x=>x.id===rule.id); if(existing)Object.assign(existing,rule); else store.routingRules.push(rule); logAudit(rule.orgId,'Saved the routing rule '+rule.name,'RoutingRule',rule.id); return rule; }),
-  deleteRoutingRule: (ruleId:string) => update(()=> { store.routingRules=store.routingRules.filter(x=>x.id!==ruleId||x.isFallback); return true; }),
-  reorderRoutingRules: (orgId:string,orderedIds:string[]) => update(()=> { orderedIds.forEach((rid,i)=>{const row=store.routingRules.find(x=>x.id===rid); if(row&&!row.isFallback)row.order=i;}); return store.routingRules.filter(x=>x.orgId===orgId).sort((a,b)=>a.order-b.order); }),
-  /** Dry run: which rule would win, and which material the call would use. */
-  testRoute: (orgId:string,channelId:string,callerNumber:string,outsideHours:boolean) => mock(()=> {
-    const channelType=store.channels.find(x=>x.id===channelId)?.type;
-    const rules=store.routingRules.filter(x=>x.orgId===orgId&&x.enabled).sort((a,b)=>a.order-b.order);
-    for (const rule of rules) {
-      const c=rule.condition;
-      const hit = rule.isFallback || (c.kind==='number'&&channelId===c.value) || (c.kind==='channel'&&channelType===c.value) || (c.kind==='prefix'&&callerNumber.startsWith(c.value)) || (c.kind==='hours'&&((c.value==='outside')===outsideHours));
-      if (hit) {
-        const kbIds=rule.outcome.knowledgeBaseIds||[];
-        return { rule, knowledgeBaseNames: kbIds.map(k=>store.knowledgeBases.find(x=>x.id===k)?.name||'Unknown'),
-          agentName: store.agents.find(a=>a.id===rule.outcome.agentId)?.name,
-          assignedTo: store.profiles.find(p=>p.id===rule.outcome.assignToUserId)?.fullName };
-      }
+  // ---- Call setups --------------------------------------------------------
+  getCallSetups: (orgId:string) => mock(()=>store.callSetups.filter(x=>x.orgId===orgId)),
+  getCallSetup: (setupId:string) => mock(()=>store.callSetups.find(x=>x.id===setupId)),
+  /** A number may hold one incoming setup, and any number of outgoing ones. */
+  saveCallSetup: (setup:CallSetup) => update(()=> {
+    if (setup.direction==='INBOUND') {
+      const clash=store.callSetups.find(x=>x.channelId===setup.channelId&&x.direction==='INBOUND'&&x.id!==setup.id);
+      if (clash) throw new Error('This number already has an incoming setup. Edit that one instead.');
     }
-    return null; }),
+    const existing=store.callSetups.find(x=>x.id===setup.id);
+    if (existing) Object.assign(existing,setup); else store.callSetups.push(setup);
+    logAudit(setup.orgId,'Saved the call setup '+setup.name,'CallSetup',setup.id);
+    return setup; }),
+  deleteCallSetup: (setupId:string) => update(()=> {
+    const row=store.callSetups.find(x=>x.id===setupId); if(!row) return false;
+    store.callSetups=store.callSetups.filter(x=>x.id!==setupId);
+    store.campaigns=store.campaigns.filter(c=>c.setupId!==setupId);
+    logAudit(row.orgId,'Deleted the call setup '+row.name,'CallSetup',setupId); return true; }),
+  /** Whether a number can still take an incoming setup. */
+  canAddInbound: (channelId:string) => mock(()=>!store.callSetups.some(x=>x.channelId===channelId&&x.direction==='INBOUND')),
 
   // ---- Channels -----------------------------------------------------------
   getChannels: (orgId:string) => mock(()=>store.channels.filter(x=>x.orgId===orgId)),
@@ -160,6 +156,10 @@ export const api = {
     logAudit(orgId,'Requested another number: '+label,'Channel',row.id);
     return row; }),
   renameChannel: (channelId:string,label:string) => update(()=> { const row=store.channels.find(x=>x.id===channelId)!; row.label=label; return row; }),
+  /** The three things a company decides about a number. */
+  setChannelCapability: (channelId:string,key:'inboundEnabled'|'outboundEnabled'|'operatorEnabled',on:boolean) => update(()=> {
+    const row=store.channels.find(x=>x.id===channelId)!; row.config={...row.config,[key]:on};
+    logAudit(row.orgId,(on?'Enabled ':'Disabled ')+key.replace('Enabled','')+' on '+row.label,'Channel',channelId); return row; }),
   setPrimaryChannel: (orgId:string,channelId:string) => update(()=> {
     const target=store.channels.find(x=>x.id===channelId)!;
     store.channels.filter(c=>c.orgId===orgId&&c.type===target.type).forEach(c=>{c.isPrimary=c.id===channelId});
@@ -167,15 +167,15 @@ export const api = {
   removeChannel: (channelId:string) => update(()=> {
     const row=store.channels.find(x=>x.id===channelId); if(!row) return false;
     store.agents.filter(a=>a.orgId===row.orgId).forEach(a=>{a.channelIds=a.channelIds.filter(x=>x!==channelId)});
-    store.routingRules=store.routingRules.filter(r=>r.isFallback||!(r.condition.kind==='number'&&r.condition.value===channelId));
+    store.callSetups=store.callSetups.filter(r=>r.channelId!==channelId);
     store.channels=store.channels.filter(x=>x.id!==channelId);
     store.provisioning=store.provisioning.filter(x=>x.channelId!==channelId);
     logAudit(row.orgId,'Removed the number '+row.label,'Channel',channelId); return true; }),
   /** Which agents, rules and campaigns depend on a number. */
   channelUsage: (channelId:string) => mock(()=>({
     agents: store.agents.filter(a=>a.channelIds.includes(channelId)).map(a=>a.name),
-    rules: store.routingRules.filter(r=>r.condition.kind==='number'&&r.condition.value===channelId).map(r=>r.name),
-    campaigns: store.campaigns.filter(c=>c.fromChannelId===channelId).map(c=>c.name),
+    rules: store.callSetups.filter(r=>r.channelId===channelId).map(r=>r.name),
+    campaigns: store.campaigns.filter(c=>{const sp=store.callSetups.find(x=>x.id===c.setupId);return sp?.channelId===channelId}).map(c=>c.name),
   })),
   getCredentials: (channelId:string) => mock(()=>store.credentials.filter(x=>x.channelId===channelId)),
   deleteCredential: (credId:string) => update(()=> {
@@ -199,7 +199,7 @@ export const api = {
   createTestCall: (orgId:string,agentId:string,phoneNumber:string,knowledgeBaseId?:string,fromChannelId?:string) => update(()=> {
     const agent=store.agents.find(a=>a.id===agentId);
     const channel=store.channels.find(c=>c.id===(fromChannelId||agent?.channelIds[0]))||store.channels.find(c=>c.orgId===orgId&&c.isPrimary)||store.channels.find(c=>c.orgId===orgId)!;
-    const resolved=resolveKnowledge(orgId,agentId,knowledgeBaseId,channel.id,phoneNumber);
+    const resolved=resolveKnowledge(orgId,agentId,knowledgeBaseId,channel.id);
     const row:Call={id:'call-'+id(),orgId,agentId,channelId:channel.id,channelType:channel.type,direction:'OUTBOUND',phoneNumber,fromNumber:channel.displayNumber||'',toNumber:phoneNumber,status:'active',mode:'agent',startedAt:new Date().toISOString(),durationSeconds:0,outcome:'Test call',summary:'Test call in progress.',recordingState:'RECORDING',recordingScope:'two_way',knowledgeBaseId:resolved.kbId,knowledgeBaseName:resolved.kbName,resolvedBy:resolved.resolvedBy};
     store.calls.unshift(row);
     setTimeout(()=>{row.status='completed';row.endedAt=new Date().toISOString();row.durationSeconds=18;row.recordingState='PENDING';row.summary='The test call completed. It went out from '+(channel.label||'your number')+' and the agent answered from '+resolved.kbName+'.';notify();},6500);
@@ -210,7 +210,7 @@ export const api = {
   getCampaign: (campaignId:string) => mock(()=>store.campaigns.find(x=>x.id===campaignId)),
   getCampaignContacts: (campaignId:string) => mock(()=>store.campaignContacts.filter(x=>x.campaignId===campaignId)),
   createCampaign: (orgId:string,patch:Partial<Campaign>) => update(()=> {
-    const row:Campaign={id:'camp-'+id(),orgId,name:patch.name||'Untitled campaign',agentId:patch.agentId||store.agents.find(a=>a.orgId===orgId)?.id||'',fromChannelId:patch.fromChannelId||store.channels.find(c=>c.orgId===orgId&&c.isPrimary)?.id||'',knowledgeBaseIds:patch.knowledgeBaseIds||[],status:'draft',total:patch.total||0,attempted:0,connected:0,unanswered:0,windowStart:patch.windowStart||'09:00',windowEnd:patch.windowEnd||'17:00',maxAttempts:patch.maxAttempts||2,retryAfterMinutes:patch.retryAfterMinutes||240,createdAt:new Date().toISOString()};
+    const row:Campaign={id:'camp-'+id(),orgId,name:patch.name||'Untitled campaign',setupId:patch.setupId||store.callSetups.find(x=>x.orgId===orgId&&x.direction==='OUTBOUND')?.id||'',status:'draft',total:patch.total||0,attempted:0,connected:0,unanswered:0,windowStart:patch.windowStart||'09:00',windowEnd:patch.windowEnd||'17:00',maxAttempts:patch.maxAttempts||2,retryAfterMinutes:patch.retryAfterMinutes||240,createdAt:new Date().toISOString()};
     store.campaigns.unshift(row); logAudit(orgId,'Created the campaign '+row.name,'Campaign',row.id); return row; }),
   updateCampaign: (campaignId:string,patch:Partial<Campaign>) => update(()=> { const row=store.campaigns.find(x=>x.id===campaignId)!; Object.assign(row,patch); return row; }),
   deleteCampaign: (campaignId:string) => update(()=> {
@@ -230,6 +230,22 @@ export const api = {
   getTemplates: (orgId:string) => mock(()=>store.templates.filter(x=>x.orgId===orgId)),
 
   // ---- Billing and admin --------------------------------------------------
+  /** Recordings are copied to the company's own Drive folder. */
+  connectDrive: (orgId:string,account:string,folderName:string) => update(()=> {
+    const row=store.organizations.find(x=>x.id===orgId)!;
+    Object.assign(row,{driveConnected:true,driveAccount:account,driveFolderName:folderName});
+    logAudit(orgId,'Connected Google Drive for recordings','Organization',orgId); return row; }),
+  disconnectDrive: (orgId:string) => update(()=> {
+    const row=store.organizations.find(x=>x.id===orgId)!;
+    Object.assign(row,{driveConnected:false,driveAccount:undefined});
+    logAudit(orgId,'Disconnected Google Drive','Organization',orgId); return row; }),
+  /** A person places the call themselves, from one of the company's numbers. */
+  createOperatorCall: (orgId:string,channelId:string,phoneNumber:string,userId:string) => update(()=> {
+    const channel=store.channels.find(c=>c.id===channelId)!;
+    const row:Call={id:'call-'+id(),orgId,agentId:'',channelId,channelType:channel.type,direction:'OUTBOUND',phoneNumber,fromNumber:channel.displayNumber||'',toNumber:phoneNumber,status:'active',mode:'operator',startedAt:new Date().toISOString(),durationSeconds:0,outcome:'In progress',summary:'A person is on this call.',recordingState:'RECORDING',recordingScope:'two_way',knowledgeBaseId:'',knowledgeBaseName:'Not used \u2014 a person handled this',resolvedBy:'explicit',assignedToUserId:userId};
+    store.calls.unshift(row);
+    logAudit(orgId,'Placed a call from '+channel.label,'Call',row.id);
+    return row; }),
   getUsage: (orgId:string) => mock(()=>store.usage.filter(x=>x.orgId===orgId)),
   getPlans: () => mock(()=>store.plans),
   changePlan: (orgId:string,plan:string) => update(()=> {const row=store.organizations.find(x=>x.id===orgId)!;row.plan=plan;return row;}),
@@ -252,7 +268,7 @@ export const api = {
       openIssues: failing+blocked };
   })),
   createCompany: (name:string,countryCode:string) => update(()=> {
-    const org:Organization={id:'org-'+id(),name,slug:name.toLowerCase().replace(/\W+/g,'-'),accentColor:'oklch(0.58 0.13 245)',plan:'Starter',countryCode,defaultLanguage:'ur',timezone:'Asia/Karachi',createdAt:new Date().toISOString(),trialEndsAt:new Date(Date.now()+14*86400000).toISOString(),onboardingStep:0,status:'setup',provisioningMode:'managed',strictnessPreset:'balanced',pacePreset:'natural',voiceQualityPreset:'standard',recordCalls:false,recordBothSides:false,retentionDays:30,endCallsAfterMinutes:15,businessHoursStart:'09:00',businessHoursEnd:'17:00'};
+    const org:Organization={id:'org-'+id(),name,slug:name.toLowerCase().replace(/\W+/g,'-'),accentColor:'oklch(0.58 0.13 245)',plan:'Starter',countryCode,defaultLanguage:'ur',timezone:'Asia/Karachi',createdAt:new Date().toISOString(),trialEndsAt:new Date(Date.now()+14*86400000).toISOString(),onboardingStep:0,status:'setup',provisioningMode:'managed',strictnessPreset:'balanced',pacePreset:'natural',voiceQualityPreset:'standard',recordCalls:false,recordBothSides:false,retentionDays:30,driveConnected:false,driveFolderName:'Call recordings',endCallsAfterMinutes:15,businessHoursStart:'09:00',businessHoursEnd:'17:00'};
     store.organizations.push(org); store.settings[org.id]={};
     logPlatform('Created company',name,org.id); return org; }),
   setCompanyStatus: (orgId:string,status:Organization['status']) => update(()=> { const row=store.organizations.find(x=>x.id===orgId)!; row.status=status; logPlatform('Set company status',row.name+' is now '+status,orgId); return row; }),
@@ -294,7 +310,7 @@ export const api = {
     store.channels=store.channels.filter(x=>x.orgId!==orgId);
     store.credentials=store.credentials.filter(x=>x.orgId!==orgId);
     store.calls=store.calls.filter(x=>x.orgId!==orgId);
-    store.routingRules=store.routingRules.filter(x=>x.orgId!==orgId);
+    store.callSetups=store.callSetups.filter(x=>x.orgId!==orgId);
     store.campaigns=store.campaigns.filter(x=>x.orgId!==orgId);
     store.unanswered=store.unanswered.filter(x=>x.orgId!==orgId);
     store.messages=store.messages.filter(x=>x.orgId!==orgId);
