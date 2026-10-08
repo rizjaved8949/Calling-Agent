@@ -16,3 +16,10 @@ openpyxl==3.1.5
 
 # Multipart bodies on the recording upload endpoint.
 python-multipart==0.0.20
+
+# The voice agent. Gemini Live has no SIP endpoint, so call audio is carried
+# over a websocket by this SDK rather than dialled directly by the carrier.
+google-genai==1.68.0
+
+# Resampling between the model's 24 kHz output and the 16 kHz a line carries.
+numpy==2.2.1

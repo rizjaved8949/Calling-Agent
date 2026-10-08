@@ -553,3 +553,82 @@ def test_the_backup_pointer_outlives_the_move_to_drive():
     call.recording_path = "gd://drive-file-id"
     aliases = _legacy_aliases(call)
     assert aliases["recordingObject"] == "674871172379324/wacid.IhggMDBGMUEzNEEz"
+
+
+# ---------------------------------------------------------------------------
+# Resampling between the model and the line
+# ---------------------------------------------------------------------------
+#
+# Gemini speaks at 24 kHz; a phone line carries 16 kHz. Getting this wrong does
+# not fail loudly — it shifts pitch, or clicks on every frame boundary, which
+# only a human listening notices.
+
+
+def _tone(seconds: float, rate: int, hz: float = 440.0) -> bytes:
+    import math as _m
+    import struct as _s
+
+    n = int(seconds * rate)
+    return _s.pack(
+        f"<{n}h", *[int(12000 * _m.sin(2 * _m.pi * hz * i / rate)) for i in range(n)]
+    )
+
+
+def test_24k_becomes_16k_at_the_right_length():
+    from app.services.agent.audio_rate import gemini_to_phone
+
+    out = gemini_to_phone().process(_tone(1.0, 24_000))
+    # 2:3 of one second at 24 kHz is one second at 16 kHz, within a few samples
+    # of filter delay.
+    assert abs(len(out) // 2 - 16_000) < 200
+
+
+def test_frames_joined_across_calls_do_not_click():
+    """State must carry over: a filter reset per frame is an audible edge."""
+    import numpy as np
+
+    from app.services.agent.audio_rate import gemini_to_phone
+
+    source = _tone(0.5, 24_000)
+    chunk = 960 * 2  # 20 ms at 24 kHz
+
+    converter = gemini_to_phone()
+    streamed = b"".join(
+        converter.process(source[i : i + chunk]) for i in range(0, len(source), chunk)
+    )
+    whole = gemini_to_phone().process(source)
+
+    a = np.frombuffer(streamed, dtype=np.int16).astype(float)
+    b = np.frombuffer(whole, dtype=np.int16).astype(float)
+    size = min(len(a), len(b))
+    assert size > 1000
+    # The same signal either way: streaming must not change the result.
+    error = np.abs(a[:size] - b[:size]).max()
+    assert error < 400, f"streaming differs from one-shot by {error}"
+
+
+def test_the_tone_survives_at_the_right_pitch():
+    """A phase bug shifts pitch, which no length check would catch."""
+    import numpy as np
+
+    from app.services.agent.audio_rate import gemini_to_phone
+
+    out = gemini_to_phone().process(_tone(0.5, 24_000, hz=440.0))
+    samples = np.frombuffer(out, dtype=np.int16).astype(float)
+    spectrum = np.abs(np.fft.rfft(samples * np.hanning(len(samples))))
+    peak_hz = np.fft.rfftfreq(len(samples), 1 / 16_000)[int(np.argmax(spectrum))]
+    assert abs(peak_hz - 440.0) < 15, f"pitch moved to {peak_hz:.0f} Hz"
+
+
+def test_empty_input_is_not_an_error():
+    from app.services.agent.audio_rate import gemini_to_phone
+
+    assert gemini_to_phone().process(b"") == b""
+
+
+def test_a_phone_frame_is_twenty_milliseconds():
+    from app.services.agent.audio_rate import FRAME_BYTES, PHONE_RATE, SILENT_FRAME
+
+    assert FRAME_BYTES == 640
+    assert FRAME_BYTES / 2 / PHONE_RATE == 0.02
+    assert len(SILENT_FRAME) == FRAME_BYTES
