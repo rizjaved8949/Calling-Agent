@@ -14,6 +14,7 @@ forge another's traffic.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -33,9 +34,11 @@ from ...models.call import (
 )
 from ...models.tenant import Tenant
 from ...repositories import calls as call_repo
+from ...repositories import knowledge
 from ...repositories import tenants as tenant_repo
 from ...services import reports
-from ...services.whatsapp import mask, signature_ok
+from ...services.agent import reply
+from ...services.whatsapp import WhatsApp, mask, signature_ok
 
 log = logging.getLogger(__name__)
 
@@ -179,6 +182,13 @@ async def _on_messages(tenant: Tenant, value: dict[str, Any]) -> None:
             kind, mask(message.counterparty), tenant.phone_number_id,
         )
 
+        # Answered in the background on purpose. Meta expects a 200 within
+        # seconds and retries anything slower, so composing a reply inline
+        # means the same question answered two or three times while the model
+        # is still thinking.
+        if tenant.auto_reply and body and kind in {"text", "button", "interactive"}:
+            asyncio.create_task(_auto_reply(tenant, message))
+
     # Delivery receipts for messages we sent.
     for raw in value.get("statuses") or []:
         provider_id = str(raw.get("id") or "")
@@ -193,6 +203,48 @@ async def _on_messages(tenant: Tenant, value: dict[str, Any]) -> None:
             # Meta's own sentence; far more use than "failed".
             existing.error = str(errors[0].get("title") or errors[0].get("message") or "")[:300]
         await call_repo.save_message(existing)
+
+
+async def _auto_reply(tenant: Tenant, incoming: Message) -> None:
+    """Compose an answer and send it. Never raises — this is a loose task.
+
+    An exception here would be an unretrieved exception on a background task
+    and nothing else: the webhook has already answered Meta, and the person is
+    simply left without a reply. So every failure is logged and swallowed.
+    """
+    try:
+        context = await knowledge.context_for(tenant.phone_number_id)
+        history = await _recent_exchange(tenant.phone_number_id, incoming.counterparty)
+        answer = await reply.compose(tenant, incoming.body, context, history)
+        if not answer:
+            log.info("tenant %s: nothing to say to %s",
+                     tenant.phone_number_id, mask(incoming.counterparty))
+            return
+        # A free-text reply is legal because their message just opened the
+        # 24-hour window; outside it this would be accepted and never
+        # delivered, which is why nothing else here sends plain text.
+        sent = await WhatsApp(tenant).send_text(incoming.counterparty, answer)
+        log.info("tenant %s: replied to %s (%d chars, id %s)",
+                 tenant.phone_number_id, mask(incoming.counterparty),
+                 len(answer), sent.provider_message_id[:24])
+    except Exception:  # noqa: BLE001
+        log.exception("tenant %s: auto-reply failed", tenant.phone_number_id)
+
+
+async def _recent_exchange(tenant_id: str, counterparty: str) -> list[tuple[str, str]]:
+    """The last few turns with this person, oldest first.
+
+    Without it every message is answered as a first contact: ask "and the
+    evening one?" after a question about opening hours and the agent has no
+    idea what "one" refers to.
+    """
+    rows = await call_repo.list_messages(tenant_id, counterparty=counterparty, limit=10)
+    turns = [
+        ("them" if m.direction is MessageDirection.INBOUND else "us", m.body)
+        for m in reversed(rows)
+        if m.body
+    ]
+    return turns[:-1] if turns else []   # the newest is the question itself
 
 
 async def _on_calls(tenant: Tenant, value: dict[str, Any]) -> None:

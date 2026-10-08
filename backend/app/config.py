@@ -126,6 +126,16 @@ class Settings(BaseSettings):
     voice_engine: str = "gemini"
     gemini_api_key: str = ""
     gemini_live_model: str = "gemini-3.1-flash-live-preview"
+    # The text model that answers WhatsApp messages. Separate from the live
+    # one: a realtime voice model is the wrong tool for composing a sentence
+    # nobody is waiting on, and costs more to do it.
+    #
+    # An explicit version rather than an alias, so an answer does not change
+    # character on a day nobody deployed anything. Check it still exists when
+    # upgrading: gemini-2.5-flash is still *listed* by the API and returns 404
+    # with "no longer available to new users", so a model appearing in the
+    # catalogue is not proof it can be called.
+    gemini_text_model: str = "gemini-3.5-flash"
 
     request_timeout_seconds: float = Field(default=30.0)
 

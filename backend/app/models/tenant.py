@@ -79,6 +79,10 @@ class Tenant(BaseModel):
         default_factory=GoogleDriveLink, alias="googleDrive"
     )
     record_calls: bool = Field(default=True, alias="recordCalls")
+    # Whether the agent answers inbound WhatsApp messages by itself. Off by
+    # default: a company that has not yet uploaded its material would have an
+    # agent answering questions about it from nothing.
+    auto_reply: bool = Field(default=False, alias="autoReply")
 
     # ---- Access -----------------------------------------------------------
     # Presented by this customer when reading their own calls and recordings.
@@ -110,6 +114,7 @@ class Tenant(BaseModel):
             "agentGreeting": self.agent_greeting or None,
             "knowledgeBasePdf": self.knowledge_base_pdf or None,
             "recordCalls": self.record_calls,
+            "autoReply": self.auto_reply,
             "googleDrive": {
                 "connected": self.google_drive.connected,
                 "accountEmail": self.google_drive.account_email or None,
@@ -163,6 +168,7 @@ class TenantCreate(BaseModel):
         default="", alias="infobipCallsConfigurationId"
     )
     record_calls: bool = Field(default=True, alias="recordCalls")
+    auto_reply: bool = Field(default=False, alias="autoReply")
     qa_webhook_url: str = Field(default="", alias="qaWebhookUrl")
     qa_api_key: str = Field(default="", alias="qaApiKey")
     default_country_code: str = Field(default="", alias="defaultCountryCode")
@@ -196,6 +202,7 @@ class TenantUpdate(BaseModel):
         default=None, alias="infobipCallsConfigurationId"
     )
     record_calls: bool | None = Field(default=None, alias="recordCalls")
+    auto_reply: bool | None = Field(default=None, alias="autoReply")
     qa_webhook_url: str | None = Field(default=None, alias="qaWebhookUrl")
     qa_api_key: str | None = Field(default=None, alias="qaApiKey")
     default_country_code: str | None = Field(default=None, alias="defaultCountryCode")

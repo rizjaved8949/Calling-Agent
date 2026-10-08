@@ -1,13 +1,13 @@
-fastapi==0.115.6
-uvicorn[standard]==0.34.0
-pydantic==2.10.4
-pydantic-settings==2.7.0
-python-dotenv==1.0.1
+fastapi==0.141.1
+uvicorn[standard]==0.52.0
+pydantic==2.12.5
+pydantic-settings==2.14.2
+python-dotenv==1.2.2
 httpx==0.28.1
 
 # AES-256-GCM for tenant credentials at rest. The format matches
 # Conversation-Agent's voice/secretBox.ts, so both services read the same rows.
-cryptography==44.0.0
+cryptography==46.0.5
 
 # The master call-record workbook. Pure Python and writes .xlsx directly, so
 # the report needs neither pandas nor Excel on the host — a few hundred KB
@@ -22,4 +22,8 @@ python-multipart==0.0.20
 google-genai==1.68.0
 
 # Resampling between the model's 24 kHz output and the 16 kHz a line carries.
-numpy==2.2.1
+numpy==2.5.1
+
+# Reading text out of an uploaded PDF, once on upload rather than on every
+# message. Pure Python and about a megabyte, against PyMuPDF's twenty.
+pypdf==5.1.0

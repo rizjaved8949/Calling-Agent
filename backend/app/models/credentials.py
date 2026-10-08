@@ -63,6 +63,7 @@ class CredentialsUpdate(BaseModel):
     language: str | None = None
     tts_voice: str | None = Field(default=None, alias="ttsVoice")
     record_calls: bool | None = Field(default=None, alias="recordCalls")
+    auto_reply: bool | None = Field(default=None, alias="autoReply")
 
 
 # Which stored field backs each form field, and whether it is a secret.
