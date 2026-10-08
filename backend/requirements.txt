@@ -1,0 +1,18 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+pydantic-settings==2.7.0
+python-dotenv==1.0.1
+httpx==0.28.1
+
+# AES-256-GCM for tenant credentials at rest. The format matches
+# Conversation-Agent's voice/secretBox.ts, so both services read the same rows.
+cryptography==44.0.0
+
+# The master call-record workbook. Pure Python and writes .xlsx directly, so
+# the report needs neither pandas nor Excel on the host — a few hundred KB
+# against pandas' hundred-plus MB, for a job that is three sheets of cells.
+openpyxl==3.1.5
+
+# Multipart bodies on the recording upload endpoint.
+python-multipart==0.0.20

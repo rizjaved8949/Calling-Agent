@@ -8,12 +8,13 @@ and Contact pages.
 ## Layout
 
 ```
-frontend/   the React, TypeScript, Vite and Tailwind app (everything runs here today)
-backend/    reserved for the API server — empty for now
+frontend/   the React, TypeScript, Vite and Tailwind app
+backend/    the Python API: companies, calls, recordings, Google Drive, WhatsApp
 ```
 
-The frontend is still browser-only: it serves itself from an in-memory mock store
-in `frontend/src/lib/api`, so nothing depends on the backend yet.
+The two are not wired together yet. The frontend still serves itself from the
+in-memory mock store in `frontend/src/lib/api`; the backend runs, is tested, and
+is documented in [backend/README.md](backend/README.md).
 
 ## Run
 
