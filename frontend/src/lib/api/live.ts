@@ -407,6 +407,24 @@ export const live = {
       '/api/knowledge/preview',
     ),
 
+  // ---- The operator's own view ------------------------------------------
+
+  /** Every company on the platform. Needs the admin key. */
+  companies: () =>
+    request<{ companies: WireCompany[] }>('/api/companies'),
+
+  registerCompany: (body: Record<string, unknown>) =>
+    request<WireCompany & { apiKey: string; apiKeyNotice: string }>('/api/companies', {
+      method: 'POST',
+      body,
+    }),
+
+  rotateCompanyKey: (phoneNumberId: string) =>
+    request<{ apiKey: string }>(
+      `/api/companies/${encodeURIComponent(phoneNumberId)}/rotate-key`,
+      { method: 'POST' },
+    ),
+
   driveStatus: () =>
     request<{ connected: boolean; accountEmail: string | null; folderName: string | null; oauthConfigured: boolean }>(
       '/api/google/status',

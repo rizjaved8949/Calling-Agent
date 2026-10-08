@@ -28,6 +28,8 @@ export const LIVE = RAW_BASE.length > 0;
 export const API_BASE = RAW_BASE.replace(/\/+$/, '');
 
 const TOKEN_KEY = 'calling-agent.api-key';
+const ADMIN_KEY = 'calling-agent.admin-key';
+const VIEWING_KEY = 'calling-agent.viewing-company';
 
 let token: string | null = null;
 
@@ -57,6 +59,71 @@ export function setAuthToken(value: string | null): void {
 
 export function hasAuthToken(): boolean {
   return Boolean(getAuthToken());
+}
+
+/**
+ * The operator's own key, for the platform portal.
+ *
+ * Separate from a company's key because it does a different job: it lists and
+ * creates companies, and lets the portal look at one without holding that
+ * company's credential. **Same caveat as the company key** — it should not
+ * live in a browser once there is real sign-in, and it can do more damage.
+ */
+let adminKey: string | null = null;
+
+export function getAdminKey(): string | null {
+  if (adminKey === null) {
+    try {
+      adminKey = localStorage.getItem(ADMIN_KEY);
+    } catch {
+      adminKey = null;
+    }
+  }
+  return adminKey;
+}
+
+export function setAdminKey(value: string | null): void {
+  adminKey = value;
+  try {
+    if (value) localStorage.setItem(ADMIN_KEY, value);
+    else localStorage.removeItem(ADMIN_KEY);
+  } catch {
+    /* memory is enough for this session */
+  }
+}
+
+export function hasAdminKey(): boolean {
+  return Boolean(getAdminKey());
+}
+
+/**
+ * Which company the portal is currently looking at.
+ *
+ * Only meaningful with an admin key: the API accepts it as `X-Company-Id` and
+ * answers as that company. A company key ignores it entirely, so a customer
+ * cannot set this and read somebody else's data.
+ */
+let viewing: string | null = null;
+
+export function getViewingCompany(): string | null {
+  if (viewing === null) {
+    try {
+      viewing = localStorage.getItem(VIEWING_KEY);
+    } catch {
+      viewing = null;
+    }
+  }
+  return viewing || null;
+}
+
+export function setViewingCompany(companyId: string | null): void {
+  viewing = companyId;
+  try {
+    if (companyId) localStorage.setItem(VIEWING_KEY, companyId);
+    else localStorage.removeItem(VIEWING_KEY);
+  } catch {
+    /* as above */
+  }
 }
 
 /** A failure the backend described, with the status it came back on. */
@@ -115,8 +182,18 @@ async function readError(response: Response): Promise<ApiError> {
 
 async function send(path: string, options: RequestOptions = {}): Promise<Response> {
   const headers: Record<string, string> = {};
-  const key = options.anonymous ? null : getAuthToken();
-  if (key) headers.Authorization = `Bearer ${key}`;
+  if (!options.anonymous) {
+    const key = getAuthToken();
+    if (key) headers.Authorization = `Bearer ${key}`;
+    const admin = getAdminKey();
+    if (admin) {
+      headers['X-Admin-Key'] = admin;
+      // Only read when the admin key is valid, so this cannot be used by a
+      // company to reach another company's data.
+      const company = getViewingCompany();
+      if (company) headers['X-Company-Id'] = company;
+    }
+  }
 
   let body: BodyInit | undefined;
   if (options.raw !== undefined) {

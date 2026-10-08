@@ -1,5 +1,5 @@
 import { initialStore } from '../fixtures';
-import { LIVE, hasAuthToken } from './http';
+import { LIVE, hasAdminKey, hasAuthToken } from './http';
 import { live, toChannels, toCredentials, toOrganization } from './live';
 import type { Store, Organization, Agent, Persona, Voice, KnowledgeBase, KbDocument, Channel, Call, Message, Invitation, Role, WebhookEndpoint, Guide, CallSetup, Campaign, ChannelType, ProvisioningTask, Preset, KnowledgeResolution } from '../types';
 
@@ -11,7 +11,8 @@ import type { Store, Organization, Agent, Persona, Voice, KnowledgeBase, KbDocum
  * so nothing presents invented data as real. See `live.ts` for the mapping.
  */
 export const USE_MOCK = !LIVE;
-export { LIVE, hasAuthToken, setAuthToken } from './http';
+export { LIVE, hasAuthToken, setAuthToken, hasAdminKey, setAdminKey,
+         getViewingCompany, setViewingCompany } from './http';
 let store: Store = structuredClone(initialStore);
 const listeners = new Set<() => void>();
 let pending = 0;
@@ -38,6 +39,18 @@ const update = <T,>(work:()=>T) => mock(() => { const result=work(); notify(); r
  * injected failures: those exist to make the prototype feel like a network,
  * and this *is* one.
  */
+/**
+ * A method the backend has no equivalent for.
+ *
+ * Against the fixtures these mutate the in-memory store and look like they
+ * worked. Against the real API they would do nothing at all, silently, which
+ * is worse than a button that says why it is unavailable — so in a live build
+ * they refuse out loud and the screen shows the reason.
+ */
+function notSupported(what: string): Promise<never> {
+  return Promise.reject(new Error(what));
+}
+
 async function real<T>(work:()=>Promise<T>):Promise<T> {
   pending++; notifyPending();
   try { return await work(); } finally { pending--; notifyPending(); }
@@ -140,7 +153,9 @@ export const api = {
   // ---- Agents -------------------------------------------------------------
   getAgents: (orgId:string) => mock(()=>store.agents.filter(x=>x.orgId===orgId)),
   getAgent: (agentId:string) => mock(()=>store.agents.find(x=>x.id===agentId)),
-  createAgent: (orgId:string,name:string) => update(()=> {
+  createAgent: (orgId:string,name:string) => LIVE
+    ? notSupported('You have one agent per number. Open the Agent screen to set it up.')
+    : update(()=> {
     const defaultKb=store.knowledgeBases.find(x=>x.orgId===orgId&&x.isDefault)||store.knowledgeBases.find(x=>x.orgId===orgId);
     const row:Agent={id:'agent-'+id(),orgId,name,status:'draft',personaId:'persona-'+id(),defaultKnowledgeBaseId:defaultKb?.id||'',knowledgeBaseIds:defaultKb?[defaultKb.id]:[],voiceId:'voice-'+id(),channelIds:[],createdAt:new Date().toISOString()};
     store.agents.push(row);
@@ -168,7 +183,9 @@ export const api = {
   // ---- Knowledge: many bases per company ----------------------------------
   getKnowledgeBases: (orgId:string) => mock(()=>store.knowledgeBases.filter(x=>x.orgId===orgId)),
   getKnowledgeBase: (kbId:string) => mock(()=>store.knowledgeBases.find(x=>x.id===kbId)),
-  createKnowledgeBase: (orgId:string,name:string,purpose:string) => update(()=> {
+  createKnowledgeBase: (orgId:string,name:string,purpose:string) => LIVE
+    ? notSupported('Your documents all go in one place. Open the Knowledge screen to add one.')
+    : update(()=> {
     const row:KnowledgeBase={id:'kb-'+id(),orgId,name,purpose,isDefault:!store.knowledgeBases.some(x=>x.orgId===orgId),status:'empty',chunkSize:800,chunkOverlap:120,embeddingModel:'text-embedding-3-small',similarityThreshold:0.6,topK:6,maxChunksPerSection:2,maxContextChars:9000,chunkCount:0,answeredLast30d:0};
     store.knowledgeBases.push(row); logAudit(orgId,'Created the knowledge base '+name,'KnowledgeBase',row.id); return row; }),
   updateKnowledgeBase: (kbId:string,patch:Partial<KnowledgeBase>) => update(()=> { const row=store.knowledgeBases.find(x=>x.id===kbId)!; Object.assign(row,patch); return row; }),
@@ -227,22 +244,32 @@ export const api = {
   updateChannel: (channelId:string,patch:Partial<Channel>) => update(()=> { const row=store.channels.find(x=>x.id===channelId)!; Object.assign(row,patch); return row; }),
   testChannel: (channelId:string) => update(()=> { const row=store.channels.find(x=>x.id===channelId)!; row.status='verifying'; setTimeout(()=>{row.status=row.errorDetail?'error':'connected';row.lastCheckedAt=new Date().toISOString();notify();},1400); return row; }),
   /** Request another number. It arrives as a setup task on our side. */
-  addChannel: (orgId:string,type:ChannelType,label:string) => update(()=> {
+  addChannel: (orgId:string,type:ChannelType,label:string) => LIVE
+    ? notSupported('Your numbers come from the accounts you connect, so there is nothing to add here. Open Settings to connect WhatsApp or a phone line.')
+    : update(()=> {
     const row:Channel={id:'ch-'+id(),orgId,type,label,isPrimary:!store.channels.some(c=>c.orgId===orgId&&c.type===type),status:'disconnected',provider:type==='sim'?'Infobip':'Meta',config:{}};
     store.channels.push(row);
     store.provisioning.unshift({id:'prov-'+id(),orgId,channelId:row.id,kind:type,state:'requested',note:'',updatedAt:new Date().toISOString()});
     logAudit(orgId,'Requested another number: '+label,'Channel',row.id);
     return row; }),
-  renameChannel: (channelId:string,label:string) => update(()=> { const row=store.channels.find(x=>x.id===channelId)!; row.label=label; return row; }),
+  renameChannel: (channelId:string,label:string) => LIVE
+    ? notSupported('Channel names come from the provider and cannot be changed here.')
+    : update(()=> { const row=store.channels.find(x=>x.id===channelId)!; row.label=label; return row; }),
   /** The three things a company decides about a number. */
-  setChannelCapability: (channelId:string,key:'inboundEnabled'|'outboundEnabled'|'operatorEnabled',on:boolean) => update(()=> {
+  setChannelCapability: (channelId:string,key:'inboundEnabled'|'outboundEnabled'|'operatorEnabled',on:boolean) => LIVE
+    ? notSupported('What a channel can do follows from the credentials you have entered for it.')
+    : update(()=> {
     const row=store.channels.find(x=>x.id===channelId)!; row.config={...row.config,[key]:on};
     logAudit(row.orgId,(on?'Enabled ':'Disabled ')+key.replace('Enabled','')+' on '+row.label,'Channel',channelId); return row; }),
-  setPrimaryChannel: (orgId:string,channelId:string) => update(()=> {
+  setPrimaryChannel: (orgId:string,channelId:string) => LIVE
+    ? notSupported('There is no primary number to choose: each channel is used for what it is connected to.')
+    : update(()=> {
     const target=store.channels.find(x=>x.id===channelId)!;
     store.channels.filter(c=>c.orgId===orgId&&c.type===target.type).forEach(c=>{c.isPrimary=c.id===channelId});
     return target; }),
-  removeChannel: (channelId:string) => update(()=> {
+  removeChannel: (channelId:string) => LIVE
+    ? notSupported('A number is removed by clearing its credentials in Settings.')
+    : update(()=> {
     const row=store.channels.find(x=>x.id===channelId); if(!row) return false;
     store.agents.filter(a=>a.orgId===row.orgId).forEach(a=>{a.channelIds=a.channelIds.filter(x=>x!==channelId)});
     store.callSetups=store.callSetups.filter(r=>r.channelId!==channelId);
@@ -250,7 +277,9 @@ export const api = {
     store.provisioning=store.provisioning.filter(x=>x.channelId!==channelId);
     logAudit(row.orgId,'Removed the number '+row.label,'Channel',channelId); return true; }),
   /** Which agents, rules and campaigns depend on a number. */
-  channelUsage: (channelId:string) => mock(()=>({
+  channelUsage: (channelId:string) => LIVE
+    ? notSupported('Per-channel usage is not measured yet.')
+    : mock(()=>({
     agents: store.agents.filter(a=>a.channelIds.includes(channelId)).map(a=>a.name),
     rules: store.callSetups.filter(r=>r.channelId===channelId).map(r=>r.name),
     campaigns: store.campaigns.filter(c=>{const sp=store.callSetups.find(x=>x.id===c.setupId);return sp?.channelId===channelId}).map(c=>c.name),
@@ -402,7 +431,24 @@ export const api = {
   updateSetting: (orgId:string,key:string,value:string|number|boolean) => update(()=> {store.settings[orgId] ||= {};store.settings[orgId][key]=value;logAudit(orgId,'Changed a setting','Setting',key);return value;}),
 
   // ---- Platform portal ----------------------------------------------------
-  getPlatformCompanies: () => mock(()=>store.organizations.map(org=>{
+  /**
+   * Every company, for the operator's portal. Only real with an admin key:
+   * a company's own key cannot list other companies, which is the point.
+   */
+  getPlatformCompanies: () => LIVE
+    ? real(async()=>{
+        if(!hasAdminKey()) return [];
+        const {companies}=await live.companies();
+        return companies.map(c=>({
+          org: toOrganization(c),
+          minutesThisPeriod: 0,
+          callCount: 0,
+          lastCallAt: undefined,
+          health: (c.configured?'ok':'warning') as 'ok'|'warning'|'error',
+          openIssues: c.configured?0:1,
+        }));
+      })
+    : mock(()=>store.organizations.map(org=>{
     const calls=store.calls.filter(c=>c.orgId===org.id);
     const failing=store.channels.filter(c=>c.orgId===org.id&&c.status==='error').length;
     const blocked=store.provisioning.filter(p=>p.orgId===org.id&&p.state==='blocked').length;
@@ -411,11 +457,22 @@ export const api = {
       health: (failing+blocked)>0?(blocked>0?'error':'warning'):'ok' as 'ok'|'warning'|'error',
       openIssues: failing+blocked };
   })),
-  createCompany: (name:string,countryCode:string) => update(()=> {
+  /** Register a company. The API key it returns is shown once and never again. */
+  registerCompany: (body:Record<string,unknown>) => LIVE
+    ? real(()=>live.registerCompany(body))
+    : notSupported('Registering a company needs the live API.'),
+  rotateCompanyKey: (phoneNumberId:string) => LIVE
+    ? real(()=>live.rotateCompanyKey(phoneNumberId))
+    : notSupported('Rotating a key needs the live API.'),
+  createCompany: (name:string,countryCode:string) => LIVE
+    ? notSupported('Use Register a company, which needs the WhatsApp phone number id.')
+    : update(()=> {
     const org:Organization={id:'org-'+id(),name,slug:name.toLowerCase().replace(/\W+/g,'-'),accentColor:'oklch(0.58 0.13 245)',plan:'Starter',countryCode,defaultLanguage:'ur',timezone:'Asia/Karachi',createdAt:new Date().toISOString(),trialEndsAt:new Date(Date.now()+14*86400000).toISOString(),onboardingStep:0,status:'setup',provisioningMode:'managed',strictnessPreset:'balanced',pacePreset:'natural',voiceQualityPreset:'standard',recordCalls:false,recordBothSides:false,retentionDays:30,driveConnected:false,driveFolderName:'Call recordings',endCallsAfterMinutes:15,businessHoursStart:'09:00',businessHoursEnd:'17:00'};
     store.organizations.push(org); store.settings[org.id]={};
     logPlatform('Created company',name,org.id); return org; }),
-  setCompanyStatus: (orgId:string,status:Organization['status']) => update(()=> { const row=store.organizations.find(x=>x.id===orgId)!; row.status=status; logPlatform('Set company status',row.name+' is now '+status,orgId); return row; }),
+  setCompanyStatus: (orgId:string,status:Organization['status']) => LIVE
+    ? notSupported('Suspending a company is not available yet.')
+    : update(()=> { const row=store.organizations.find(x=>x.id===orgId)!; row.status=status; logPlatform('Set company status',row.name+' is now '+status,orgId); return row; }),
   getProvisioning: (orgId?:string) => mock(()=>orgId?store.provisioning.filter(x=>x.orgId===orgId):store.provisioning),
   updateProvisioning: (taskId:string,patch:Partial<ProvisioningTask>) => update(()=> {
     const row=store.provisioning.find(x=>x.id===taskId)!; Object.assign(row,patch,{updatedAt:new Date().toISOString()});
@@ -425,7 +482,9 @@ export const api = {
     const ch=store.channels.find(c=>c.id===channelId); if(ch){ch.displayNumber=number;ch.status='verifying';}
     logPlatform('Assigned number',number+' to '+(ch?.label||channelId),orgId); return ch; }),
   getPlatformAudit: () => mock(()=>store.platformAudit),
-  startImpersonation: (orgId:string) => update(()=> { logPlatform('Started impersonation','Opened '+(store.organizations.find(x=>x.id===orgId)?.name||orgId)+' read-only',orgId); return true; }),
+  startImpersonation: (orgId:string) => LIVE
+    ? notSupported('Viewing a company as them is not available yet.')
+    : update(()=> { logPlatform('Started impersonation','Opened '+(store.organizations.find(x=>x.id===orgId)?.name||orgId)+' read-only',orgId); return true; }),
   endImpersonation: (orgId:string) => update(()=> { logPlatform('Ended impersonation','Closed read-only session',orgId); return true; }),
 
   // ---- Live simulation ----------------------------------------------------
@@ -441,7 +500,9 @@ export const api = {
     },3500);
     return ()=>clearInterval(timer);
   },
-  deleteOrganization: (orgId:string) => update(()=> {
+  deleteOrganization: (orgId:string) => LIVE
+    ? notSupported('Closing an account is done by the operator, not from here.')
+    : update(()=> {
     const kbIds=store.knowledgeBases.filter(x=>x.orgId===orgId).map(x=>x.id);
     store.organizations=store.organizations.filter(x=>x.id!==orgId);
     store.memberships=store.memberships.filter(x=>x.orgId!==orgId);

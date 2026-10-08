@@ -64,6 +64,7 @@ import {HistoryNavigationProvider} from './history-navigation';
 import {AppCtx,useApp} from './app-context';
 import {ApiKeyGate,ComingSoon,hasBackendKey} from './connect-backend';
 import {AgentScreen,KnowledgeScreen} from './pages-agent';
+import {OperatorCompanies} from './pages-operator';
 import {LIVE,hydrate} from './lib/api';
 
 function Provider({children}:{children:React.ReactNode}){
@@ -342,7 +343,7 @@ function AppRoutes(){
     <Route path="/app/lookup" element={<Protected><NotYet title="Caller lookup" detail="Live call handling arrives with the voice engine."><StaffLookup/></NotYet></Protected>}/>
     <Route path="/app/ask" element={<Protected><NotYet title="Ask the knowledge base" detail="This answers from the agent knowledge base, which is not connected yet."><StaffAsk/></NotYet></Protected>}/>
 
-    <Route path="/platform/companies" element={<PlatformOnly><PlatformCompanies/></PlatformOnly>}/>
+    <Route path="/platform/companies" element={<PlatformOnly><WhenLive real={<OperatorCompanies/>}><PlatformCompanies/></WhenLive></PlatformOnly>}/>
     <Route path="/platform/companies/:id" element={<PlatformOnly><PlatformCompanyDetail/></PlatformOnly>}/>
     <Route path="/platform/provisioning" element={<PlatformOnly><NotYet title="Provisioning" detail="Number provisioning is not connected yet."><PlatformProvisioning/></NotYet></PlatformOnly>}/>
     <Route path="/platform/technical" element={<PlatformOnly><NotYet title="Technical settings" detail="Platform-wide tuning arrives with the voice engine."><PlatformTechnical/></NotYet></PlatformOnly>}/>
