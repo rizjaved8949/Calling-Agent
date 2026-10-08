@@ -83,4 +83,4 @@ services:
       # The Vercel domain. A browser treats every spelling as a different
       # origin, so list each one the app is actually served from.
       - key: FRONTEND_URL
-        value: https://calling-agent.vercel.app
+        value: https://calling-agent-amber.vercel.app

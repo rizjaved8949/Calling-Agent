@@ -52,7 +52,7 @@ The API refuses cross-origin requests from anywhere not on its allowlist, so
 add the Vercel domain to `FRONTEND_URL` on Render:
 
 ```
-FRONTEND_URL=https://calling-agent.vercel.app
+FRONTEND_URL=https://calling-agent-amber.vercel.app
 ```
 
 Comma-separate to add more. A browser treats every spelling as a separate
