@@ -35,7 +35,7 @@ export const REAL_GUIDES: Guide[] = [
     category: 'Agents',
     readingMinutes: 3,
     updatedAt: UPDATED,
-    bodyMd: 'Each agent under Agents has its own opening line, a short description of who it is ("You are Ayesha, the admissions assistant for…"), a language, tone notes, and rules for when to hand off to a person. These apply on both a phone call and a WhatsApp conversation — one description, both channels. An agent with nothing filled in falls back to your company\'s own default persona in Settings, which is why a brand-new agent still says something sensible before you have written anything for it. Leave Voice empty to use your company\'s default voice rather than naming one per agent.',
+    bodyMd: 'Each agent under Agents has its own opening line, a short description of who it is ("You are Sara, the support assistant for this business…"), a language, tone notes, and rules for when to hand off to a person. These apply on both a phone call and a WhatsApp conversation — one description, both channels. An agent with nothing filled in falls back to your company\'s own default persona in Settings, which is why a brand-new agent still says something sensible before you have written anything for it. Leave Voice empty to use your company\'s default voice rather than naming one per agent.',
   },
   {
     slug: 'multiple-knowledge',

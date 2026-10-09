@@ -164,7 +164,7 @@ export function AgentDetailScreen() {
         onChange={v => void save({greeting: v})} placeholder="Thank you for calling. How can I help?"/>
       <Field label="Who this agent is" rows={5} value={agent.roleDescription} disabled={!canManage}
         onChange={v => void save({roleDescription: v})}
-        placeholder="You are Ayesha, the admissions assistant…"
+        placeholder="You are Sara, the support assistant for this business…"
         help="Written in plain language. Falls back to the company's own persona if left empty."/>
       <Field label="Language" value={agent.language} disabled={!canManage}
         onChange={v => void save({language: v})} placeholder="ur-PK"/>
