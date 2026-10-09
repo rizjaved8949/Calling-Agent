@@ -119,3 +119,24 @@ def test_the_prompt_text_is_cached_between_calls(fake_db):
     # A new document must not be stuck behind the cache.
     asyncio.run(knowledge_repo.save("t-9", "Timings", "Campus opens at 8."))
     assert "Campus opens at 8" in asyncio.run(knowledge_repo.context_for("t-9"))
+
+
+@pytest.mark.asyncio
+async def test_a_dialer_call_is_never_warmed(fake_db, monkeypatch):
+    """The Dialer is a person talking to a person. Warming a model for it puts
+    an agent on a line the employee is about to speak on."""
+    from app.models.call import Call, Channel
+    from app.models.tenant import Tenant
+    from app.services.agent import live
+
+    built = []
+    async def persona(*a, **kw):
+        built.append(1)
+
+    monkeypatch.setattr(live, "persona_for", persona)
+    call = Call(id="human-1", tenantId="t-1", channel=Channel.PHONE,
+                counterparty="+92300", mode="human")
+    await live.warm_up(Tenant(phoneNumberId="t-1", name="Acme"), call)
+
+    assert "human-1" not in live._sessions
+    assert built == [], "a model was connected for a call a person is taking"

@@ -400,6 +400,10 @@ async def warm_up(tenant: Tenant, call: Call, *, keepalive: bool = True) -> None
     """
     if call.id in _sessions:
         return
+    if call.mode == "human":
+        # A dialer call is a person talking to a person. Warming a model for it
+        # would put an agent on a line the employee is about to speak on.
+        return
     try:
         session = CallSession(
             call.id,

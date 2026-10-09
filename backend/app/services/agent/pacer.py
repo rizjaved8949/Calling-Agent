@@ -38,6 +38,12 @@ log = logging.getLogger(__name__)
 # boundary is a gap the caller hears as a stutter.
 PREROLL_FRAMES = 15
 
+# A person's microphone is not bursty: the browser delivers an even 20 ms at a
+# time, so there is nothing to smooth out and holding 300 ms of it is just
+# delay — the kind that has two people talking over each other and then both
+# stopping. Two frames is enough to absorb a late packet.
+HUMAN_PREROLL_FRAMES = 2
+
 
 class FramePacer:
     """Holds the agent's audio and releases it one frame per 20 ms."""

@@ -11,8 +11,8 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {Link, useNavigate, useParams} from 'react-router-dom';
 import {
-  ArrowDownLeft, ArrowLeft, ArrowUpRight, Download, FileText, Loader2, Mic2, Pause, Phone,
-  Play, RefreshCw, Search, Trash2, User,
+  ArrowDownLeft, ArrowLeft, ArrowUpRight, AudioLines, Download, FileText, Loader2, Mic2,
+  Pause, Phone, Play, RefreshCw, Search, Trash2, User, X,
 } from 'lucide-react';
 import {Badge, Button, Empty, PageHead} from './app';
 import {useApp} from './app-context';
@@ -271,7 +271,7 @@ export function CallHistoryScreen() {
             <div className="table-wrap"><table className="table stack-on-phone">
               <thead><tr>
                 <th>When</th><th>Who</th><th>On</th><th>Handled by</th>
-                <th>Length</th><th>Result</th><th>Recording</th><th/>
+                <th>Length</th><th>Result</th><th>Audio</th><th>Call</th>
               </tr></thead>
               <tbody>{shown.map(call => <tr key={call.id} className="row-link" tabIndex={0}
                 role="link" aria-label={`Open the call with ${call.counterparty}`}
@@ -310,15 +310,18 @@ export function CallHistoryScreen() {
                         </button>
                         <button className="icon-btn" title="Download the audio"
                           onClick={() => void callsApi.download(call.id)}><Download size={15}/></button>
-                        <button className="icon-btn" title="Delete the recording"
-                          onClick={() => removeRecording(call)}><Trash2 size={15}/></button>
+                        <button className="icon-btn" title="Delete the audio, keep the call record"
+                          aria-label="Delete the audio" onClick={() => removeRecording(call)}>
+                          <AudioLines size={15}/><X size={11} style={{marginInlineStart: -4}}/>
+                        </button>
                       </span>
                     : <span className="small muted">{RECORDING_LABEL[call.recording.state]}</span>}
                 </td>
                 <td data-label="" onClick={stop}>
                   <div className="row" style={{gap: 6}}>
                     <Link className="button outline small" to={'/app/recordings/' + call.id}>Open</Link>
-                    <button className="icon-btn" title="Delete the whole call" onClick={() => remove(call)}>
+                    <button className="icon-btn" title="Delete the whole call — record, audio and transcript"
+                      aria-label="Delete the whole call" onClick={() => remove(call)}>
                       <Trash2 size={15}/>
                     </button>
                   </div>

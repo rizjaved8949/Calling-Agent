@@ -62,6 +62,24 @@ function Receipt({message}: {message: WireMessage}) {
 
 type Thread = {number: string; messages: WireMessage[]; last: WireMessage; unread: number};
 
+/**
+ * What to show when a message has no text of its own.
+ *
+ * A template's words live in Meta's catalogue, not in the message we sent, so
+ * the body comes back empty — and "(template)" under the template's own name
+ * told the reader nothing they could not already see. Media has the same
+ * problem for a different reason.
+ */
+function describe(message: WireMessage): string {
+  if (message.templateName) return 'Sent from your approved template.';
+  const kinds: Record<string, string> = {
+    image: 'Sent a photo', video: 'Sent a video', audio: 'Sent a voice note',
+    document: 'Sent a document', sticker: 'Sent a sticker',
+    location: 'Shared a location', contacts: 'Shared a contact',
+  };
+  return kinds[message.kind] ?? `Sent a ${message.kind} message`;
+}
+
 export function MessagesScreen() {
   const {t, toast, canManage} = useApp();
   const [confirm, confirmDialog] = useConfirm();
@@ -254,7 +272,7 @@ export function MessagesScreen() {
               <span className="chat-contact-time">{clockTime(item.last.createdAt)}</span>
             </div>
             <div className="chat-contact-preview">
-              {item.last.direction === 'OUTBOUND' ? 'You: ' : ''}{item.last.body || item.last.kind}
+              {item.last.direction === 'OUTBOUND' ? 'You: ' : ''}{item.last.body || describe(item.last)}
             </div>
           </button>)}
         </div>
@@ -300,10 +318,10 @@ export function MessagesScreen() {
                           onClick={() => remove(message)}><Trash2 size={13}/></button>
                       </div>
                       {message.templateName && <div className="small muted">
-                        template · {message.templateName}
+                        Template · {message.templateName}
                       </div>}
                       <div style={{whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', paddingInlineEnd: 22}}>
-                        {message.body || <em className="muted">({message.kind})</em>}
+                        {message.body || <span className="muted">{describe(message)}</span>}
                       </div>
                       <div className="chat-bubble-meta">
                         <span>{clockTime(message.createdAt)}</span>

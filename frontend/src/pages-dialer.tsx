@@ -189,7 +189,19 @@ export function DialerScreen() {
       </div>
 
       <div className="card stack" style={{alignItems: 'center', justifyContent: 'center', textAlign: 'center', minHeight: 260}}>
-        {phase === 'idle' && !status && <p className="muted">Enter a number and press Call. Your browser will ask to use the microphone.</p>}
+        {phase === 'idle' && !status && <div className="stack" style={{alignItems: 'center', gap: 14}}>
+          <Phone size={34} className="muted"/>
+          <div>
+            <strong>Ready to call</strong>
+            <p className="muted small" style={{margin: '6px 0 0', maxWidth: '38ch'}}>
+              Type a number and press Call. You do the talking — the agent is not
+              on this call. Your browser will ask to use the microphone the first time.
+            </p>
+          </div>
+          {line && <div className="small muted">
+            They will see <b>{line.phoneNumber}</b>, not your own number.
+          </div>}
+        </div>}
         {phase !== 'idle' && <>
           {phase === 'connected' ? <div className="live-orb"/> : inCall ? <Loader2 size={40} className="spin"/> : <Phone size={40}/>}
           <strong style={{fontSize: '1.3rem'}}>{to}</strong>

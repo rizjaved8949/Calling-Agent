@@ -300,3 +300,17 @@
 /* Long numbers and ids in a two-column detail list wrap instead of pushing
    the card wider than its grid cell. */
 .split .card .row.between > span:last-child { min-width: 0; }
+
+/* The company name in the sidebar. It replaced a <select>, and inherited none
+   of that element's dark-sidebar colours — so it rendered as pale text on a
+   pale box, barely readable. It now carries the same class and only overrides
+   what a non-interactive element needs. */
+.sidebar .workspace-label {
+  display: flex;
+  align-items: center;
+  min-height: 42px;
+  cursor: default;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

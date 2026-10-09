@@ -26,7 +26,7 @@ from typing import Any, Awaitable, Callable
 
 from .audio_rate import FRAME_MS, PHONE_RATE, RateConverter, gemini_to_phone
 from .gemini import AgentPersona, AgentUnavailable, GeminiLiveSession, LiveSettings
-from .pacer import FramePacer
+from .pacer import HUMAN_PREROLL_FRAMES, PREROLL_FRAMES, FramePacer
 from .recorder import RECORD_RATE, TwoWayRecorder
 
 log = logging.getLogger(__name__)
@@ -70,7 +70,12 @@ class CallSession:
         self.transcript: list[tuple[str, str]] = []
         self.ended_reason = ""
 
-        self._pacer = FramePacer(send_to_caller, keepalive=keepalive)
+        # A human's voice needs almost no buffering; the model's needs some.
+        self._pacer = FramePacer(
+            send_to_caller,
+            keepalive=keepalive,
+            preroll=HUMAN_PREROLL_FRAMES if human else PREROLL_FRAMES,
+        )
         self._recorder = TwoWayRecorder(call_id) if record else None
         # The caller arrives at 16 kHz and the recording keeps 24 kHz, so the
         # caller is upsampled once here rather than the agent downsampled on
