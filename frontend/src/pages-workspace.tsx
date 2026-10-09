@@ -387,9 +387,31 @@ export function CallSetupsScreen() {
     finally { setBusy(false) }
   };
 
+  // An outbound setup can be toggled on its own — several can run at once.
+  // Owner and staff both get this: switching which preset is active for a
+  // number is day-to-day operation, not configuration.
   const toggle = async (setup: CallSetup) => {
     try { await workspace.updateCallSetup(setup.id, {enabled: !setup.enabled}); load() }
     catch (cause) { setError(errorText(cause, 'Could not change that.')) }
+  };
+
+  // Inbound is exclusive — the backend refuses a second enabled setup on the
+  // same channel (one call, one agent to answer it). So "switch" here means
+  // disable whichever inbound setup currently owns this channel, then enable
+  // the one chosen, in that order: enabling first would hit that same
+  // refusal while the old one is still on.
+  const switchInbound = async (target: CallSetup) => {
+    if (!setups) return;
+    const sibling = setups.find(
+      s => s.id !== target.id && s.channel === target.channel && s.direction === 'INBOUND' && s.enabled,
+    );
+    setBusy(true); setError('');
+    try {
+      if (sibling) await workspace.updateCallSetup(sibling.id, {enabled: false});
+      await workspace.updateCallSetup(target.id, {enabled: true});
+      load();
+    } catch (cause) { setError(errorText(cause, 'Could not switch to that one.')) }
+    finally { setBusy(false) }
   };
 
   const remove = async (setup: CallSetup) => {
@@ -422,10 +444,21 @@ export function CallSetupsScreen() {
                 </div>
               </div>
             </div>
-            {canManage && <div className="row">
-              <input className="switch" type="checkbox" checked={s.enabled} onChange={() => void toggle(s)}/>
-              <Button small variant="outline" onClick={() => void remove(s)}><Trash2 size={14}/></Button>
-            </div>}
+            <div className="row">
+              {s.direction === 'INBOUND'
+                // Exclusive, so "on" means this is the one answering —
+                // turning it off would just leave nothing on this channel,
+                // which is worse than not offering the control at all.
+                // Switching is picking a different one, not flipping this
+                // one's own switch.
+                ? (s.enabled
+                  ? <Badge tone="success">{t('Answering now')}</Badge>
+                  : <Button small variant="outline" disabled={busy} onClick={() => void switchInbound(s)}>
+                      {t('Switch to this one')}</Button>)
+                : <input className="switch" type="checkbox" checked={s.enabled}
+                    onChange={() => void toggle(s)}/>}
+              {canManage && <Button small variant="outline" onClick={() => void remove(s)}><Trash2 size={14}/></Button>}
+            </div>
           </div>)}</div>}
     {creating && <Modal title={t('Create a call setup')} onClose={() => setCreating(false)}>
       <Field label="Name" value={form.name} onChange={v => setForm({...form, name: v})} placeholder="Incoming calls"/>
