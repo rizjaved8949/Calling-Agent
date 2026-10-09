@@ -246,6 +246,11 @@ function RegisterCompany({onClose, onRegistered}: {
 // One company
 // ---------------------------------------------------------------------------
 
+/** What `channel_readiness` returns: a list, and the key is `connected`. */
+type ChannelReadiness = {
+  id?: string; label: string; connected: boolean; missing?: string[]; required?: string[];
+};
+
 type Detail = {
   company: Record<string, any>;
   numbers: Record<string, any>[];
@@ -391,20 +396,18 @@ export function AdminCompanyDetail() {
 
       <Section title="What they have connected"
         help="Read from their own credentials. No secret is shown — only whether it is set.">
-        {Object.entries(company.channels ?? {}).map(([key, value]) => {
-          const channel = value as {label?: string; ready?: boolean; missing?: string[]};
-          return <div className="list-row" key={key}>
+        {(company.channels ?? []).map((channel: ChannelReadiness, index: number) =>
+          <div className="list-row" key={channel.id ?? index}>
             <div className="list-row-main">
-              <strong>{channel.label ?? key}</strong>
-              {!channel.ready && channel.missing?.length
+              <strong>{channel.label}</strong>
+              {!channel.connected && channel.missing?.length
                 ? <div className="small muted">still needs: {channel.missing.join(', ')}</div>
                 : null}
             </div>
-            <Badge tone={channel.ready ? 'success' : 'warning'}>
-              {channel.ready ? 'ready' : 'incomplete'}
+            <Badge tone={channel.connected ? 'success' : 'warning'}>
+              {channel.connected ? 'connected' : 'incomplete'}
             </Badge>
-          </div>;
-        })}
+          </div>)}
       </Section>
     </div>
     {confirmDialog}

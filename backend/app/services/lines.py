@@ -80,6 +80,16 @@ async def _verify_meta(t: Tenant) -> str:
 
 
 async def _verify_infobip(t: Tenant) -> str:
+    """Ask Infobip for the account's calls configurations.
+
+    Not the account balance, which was the obvious choice and the wrong one:
+    `/account/1/balance` is absent on some regional hosts (it 404s on
+    api-pk2), so a perfectly good key looked refused. Configurations is the
+    better question anyway — reaching it proves the key carries the Voice
+    scope, which is the permission a call actually needs, and the response
+    lets us check the configuration id the company entered really exists
+    rather than discovering it is a typo on the first call.
+    """
     missing = [
         name for name, value in (
             ("API key", t.infobip_api_key),
@@ -89,26 +99,48 @@ async def _verify_infobip(t: Tenant) -> str:
     ]
     if missing:
         raise _Refused("Missing: " + ", ".join(missing) + ".")
-    base = t.infobip_base_url.strip().rstrip("/")
-    if not base.startswith("http"):
-        base = "https://" + base
+    base = normalise_base_url(t.infobip_base_url)
+    headers = {"Authorization": f"App {t.infobip_api_key}", "Accept": "application/json"}
+
     try:
         async with httpx.AsyncClient(timeout=20) as client:
-            response = await client.get(
-                f"{base}/account/1/balance",
-                headers={"Authorization": f"App {t.infobip_api_key}", "Accept": "application/json"},
-            )
+            response = await client.get(f"{base}/calls/1/configurations", headers=headers)
+            if response.status_code == 404:
+                # An account without the Calls API enabled at all. The balance
+                # endpoint at least distinguishes a bad key from a bad URL.
+                response = await client.get(f"{base}/account/1/balance", headers=headers)
+                if response.status_code < 300:
+                    raise _Refused(
+                        "The key works, but this account has no Voice/Calls API. "
+                        "Enable Voice in Infobip, or use a key with the Calls scope."
+                    )
     except httpx.HTTPError as exc:
         raise _Refused(f"Could not reach Infobip at {base}: {exc}") from exc
-    body = _json(response)
+
     if response.status_code in {401, 403}:
-        raise _Refused("Infobip rejected the API key (check it has the Voice/Calls scope).")
+        raise _Refused(
+            "Infobip rejected the API key. Check it is correct and has the Voice/Calls scope."
+        )
+    body = _json(response)
     if response.status_code >= 400:
         text = ((body.get("requestError") or {}).get("serviceException") or {}).get("text")
         raise _Refused(f"Infobip refused the request: {text or response.status_code}")
-    balance = body.get("balance")
-    currency = body.get("currency") or ""
-    return "Infobip account reached" + (f", balance {balance} {currency}" if balance is not None else "") + "."
+
+    configurations = body.get("results") or []
+    names = {str(c.get("id")): str(c.get("name") or "") for c in configurations if isinstance(c, dict)}
+    chosen = t.infobip_calls_configuration_id.strip()
+    if chosen and chosen not in names:
+        raise _Refused(
+            f"Infobip has no calls configuration with id {chosen!r}. "
+            + (f"Available: {', '.join(sorted(names)) }." if names
+               else "This account has none configured yet.")
+        )
+    if chosen:
+        return f"Infobip reached, using the {names[chosen] or chosen!r} calls configuration."
+    return (
+        f"Infobip reached, {len(configurations)} calls "
+        f"configuration{'' if len(configurations) == 1 else 's'} available."
+    )
 
 
 def _json(response: httpx.Response) -> dict:

@@ -266,3 +266,126 @@ def test_routing_falls_back_when_the_numbers_table_is_unreadable(
     ))
     assert resolved.agent is None
     assert resolved.resolved_by == "company"
+
+
+# ---------------------------------------------------------------------------
+# What the provider is actually asked
+# ---------------------------------------------------------------------------
+
+def _infobip_tenant():
+    from app.models.tenant import Tenant
+
+    return Tenant(
+        phoneNumberId="900", name="Acme", infobipApiKey="key-12345678",
+        infobipBaseUrl="https://6zpl9e.api-pk2.infobip.com",
+        infobipPhoneNumber="+923001112222",
+    )
+
+
+class _Reply:
+    """The shape of the one httpx response `_verify_infobip` reads."""
+
+    def __init__(self, status: int, body: dict):
+        self.status_code = status
+        self._body = body
+        self.text = str(body)
+
+    def json(self):
+        return self._body
+
+
+def _fake_client(routes: dict[str, _Reply], seen: list[str] | None = None):
+    import contextlib
+
+    class Client:
+        def __init__(self, **_kw): ...
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_exc): return False
+        async def get(self, url, headers=None, params=None):
+            path = url.split(".com", 1)[-1]
+            if seen is not None:
+                seen.append(path)
+            return routes.get(path, _Reply(404, {"requestError": {}}))
+
+    return Client
+
+
+def test_infobip_is_asked_for_calls_configurations_not_the_balance(monkeypatch):
+    """`/account/1/balance` 404s on some regional hosts, so a good key looked
+    refused. Voice scope is the permission a call needs, so that is the ask."""
+    import asyncio
+
+    from app.services import lines
+
+    seen: list[str] = []
+    monkeypatch.setattr(lines.httpx, "AsyncClient", _fake_client({
+        "/calls/1/configurations": _Reply(200, {"results": [
+            {"id": "cfg-1", "name": "Voice Agent"},
+        ]}),
+    }, seen))
+
+    detail = asyncio.run(lines._verify_infobip(_infobip_tenant()))
+    assert seen == ["/calls/1/configurations"], "the balance endpoint was asked again"
+    assert "1 calls configuration" in detail
+
+
+def test_a_configuration_id_that_does_not_exist_is_named(monkeypatch):
+    import asyncio
+
+    from app.services import lines
+
+    tenant = _infobip_tenant()
+    tenant.infobip_calls_configuration_id = "typo-id"
+    monkeypatch.setattr(lines.httpx, "AsyncClient", _fake_client({
+        "/calls/1/configurations": _Reply(200, {"results": [
+            {"id": "cfg-1", "name": "Voice Agent"},
+        ]}),
+    }))
+
+    with pytest.raises(lines._Refused) as refused:
+        asyncio.run(lines._verify_infobip(tenant))
+    assert "typo-id" in str(refused.value) and "cfg-1" in str(refused.value)
+
+
+def test_a_chosen_configuration_is_confirmed_by_name(monkeypatch):
+    import asyncio
+
+    from app.services import lines
+
+    tenant = _infobip_tenant()
+    tenant.infobip_calls_configuration_id = "cfg-1"
+    monkeypatch.setattr(lines.httpx, "AsyncClient", _fake_client({
+        "/calls/1/configurations": _Reply(200, {"results": [
+            {"id": "cfg-1", "name": "Voice Agent"},
+        ]}),
+    }))
+    assert "Voice Agent" in asyncio.run(lines._verify_infobip(tenant))
+
+
+def test_an_account_without_the_calls_api_says_so(monkeypatch):
+    """A working key on an account with no Voice product is a different
+    problem from a wrong key, and has a different fix."""
+    import asyncio
+
+    from app.services import lines
+
+    monkeypatch.setattr(lines.httpx, "AsyncClient", _fake_client({
+        "/calls/1/configurations": _Reply(404, {"requestError": {}}),
+        "/account/1/balance": _Reply(200, {"balance": 10.0, "currency": "EUR"}),
+    }))
+    with pytest.raises(lines._Refused) as refused:
+        asyncio.run(lines._verify_infobip(_infobip_tenant()))
+    assert "no Voice/Calls API" in str(refused.value)
+
+
+def test_a_rejected_key_is_reported_as_a_key_problem(monkeypatch):
+    import asyncio
+
+    from app.services import lines
+
+    monkeypatch.setattr(lines.httpx, "AsyncClient", _fake_client({
+        "/calls/1/configurations": _Reply(401, {}),
+    }))
+    with pytest.raises(lines._Refused) as refused:
+        asyncio.run(lines._verify_infobip(_infobip_tenant()))
+    assert "rejected the API key" in str(refused.value)
