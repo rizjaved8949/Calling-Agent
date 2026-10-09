@@ -71,8 +71,17 @@ class PhoneNumber(BaseModel):
 
     inbound_agent_id: str = Field(default="", alias="inboundAgentId")
     outbound_agent_id: str = Field(default="", alias="outboundAgentId")
-    # WhatsApp only: answer inbound text messages with the inbound agent.
+    # WhatsApp only: reply to inbound text messages without a person.
     auto_reply: bool = Field(default=False, alias="autoReply")
+    # Which agent writes those replies. Empty falls back to the inbound agent,
+    # which is what every number did before this could be chosen separately —
+    # the one that answers the phone is a reasonable default for the one that
+    # answers a message, but a company that wants a different voice in writing
+    # can now say so.
+    message_agent_id: str = Field(default="", alias="messageAgentId")
+    # And which documents those replies come from, when it should not be the
+    # agent's own. Same shape as a call setup's override.
+    message_knowledge_base_id: str = Field(default="", alias="messageKnowledgeBaseId")
 
     # Run on the platform owner's credentials from the server environment.
     # Only honoured for a company the operator has allowed it for.
@@ -133,6 +142,8 @@ class PhoneNumber(BaseModel):
             "inboundAgentId": self.inbound_agent_id or None,
             "outboundAgentId": self.outbound_agent_id or None,
             "autoReply": self.auto_reply,
+            "messageAgentId": self.message_agent_id or None,
+            "messageKnowledgeBaseId": self.message_knowledge_base_id or None,
             "usePlatformCredentials": self.use_platform_credentials,
             "createdAt": self.created_at,
             "webhookUrl": webhook or None,
@@ -184,6 +195,9 @@ class NumberUpdate(BaseModel):
     inbound_agent_id: str | None = Field(default=None, alias="inboundAgentId")
     outbound_agent_id: str | None = Field(default=None, alias="outboundAgentId")
     auto_reply: bool | None = Field(default=None, alias="autoReply")
+    message_agent_id: str | None = Field(default=None, alias="messageAgentId")
+    message_knowledge_base_id: str | None = Field(
+        default=None, alias="messageKnowledgeBaseId")
     use_platform_credentials: bool | None = Field(default=None, alias="usePlatformCredentials")
 
     meta_phone_number_id: str | None = Field(default=None, alias="metaPhoneNumberId")

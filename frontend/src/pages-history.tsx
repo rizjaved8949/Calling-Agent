@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import {Badge, Button, Empty, PageHead} from './app';
 import {useApp} from './app-context';
+import {anythingInFlight, useSettlingPoll} from './lib/settling';
 import {ErrorNote, Loading, RecordingPlayer, Select, TextInput, useConfirm} from './ui';
 import {
   CHANNEL_LABEL, RECORDING_LABEL, RESOLVED_BY_LABEL, STATUS_LABEL, callsApi, formatBytes,
@@ -147,8 +148,8 @@ export function CallHistoryScreen() {
     return () => clearTimeout(timer);
   }, [search]);
 
-  const load = useCallback(async () => {
-    setBusy(true);
+  const load = useCallback(async ({quiet = false} = {}) => {
+    if (!quiet) setBusy(true);
     try {
       const body = await callsApi.list({
         limit: PAGE, offset: page * PAGE,
@@ -158,12 +159,21 @@ export function CallHistoryScreen() {
       setCalls(body.calls);
       setError('');
     } catch (cause) {
-      setError(errorText(cause, 'Could not load your calls.'));
-    } finally {setBusy(false)}
+      // A failed background refresh keeps what is on screen rather than
+      // replacing a readable list with an error.
+      if (!quiet) setError(errorText(cause, 'Could not load your calls.'));
+    } finally {if (!quiet) setBusy(false)}
   }, [page, status, channel, query]);
 
   useEffect(() => {void load()}, [load]);
   useEffect(() => {numbersApi.list().then(b => setLines(b.numbers)).catch(() => {})}, []);
+
+  // A call on this page can still be happening. Its row is rewritten on the
+  // server as it rings, is answered and ends, and without this the screen
+  // keeps showing "ringing" for a call that finished ten minutes ago — with
+  // nothing to suggest a reload would help. Stops as soon as everything here
+  // has settled, so an old page of calls polls nothing.
+  useSettlingPoll(anythingInFlight(calls), () => load({quiet: true}));
 
   // Direction and number are filtered here rather than server-side: the API
   // takes neither, and both are cheap on a page of fifty.
@@ -406,6 +416,11 @@ export function CallDetailScreen() {
     }
   }, [id]);
   useEffect(() => {void load()}, [load]);
+
+  // This is the page somebody sits on while the call they just placed is
+  // still running, so it is the one that most has to be right: the status,
+  // the duration and the recording all arrive after the page did.
+  useSettlingPoll(anythingInFlight(call ? [call] : []), load);
 
   if (!call) return <div className="stack">
     <PageHead eyebrow="Calls" title="Call"/>

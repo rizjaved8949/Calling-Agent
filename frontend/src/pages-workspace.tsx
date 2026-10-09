@@ -10,13 +10,14 @@ import React, {useCallback, useEffect, useRef, useState} from 'react';
 import {Link, useNavigate, useParams, useLocation} from 'react-router-dom';
 import {
   Mic2, BrainCircuit, Route as RouteIcon, Users, Plus, Trash2, Upload, FileText,
-  PhoneIncoming, PhoneOutgoing, Loader2, Copy, CheckCircle2, X, Star,
+  PhoneIncoming, PhoneOutgoing, MessageSquare, Loader2, Copy, CheckCircle2, X, Star,
 } from 'lucide-react';
 import {Badge, Button, Empty, Field, PageHead} from './app';
 import {useApp} from './app-context';
 import {
-  workspace, type Agent, type KnowledgeBase, type KbDocument, type CallSetup,
-  type Channel, type TeamMember, type TeamInvite, type WireLookupCall,
+  workspace, CHANNEL_CHOICES, type Agent, type AgentChannel, type KnowledgeBase,
+  type KbDocument, type CallSetup, type Channel, type TeamMember, type TeamInvite,
+  type WireLookupCall,
 } from './lib/api/workspace';
 import {friendlyAuthError, loginWithEmail, acceptInvite, peekInvite} from './lib/api/auth';
 import {setAuthToken} from './lib/api';
@@ -59,6 +60,9 @@ export function AgentsScreen() {
   const [agents, setAgents] = useState<Agent[] | null>(null);
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
+  // Asked at creation rather than left to a default, because "what is this
+  // agent for" is the one thing the person already knows when they press New.
+  const [channels, setChannels] = useState<AgentChannel[]>(['inbound_call']);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -70,9 +74,9 @@ export function AgentsScreen() {
   const create = async () => {
     setBusy(true);
     try {
-      const agent = await workspace.createAgent({name: name.trim()});
+      const agent = await workspace.createAgent({name: name.trim(), channels});
       toast(t('Agent created'));
-      setCreating(false); setName('');
+      setCreating(false); setName(''); setChannels(['inbound_call']);
       navigate('/app/agents/' + agent.id);
     } catch (cause) {
       setError(errorText(cause, 'Could not create that agent.'));
@@ -92,8 +96,12 @@ export function AgentsScreen() {
             {agents.map(agent => <Link to={'/app/agents/' + agent.id} className="card lift" key={agent.id}>
               <div className="row between">
                 <div className="brand-mark" style={{width: 45, height: 45, fontSize: '1rem'}}>{agent.name.slice(0, 1) || '?'}</div>
-                <div className="row" style={{gap: 6}}>
-                  <Badge>{agent.mode === 'inbound' ? t('inbound') : agent.mode === 'outbound' ? t('outbound') : t('in + out')}</Badge>
+                <div className="row wrap" style={{gap: 6}}>
+                  {/* What it does, in the words of the thing itself — a
+                      "both" badge never told anyone whether it writes. */}
+                  {agent.answersCalls && <Badge><PhoneIncoming size={11}/> {t('answers')}</Badge>}
+                  {agent.placesCalls && <Badge><PhoneOutgoing size={11}/> {t('calls out')}</Badge>}
+                  {agent.handlesMessages && <Badge><MessageSquare size={11}/> {t('messages')}</Badge>}
                   <Badge tone={agent.status === 'live' ? 'success' : agent.status === 'paused' ? 'warning' : ''}>{t(agent.status)}</Badge>
                 </div>
               </div>
@@ -102,13 +110,33 @@ export function AgentsScreen() {
             </Link>)}
           </div>}
     {creating && <Modal title={t('Create an agent')} onClose={() => setCreating(false)}>
-      <Field label="Agent name" value={name} onChange={setName} placeholder="Support, Sales, Admissions…"/>
-      {error && <div className="notice danger">{error}</div>}
-      <div className="row" style={{justifyContent: 'flex-end', marginTop: 20}}>
-        <Button variant="secondary" onClick={() => setCreating(false)}>{t('Cancel')}</Button>
-        <Button disabled={!name.trim() || busy} onClick={create}>
-          {busy ? <Loader2 size={15} className="spin"/> : t('Create agent')}
-        </Button>
+      <div className="stack">
+        <Field label="Agent name" value={name} onChange={setName}
+          placeholder="Support, Sales, Admissions…"/>
+        <div className="field">
+          <label>{t('What should it do?')}</label>
+          <div className="help" style={{marginBottom: 4}}>
+            Tick everything it should handle — you can change this later.
+          </div>
+          {CHANNEL_CHOICES.map(choice => {
+            const on = channels.includes(choice.id);
+            return <label key={choice.id} className="check">
+              <input type="checkbox" checked={on}
+                onChange={e => setChannels(old => e.target.checked
+                  ? [...old, choice.id]
+                  : old.filter(c => c !== choice.id))}/>
+              <span><b>{choice.label}</b>
+                <div className="help">{choice.help}</div></span>
+            </label>;
+          })}
+        </div>
+        {error && <div className="notice danger">{error}</div>}
+        <div className="row" style={{justifyContent: 'flex-end'}}>
+          <Button variant="secondary" onClick={() => setCreating(false)}>{t('Cancel')}</Button>
+          <Button disabled={!name.trim() || channels.length === 0 || busy} onClick={create}>
+            {busy ? <Loader2 size={15} className="spin"/> : t('Create agent')}
+          </Button>
+        </div>
       </div>
     </Modal>}
   </div>;
@@ -210,24 +238,38 @@ export function AgentDetailScreen() {
     {error && <ErrorNote error={error}/>}
 
     <div className="card">
-      <Section title="Where this agent is used"
-        help="A number's inbound slot takes an inbound or both agent; its outbound slot takes an outbound or both.">
-        <div className="field-grid">
-          <Select label="What it does" value={draft.mode ?? 'both'} disabled={!canManage || saving}
-            onChange={v => void setNow({mode: v as Agent['mode']})}
-            help="Change this and the Numbers page offers it in that slot.">
-            <option value="inbound">Answers calls that come in</option>
-            <option value="outbound">Makes calls out</option>
-            <option value="both">Both</option>
-          </Select>
-          <Select label="Status" value={draft.status} disabled={!canManage || saving}
-            onChange={v => void setNow({status: v as Agent['status']})}
-            help="Paused or draft agents can still be assigned, but you will see the status on the number.">
-            <option value="draft">Draft — still being written</option>
-            <option value="live">Live — ready to take calls</option>
-            <option value="paused">Paused</option>
-          </Select>
+      <Section title="What this agent does"
+        help="Tick everything it should handle. The Numbers page then offers it for those jobs and no others.">
+        <div className="stack" style={{gap: 10}}>
+          {CHANNEL_CHOICES.map(choice => {
+            const on = (draft.channels ?? []).includes(choice.id);
+            // The last one cannot be unticked: an agent that does nothing
+            // cannot be put anywhere, and the screen would not say why.
+            const last = on && (draft.channels ?? []).length === 1;
+            return <label key={choice.id}
+              className={'check' + (!canManage || saving || last ? ' disabled' : '')}>
+              <input type="checkbox" checked={on} disabled={!canManage || saving || last}
+                onChange={e => {
+                  const next = e.target.checked
+                    ? [...(draft.channels ?? []), choice.id]
+                    : (draft.channels ?? []).filter(c => c !== choice.id);
+                  void setNow({channels: next});
+                }}/>
+              <span><b>{choice.label}</b>
+                <div className="help">
+                  {choice.help}
+                  {last && ' An agent has to do at least one thing.'}
+                </div></span>
+            </label>;
+          })}
         </div>
+        <Select label="Status" value={draft.status} disabled={!canManage || saving}
+          onChange={v => void setNow({status: v as Agent['status']})}
+          help="Paused or draft agents can still be assigned, but you will see the status on the number.">
+          <option value="draft">Draft — still being written</option>
+          <option value="live">Live — ready to take calls</option>
+          <option value="paused">Paused</option>
+        </Select>
         <div className="row wrap">
           <Link className="button outline small" to="/app/numbers">
             <RouteIcon size={14}/> Put this agent on a number

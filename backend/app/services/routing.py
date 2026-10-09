@@ -70,17 +70,24 @@ async def resolve(
         if agent is None:
             log.warning("tenant %s: agent %s was named but does not exist", tenant_id, agent_id)
 
-    # 2. The agent assigned to the number the call is on, for this direction.
+    # 2. The agent assigned to the number this is happening on, for this job.
+    #    A WhatsApp message has its own slot: a company can answer the phone
+    #    with one agent and write with another, and until it chooses a second
+    #    one the agent that answers the phone does both.
     line_id = line_id or tenant.line_id
     if agent is None and line_id:
         from ..repositories import numbers as number_repo
 
         number = await number_repo.get_safe(tenant_id, line_id)
         if number is not None:
-            assigned = (
-                number.inbound_agent_id if direction is Direction.INBOUND
-                else number.outbound_agent_id
-            )
+            if channel is Channel.WHATSAPP_MESSAGE:
+                assigned = number.message_agent_id or number.inbound_agent_id
+                if number.message_knowledge_base_id:
+                    kb_id, resolved_by = number.message_knowledge_base_id, "number"
+            elif direction is Direction.INBOUND:
+                assigned = number.inbound_agent_id
+            else:
+                assigned = number.outbound_agent_id
             if assigned:
                 agent = await agent_repo.get_agent(tenant_id, assigned)
                 if agent is not None:
@@ -95,8 +102,8 @@ async def resolve(
             if setup.knowledge_base_id:
                 kb_id, resolved_by = setup.knowledge_base_id, "setup"
 
-    # 3. A knowledge base named on the request beats the agent's own default,
-    #    but not one the setup pinned to this line.
+    # 4. A knowledge base named on the request beats the agent's own default,
+    #    but not one pinned to this line.
     if not kb_id and knowledge_base_id:
         kb_id, resolved_by = knowledge_base_id, "explicit"
 

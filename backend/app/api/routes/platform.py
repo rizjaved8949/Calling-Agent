@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Header, status
+from fastapi import APIRouter, Depends, Header, status
 from pydantic import BaseModel, Field
 
 from ...errors import AppError, NotFound, Unauthorized
 from ...security import superadmin
+from ...security.rate_limit import check_expensive
 from ..deps import AdminOnly
 
 log = logging.getLogger(__name__)
@@ -203,6 +204,31 @@ class EngineUpdate(BaseModel):
     # shows a key back, so a blank field cannot be read as "clear it". An empty
     # string is deliberate and does clear it.
     apiKey: str | None = None
+
+
+class EngineCheck(BaseModel):
+    model_config = {"populate_by_name": True, "extra": "forbid"}
+
+    engine: str = Field(default="gemini", max_length=40)
+    model: str = Field(default="", max_length=120)
+    #: Blank tests whatever is already in force, so the stored key can be
+    #: checked without being typed out again.
+    apiKey: str = ""
+
+
+@data_router.post("/engine/test", dependencies=[Depends(check_expensive)])
+async def test_engine(_: AdminOnly, payload: EngineCheck) -> dict:
+    """Ask the provider whether this key and model actually work.
+
+    Saving proves nothing: a typo, a revoked key or a retired model name all
+    store perfectly well and are discovered by the first caller, who hears
+    silence.
+    """
+    from ...services import platform_settings
+
+    return await platform_settings.check(
+        engine=payload.engine, model=payload.model, api_key=payload.apiKey,
+    )
 
 
 @data_router.get("/engine")

@@ -11,7 +11,7 @@
 import {useCallback, useEffect, useState} from 'react';
 import {Link, useNavigate, useParams} from 'react-router-dom';
 import {
-  ArrowLeft, Building2, CheckCircle2, CircleAlert, Copy, Cpu, KeyRound, Loader2, Plus,
+  ArrowLeft, Building2, CheckCircle2, CircleAlert, Copy, Cpu, KeyRound, Loader2, Plug, Plus,
   RefreshCw, ServerCog, Trash2, XCircle,
 } from 'lucide-react';
 import {Badge, Button, Empty, PageHead} from './app';
@@ -663,6 +663,8 @@ export function AdminHealth() {
 type Engine = {
   id: string; label: string; supported: boolean;
   defaultModel: string; keyHint: string; note: string;
+  /** Suggestions, not a limit — the model field takes anything typed. */
+  models?: string[];
 };
 
 type EngineState = {
@@ -686,6 +688,8 @@ export function AdminEngine() {
   const [apiKey, setApiKey] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [tested, setTested] = useState<{ok: boolean; detail: string} | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -724,6 +728,19 @@ export function AdminEngine() {
     } finally {setBusy(false)}
   };
 
+  const test = async () => {
+    setTesting(true); setTested(null);
+    try {
+      // The key being typed if there is one, otherwise whatever is stored —
+      // so "is the key I saved last month still good?" is answerable.
+      setTested(await request<{ok: boolean; detail: string}>('/api/platform/engine/test', {
+        method: 'POST', body: {engine, model, apiKey},
+      }));
+    } catch (cause) {
+      setTested({ok: false, detail: errorText(cause, 'The provider could not be reached.')});
+    } finally {setTesting(false)}
+  };
+
   return <div className="stack">
     <PageHead eyebrow="Platform" title="Speech engine"
       description="What carries every conversation on the platform, for every company."/>
@@ -753,28 +770,51 @@ export function AdminEngine() {
         </div>}
       </Section>
 
-      <Section title="Model and key">
+      <Section title="Model and key"
+        help="Whatever you put here is what every call runs on. The server's own environment variable is only used for a field you leave empty.">
         <TextInput label="Model" value={model} onChange={setModel}
           placeholder={chosen?.defaultModel ?? ''}
-          help="Leave empty to use the build's default. A model name the provider does not know fails every call, so change it deliberately."/>
+          help="Type any model name the provider accepts. A name it does not know fails every call, so use Test below before you rely on it."/>
+        {(chosen?.models ?? []).length > 0 && <div className="row wrap" style={{gap: 7}}>
+          <span className="small muted">Known to work:</span>
+          {(chosen?.models ?? []).map(name => <button key={name} type="button"
+            className={'button small ' + (model === name ? '' : 'outline')}
+            onClick={() => setModel(name)}>{name}</button>)}
+        </div>}
+
         <TextInput label="API key" value={apiKey} onChange={setApiKey} type="password"
-          placeholder={state.keySet ? 'leave empty to keep the current key' : chosen?.keyHint}
+          saved={state.keySet ? state.keyHint.replace(/^…/, '') : undefined}
+          placeholder={chosen?.keyHint}
           help={state.keySet
-            ? `A key ending ${state.keyHint} is in place, from ${state.source}. Type a new one to replace it.`
+            ? `In use, from ${state.source}. Type a new one to replace it.`
             : chosen?.keyHint}/>
-        <div className="row">
+
+        <div className="row wrap">
           <Button disabled={!dirty || busy} onClick={() => void save()}>
             {busy ? <><Loader2 size={15} className="spin"/> Saving…</> : 'Save'}
           </Button>
+          {/* Saving proves nothing: a typo, a revoked key or a retired model
+              name all store perfectly and are found out by the first caller,
+              who hears silence. */}
+          <Button variant="outline" disabled={testing} onClick={() => void test()}>
+            {testing ? <><Loader2 size={15} className="spin"/> Asking the provider…</>
+              : <><Plug size={15}/> Test this key</>}
+          </Button>
           {dirty && <span className="small muted">Takes effect on the next call.</span>}
         </div>
+
+        {tested && <div className={'notice small ' + (tested.ok ? '' : 'danger')}>
+          {tested.ok ? <CheckCircle2 size={14}/> : <XCircle size={14}/>} {tested.detail}
+        </div>}
       </Section>
 
       <Section title="Where this is stored"
         help="Beside the super admin's own record, with the same protection. The key is sealed before it is written and no screen or endpoint can read it back.">
         <p className="small muted" style={{margin: 0}}>
-          Leaving the key empty here falls back to the server's own environment
-          variable, which is how this platform ran before this screen existed.
+          A field left empty falls back to the server's environment variable,
+          which is how this platform ran before this screen existed. Anything
+          you set here wins over it, for every company that has no key of its
+          own.
         </p>
       </Section>
     </div>

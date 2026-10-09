@@ -42,6 +42,14 @@ ENGINES: list[dict[str, Any]] = [
         "label": "Google Gemini Live",
         "supported": True,
         "defaultModel": "gemini-3.1-flash-live-preview",
+        # Suggestions, not a limit: the field takes any name the provider
+        # accepts, and Test says whether it does.
+        # Each one asked for and confirmed against the API, because a
+        # suggestion that fails is worse than no suggestion.
+        "models": [
+            "gemini-3.1-flash-live-preview",
+            "gemini-2.5-flash-native-audio-preview-09-2025",
+        ],
         "keyHint": "A Google AI Studio key, beginning AIza…",
         "note": "The only engine this build speaks. Native speech to speech.",
     },
@@ -145,3 +153,54 @@ async def save(*, engine: str, model: str, api_key: str | None) -> dict[str, Any
     invalidate()
     log.info("platform engine set to %s (%s)", stored["engine"], stored["model"])
     return await public()
+
+
+async def check(*, engine: str, model: str, api_key: str = "") -> dict[str, Any]:
+    """Ask the provider whether this key and model actually work.
+
+    Saving a key proves nothing — a typo, a revoked key or a model name the
+    provider has retired all store perfectly well and are only discovered by
+    the first caller, who hears silence. This is the difference between
+    "saved" and "working", and it is worth one round trip to know.
+
+    `api_key` empty means "whatever is in force", so the operator can test
+    what is already stored without typing it again.
+    """
+    engine = (engine or "").strip().lower()
+    if engine not in SUPPORTED:
+        return {
+            "ok": False,
+            "detail": f"{engine or 'That engine'} is not implemented in this build, "
+                      "so there is nothing to test against.",
+        }
+
+    live = await current()
+    key = (api_key or "").strip() or live["apiKey"]
+    name = (model or "").strip() or live["model"]
+    if not key:
+        return {"ok": False, "detail": "No API key is set, here or in the environment."}
+
+    try:
+        from google import genai
+
+        client = genai.Client(api_key=key)
+        # The cheapest question that still proves the key is accepted and the
+        # model exists: ask the provider to describe the model itself.
+        described = await client.aio.models.get(model=name)
+    except Exception as exc:  # noqa: BLE001 — the provider's refusal is the answer
+        detail = str(exc)
+        lowered = detail.lower()
+        if "api key" in lowered or "api_key" in lowered or "unauthenticated" in lowered:
+            said = "The provider rejected this API key."
+        elif "not found" in lowered or "404" in lowered:
+            said = f"The provider does not know a model called {name!r}."
+        else:
+            said = detail[:200]
+        log.warning("engine check failed (%s): %s", type(exc).__name__, detail[:200])
+        return {"ok": False, "detail": said}
+
+    return {
+        "ok": True,
+        "detail": f"The key works and {name} is available.",
+        "model": getattr(described, "name", name) or name,
+    }

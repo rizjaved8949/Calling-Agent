@@ -42,14 +42,39 @@ export type KbDocument = {
 };
 
 export type AgentStatus = 'draft' | 'live' | 'paused';
+/** The call direction. Legacy: `channels` is the fuller answer. */
 export type AgentMode = 'inbound' | 'outbound' | 'both';
 export type SpeakingPace = 'slow' | 'natural' | 'brisk';
+
+/**
+ * Each separate job an agent can be given.
+ *
+ * Calls were the only thing an agent did, so "inbound / outbound / both" was
+ * the whole question. Replying to WhatsApp messages is a third job and not a
+ * direction, so it does not fit on that axis.
+ */
+export type AgentChannel = 'inbound_call' | 'outbound_call' | 'whatsapp_message';
+
+/** The label and the explanation a form shows beside each one. */
+export const CHANNEL_CHOICES: {id: AgentChannel; label: string; help: string}[] = [
+  {id: 'inbound_call', label: 'Answer calls that come in',
+   help: 'Someone rings your number and this agent picks up.'},
+  {id: 'outbound_call', label: 'Make calls out',
+   help: 'You or a campaign tell it who to ring, and it does the talking.'},
+  {id: 'whatsapp_message', label: 'Reply to WhatsApp messages',
+   help: 'It writes back to messages on your WhatsApp number, without anyone typing.'},
+];
 
 export type Agent = {
   id: string;
   name: string;
   status: AgentStatus;
   mode: AgentMode;
+  channels: AgentChannel[];
+  /** The same three facts, said plainly, because that is what screens ask. */
+  answersCalls: boolean;
+  placesCalls: boolean;
+  handlesMessages: boolean;
   greeting: string;
   roleDescription: string;
   language: string;

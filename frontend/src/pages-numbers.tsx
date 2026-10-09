@@ -16,7 +16,7 @@ import {
 import {Badge, Button, Empty, PageHead} from './app';
 import {CopyField, Loading, Modal, Section, TextInput, useConfirm} from './ui';
 import {useApp} from './app-context';
-import {workspace, type Agent} from './lib/api/workspace';
+import {workspace, type Agent, type KnowledgeBase} from './lib/api/workspace';
 import {
   numbers as api, numberName, type NumberCreate, type NumberKind, type NumberMode, type PhoneNumber,
 } from './lib/api/numbers';
@@ -238,8 +238,8 @@ function ConnectNumber({existing, platformAllowed, onDone, onClose}: {
 // One number
 // ---------------------------------------------------------------------------
 
-function NumberCard({n, agents, canManage, onChange, onEdit, onRemove}: {
-  n: PhoneNumber; agents: Agent[]; canManage: boolean;
+function NumberCard({n, agents, bases, canManage, onChange, onEdit, onRemove}: {
+  n: PhoneNumber; agents: Agent[]; bases: KnowledgeBase[]; canManage: boolean;
   onChange: (n: PhoneNumber | null) => void; onEdit: () => void; onRemove: () => void;
 }) {
   const {toast} = useApp();
@@ -268,7 +268,7 @@ function NumberCard({n, agents, canManage, onChange, onEdit, onRemove}: {
 
   const agentPicker = (slot: 'inbound' | 'outbound') => {
     const value = (slot === 'inbound' ? n.inboundAgentId : n.outboundAgentId) ?? '';
-    const fits = agents.filter(a => a.mode === 'both' || a.mode === slot);
+    const fits = agents.filter(a => slot === 'inbound' ? a.answersCalls : a.placesCalls);
     return <div className="field">
       <label>{slot === 'inbound' ? <><PhoneIncoming size={13}/> Answers incoming calls</> : <><PhoneOutgoing size={13}/> Makes outgoing calls</>}</label>
       <select className="select" value={value} disabled={!canManage || !verified || Boolean(busy)}
@@ -311,18 +311,105 @@ function NumberCard({n, agents, canManage, onChange, onEdit, onRemove}: {
           {outbound && agentPicker('outbound')}
         </div>}
 
-    {wa && verified && inbound && <label className={'check' + (canManage ? '' : ' disabled')}>
-      <input type="checkbox" checked={n.autoReply} disabled={!canManage || Boolean(busy)}
-        onChange={e => void patch('auto', {autoReply: e.target.checked})}/>
-      <span><b>Answer WhatsApp messages too</b>
-        <div className="help">The inbound agent replies to text messages on this number,
-          not just calls. Needs a knowledge base, or it has nothing to answer from.</div></span>
-    </label>}
+    {wa && verified && <MessageReplies n={n} agents={agents} bases={bases}
+      canManage={canManage} busy={Boolean(busy)} onPatch={patch}/>}
 
     {n.webhookUrl && <details>
       <summary className="small muted" style={{cursor: 'pointer'}}>Provider setup ({wa ? 'Meta webhook' : 'Infobip events URL'})</summary>
       <div style={{marginTop: 10}}><CopyField label={wa ? 'Callback URL' : 'Call events URL'} value={n.webhookUrl}/></div>
     </details>}
+  </div>;
+}
+
+
+/**
+ * Who answers a WhatsApp message, and from what.
+ *
+ * This was one tickbox saying "answer messages too", with no way to see or
+ * choose which agent would do it or what it would answer from — so switching
+ * it on was an act of faith, and the only way to find out was to message the
+ * number yourself. Everything the reply depends on is named here.
+ */
+function MessageReplies({n, agents, bases, canManage, busy, onPatch}: {
+  n: PhoneNumber; agents: Agent[]; bases: KnowledgeBase[];
+  canManage: boolean; busy: boolean;
+  onPatch: (what: string, body: Parameters<typeof api.update>[1]) => Promise<void>;
+}) {
+  const writers = agents.filter(a => a.handlesMessages);
+  // Empty means "the one that answers calls", which is what this number did
+  // before the slot existed.
+  const falling = agents.find(a => a.id === n.inboundAgentId);
+  const chosen = agents.find(a => a.id === n.messageAgentId) ?? falling;
+  const on = n.autoReply;
+  const disabled = !canManage || busy;
+
+  return <div className="stack" style={{gap: 12}}>
+    <label className={'check' + (canManage ? '' : ' disabled')}>
+      <input type="checkbox" checked={on} disabled={disabled}
+        onChange={e => void onPatch('auto', {autoReply: e.target.checked})}/>
+      <span><b>Reply to WhatsApp messages automatically</b>
+        <div className="help">
+          When somebody messages this number, an agent writes back without
+          waiting for a person. Leave it off and messages wait for you in
+          Messages.
+        </div></span>
+    </label>
+
+    {on && <div className="side-panel stack" style={{gap: 14}}>
+      {writers.length === 0 && !falling && <div className="notice warning small">
+        No agent is set up to reply to messages, so nothing will be sent.
+        <Link to="/app/agents"> Create one</Link> and tick “Reply to WhatsApp
+        messages”, or choose an inbound agent above.
+      </div>}
+
+      <div className="field-grid">
+        <div className="field">
+          <label>Who writes the replies</label>
+          <select className="select" value={n.messageAgentId ?? ''} disabled={disabled}
+            onChange={e => void onPatch('msgagent', {messageAgentId: e.target.value})}>
+            <option value="">
+              {falling ? `Same as the call agent (${falling.name})` : 'Nobody chosen yet'}
+            </option>
+            {writers.map(a => <option key={a.id} value={a.id}>
+              {a.name}{a.status !== 'live' ? ` (${a.status})` : ''}
+            </option>)}
+          </select>
+          <div className="help">
+            Only agents set up to reply to messages are listed.
+          </div>
+        </div>
+
+        <div className="field">
+          <label>What it answers from</label>
+          <select className="select" value={n.messageKnowledgeBaseId ?? ''} disabled={disabled}
+            onChange={e => void onPatch('msgkb', {messageKnowledgeBaseId: e.target.value})}>
+            <option value="">
+              {chosen?.knowledgeBaseId
+                ? `The agent’s own (${bases.find(b => b.id === chosen.knowledgeBaseId)?.name ?? 'chosen on the agent'})`
+                : 'Everything this company has uploaded'}
+            </option>
+            {bases.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+          </select>
+          <div className="help">
+            Use this to answer messages from different documents than calls.
+          </div>
+        </div>
+      </div>
+
+      {/* Said plainly, because the chain behind it has three steps and
+          nobody should have to hold them in their head. */}
+      <div className="notice small">
+        {chosen
+          ? <>A message to this number is answered by <b>{chosen.name}</b>
+            {n.messageKnowledgeBaseId
+              ? <>, from <b>{bases.find(b => b.id === n.messageKnowledgeBaseId)?.name ?? 'the chosen documents'}</b>.</>
+              : chosen.knowledgeBaseId
+                ? <>, from <b>{bases.find(b => b.id === chosen.knowledgeBaseId)?.name ?? 'its own knowledge base'}</b>.</>
+                : <>, from everything this company has uploaded.</>}
+          </>
+          : <>No agent will answer, so nothing is sent. Choose one above.</>}
+      </div>
+    </div>}
   </div>;
 }
 
@@ -334,6 +421,7 @@ export function NumbersScreen() {
   const {canManage} = useApp();
   const [list, setList] = useState<PhoneNumber[] | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [bases, setBases] = useState<KnowledgeBase[]>([]);
   const [platformAllowed, setPlatformAllowed] = useState(false);
   const [error, setError] = useState('');
   const [editing, setEditing] = useState<PhoneNumber | 'new' | null>(null);
@@ -343,6 +431,9 @@ export function NumbersScreen() {
     api.list().then(b => {setList(b.numbers); setPlatformAllowed(b.platformCredentialsAllowed)})
       .catch(c => setError(errorText(c, 'Could not load your numbers.')));
     workspace.agents().then(b => setAgents(b.agents)).catch(() => {});
+    // Offered when choosing what a WhatsApp reply answers from. A failure
+    // here costs that one dropdown its named options, never the page.
+    workspace.knowledgeBases().then(b => setBases(b.knowledgeBases)).catch(() => {});
   }, []);
   useEffect(() => {load()}, [load]);
 
@@ -378,7 +469,7 @@ export function NumbersScreen() {
             body="Buy a number in Infobip or get a WhatsApp Business number from Meta, then connect it here with its credentials."
             action={canManage ? <Button onClick={() => setEditing('new')}>Connect a number</Button> : undefined}/>
         : <div className="stack">{(list ?? []).map(n =>
-            <NumberCard key={n.id} n={n} agents={agents} canManage={canManage}
+            <NumberCard key={n.id} n={n} agents={agents} bases={bases} canManage={canManage}
               onChange={next => replace(n.id, next)} onEdit={() => setEditing(n)}
               onRemove={() => confirm({
                 title: 'Disconnect this number?',

@@ -16,7 +16,7 @@ import logging
 from fastapi import APIRouter, Depends, status
 
 from ...errors import AppError, Conflict, NotFound
-from ...models.agent import AgentMode
+from ...models.agent import AgentChannel
 from ...models.number import (
     CREDENTIAL_FIELDS,
     SECRET_ATTRS,
@@ -147,24 +147,30 @@ async def _require(tenant: Tenant, number_id: str) -> PhoneNumber:
 
 async def _check_assignment(tenant: Tenant, number: PhoneNumber) -> None:
     """An agent can only be put on a verified number, in a slot it fits."""
-    for slot, agent_id, allowed, enabled in (
-        ("inbound", number.inbound_agent_id, {AgentMode.INBOUND, AgentMode.BOTH}, number.takes_inbound),
-        ("outbound", number.outbound_agent_id, {AgentMode.OUTBOUND, AgentMode.BOTH}, number.makes_outbound),
-    ):
+    slots = (
+        (number.inbound_agent_id, "answer calls", AgentChannel.INBOUND_CALL,
+         number.takes_inbound, "This number is not set up for inbound calls. Change its mode first."),
+        (number.outbound_agent_id, "make calls", AgentChannel.OUTBOUND_CALL,
+         number.makes_outbound, "This number is not set up for outbound calls. Change its mode first."),
+        (number.message_agent_id, "reply to WhatsApp messages", AgentChannel.WHATSAPP_MESSAGE,
+         number.kind is NumberKind.WHATSAPP, "Only a WhatsApp number can reply to messages."),
+    )
+    for agent_id, job, needed, enabled, refusal in slots:
         if not agent_id:
             continue
         if not number.verified:
             raise AppError(409, "Verify this number before giving it an agent.",
                            code="number_not_verified")
         if not enabled:
-            raise AppError(422, f"This number is not set up for {slot} calls. Change its mode first.",
-                           code="mode_mismatch")
+            raise AppError(422, refusal, code="mode_mismatch")
         agent = await agent_repo.get_agent(tenant.phone_number_id, agent_id)
         if agent is None:
             raise AppError(422, "That agent does not exist.", code="no_such_agent")
-        if agent.mode not in allowed:
+        if needed not in agent.channels:
             raise AppError(
-                422, f"{agent.name} is an {agent.mode.value}-only agent and cannot take {slot} calls.",
+                422,
+                f"{agent.name} is not set up to {job}. Edit the agent and switch "
+                f"that on, or choose a different one.",
                 code="agent_mode_mismatch",
             )
 
@@ -178,6 +184,9 @@ async def clear_agent(tenant_id: str, agent_id: str) -> None:
             changed = True
         if number.outbound_agent_id == agent_id:
             number.outbound_agent_id = ""
+            changed = True
+        if number.message_agent_id == agent_id:
+            number.message_agent_id = ""
             changed = True
         if changed:
             await repo.save(number)

@@ -16,7 +16,7 @@ import time
 import uuid
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .call import Channel
 
@@ -61,12 +61,68 @@ class KnowledgeBaseUpdate(BaseModel):
 
 
 class AgentMode(str, Enum):
-    """What the agent is for. A number's inbound slot takes an inbound or
-    both agent; its outbound slot takes an outbound or both agent."""
+    """What the agent is for, as far as *calls* go. A number's inbound slot
+    takes an inbound or both agent; its outbound slot takes an outbound or
+    both agent.
+
+    Kept because every stored row has one and the number slots are written in
+    its terms. `AgentChannel` is the fuller answer and the one to read when
+    deciding what an agent may be used for; this stays in step with it.
+    """
 
     INBOUND = "inbound"
     OUTBOUND = "outbound"
     BOTH = "both"
+
+
+class AgentChannel(str, Enum):
+    """Each separate job an agent can be given.
+
+    Calls were the only thing an agent did, so "inbound / outbound / both" was
+    the whole question. Answering WhatsApp messages is a third job and not a
+    direction — an agent can reply to messages without ever taking a call —
+    so it does not fit on that axis and gets its own.
+    """
+
+    INBOUND_CALL = "inbound_call"
+    OUTBOUND_CALL = "outbound_call"
+    WHATSAPP_MESSAGE = "whatsapp_message"
+
+
+#: The call channels, in the order a form should offer them.
+CALL_CHANNELS = (AgentChannel.INBOUND_CALL, AgentChannel.OUTBOUND_CALL)
+
+
+def channels_from_mode(mode: AgentMode) -> list[AgentChannel]:
+    """What an agent stored before channels existed is able to do.
+
+    Messages are deliberately not included: an agent built when the only
+    choice was a call direction never had anyone decide it should answer
+    WhatsApp, and switching that on for every existing agent on upgrade would
+    be this release answering a company's messages without being asked.
+    """
+    if mode is AgentMode.INBOUND:
+        return [AgentChannel.INBOUND_CALL]
+    if mode is AgentMode.OUTBOUND:
+        return [AgentChannel.OUTBOUND_CALL]
+    return [AgentChannel.INBOUND_CALL, AgentChannel.OUTBOUND_CALL]
+
+
+def mode_from_channels(channels: list[AgentChannel]) -> AgentMode:
+    """The call direction implied by a set of channels.
+
+    A messages-only agent has no call direction at all. It reports `inbound`,
+    which is the harmless legacy value — nothing picks an agent for a call by
+    mode any more, it is filtered on channels, so this only has to be a value
+    the column accepts.
+    """
+    takes = AgentChannel.INBOUND_CALL in channels
+    makes = AgentChannel.OUTBOUND_CALL in channels
+    if takes and makes:
+        return AgentMode.BOTH
+    if makes:
+        return AgentMode.OUTBOUND
+    return AgentMode.INBOUND
 
 
 class SpeakingPace(str, Enum):
@@ -105,6 +161,9 @@ class Agent(BaseModel):
     name: str = ""
     status: AgentStatus = AgentStatus.DRAFT
     mode: AgentMode = AgentMode.BOTH
+    #: Every job this agent may be given. Empty on a row written before this
+    #: existed, which `_fill_channels` reads from `mode` instead.
+    channels: list[AgentChannel] = Field(default_factory=list)
 
     # ---- What it says ----------------------------------------------------
     greeting: str = ""
@@ -122,8 +181,48 @@ class Agent(BaseModel):
 
     created_at: float = Field(default_factory=time.time, alias="createdAt")
 
+    @model_validator(mode="after")
+    def _fill_channels(self) -> "Agent":
+        """Keep `channels` and `mode` saying the same thing.
+
+        A row stored before channels existed has none, and its `mode` is the
+        only record of what it was for. A row that has them is the newer
+        truth, and `mode` is brought into line behind it.
+        """
+        if not self.channels:
+            object.__setattr__(self, "channels", channels_from_mode(self.mode))
+        else:
+            # De-duplicate and put them in a stable order, so two agents with
+            # the same abilities compare equal and a form cannot store
+            # ["outbound_call", "outbound_call"].
+            ordered = [c for c in AgentChannel if c in set(self.channels)]
+            object.__setattr__(self, "channels", ordered)
+            object.__setattr__(self, "mode", mode_from_channels(ordered))
+        return self
+
+    # ---- What it is allowed to be used for ------------------------------
+
+    @property
+    def answers_calls(self) -> bool:
+        return AgentChannel.INBOUND_CALL in self.channels
+
+    @property
+    def places_calls(self) -> bool:
+        return AgentChannel.OUTBOUND_CALL in self.channels
+
+    @property
+    def handles_messages(self) -> bool:
+        return AgentChannel.WHATSAPP_MESSAGE in self.channels
+
     def public(self) -> dict:
-        return self.model_dump(by_alias=True, mode="json")
+        body = self.model_dump(by_alias=True, mode="json")
+        # Said plainly as well as as a list, because every screen that shows
+        # an agent asks one of these three questions and not "what is in the
+        # array".
+        body["answersCalls"] = self.answers_calls
+        body["placesCalls"] = self.places_calls
+        body["handlesMessages"] = self.handles_messages
+        return body
 
 
 class AgentCreate(BaseModel):
@@ -140,6 +239,9 @@ class AgentCreate(BaseModel):
     knowledge_base_id: str = Field(default="", alias="knowledgeBaseId")
     status: AgentStatus = AgentStatus.DRAFT
     mode: AgentMode = AgentMode.BOTH
+    #: Preferred over `mode`. Left empty, `mode` decides, so an older client
+    #: keeps working unchanged.
+    channels: list[AgentChannel] = Field(default_factory=list)
 
 
 class AgentUpdate(BaseModel):
@@ -156,6 +258,7 @@ class AgentUpdate(BaseModel):
     knowledge_base_id: str | None = Field(default=None, alias="knowledgeBaseId")
     status: AgentStatus | None = None
     mode: AgentMode | None = None
+    channels: list[AgentChannel] | None = None
 
 
 class Direction(str, Enum):

@@ -23,6 +23,9 @@ export type PhoneNumber = {
   inboundAgentId: string | null;
   outboundAgentId: string | null;
   autoReply: boolean;
+  /** WhatsApp only: who writes the replies, and what they answer from. */
+  messageAgentId: string | null;
+  messageKnowledgeBaseId: string | null;
   usePlatformCredentials: boolean;
   createdAt: number;
   webhookUrl: string | null;
@@ -64,6 +67,8 @@ export type NumberPatch = NumberCredentials & {
   inboundAgentId?: string;
   outboundAgentId?: string;
   autoReply?: boolean;
+  messageAgentId?: string;
+  messageKnowledgeBaseId?: string;
   usePlatformCredentials?: boolean;
 };
 
