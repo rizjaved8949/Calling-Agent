@@ -166,10 +166,19 @@ export function MessagesScreen() {
   };
 
   const remove = (message: WireMessage) => confirm({
-    title: 'Delete from your log?',
-    body: <>This removes the message from your own history only. WhatsApp has no
-      way to unsend it, so <b>{message.counterparty}</b> still has their copy.</>,
-    confirmLabel: 'Delete from log',
+    title: 'Delete this message?',
+    body: <>
+      <p style={{margin: '0 0 10px'}}>
+        It disappears from this workspace — for you and for everyone on your team.
+      </p>
+      <p style={{margin: 0}}>
+        <b>It stays on {message.counterparty}&rsquo;s phone.</b> WhatsApp gives
+        businesses no way to unsend, so &ldquo;delete for everyone&rdquo; is not
+        something this or any other business tool can actually do. Anyone telling
+        you otherwise is deleting their own copy too.
+      </p>
+    </>,
+    confirmLabel: 'Delete for my team',
     onConfirm: async () => {
       await messagesApi.remove(message.id);
       setMessages(old => (old ?? []).filter(m => m.id !== message.id));
@@ -177,10 +186,18 @@ export function MessagesScreen() {
   });
 
   const removeThread = (which: Thread) => confirm({
-    title: `Delete this conversation?`,
-    body: <>All {which.messages.length} messages with <b>{which.number}</b> are removed
-      from your log. The other person keeps their copies.</>,
-    confirmLabel: 'Delete conversation',
+    title: 'Delete this conversation?',
+    body: <>
+      <p style={{margin: '0 0 10px'}}>
+        All {which.messages.length} messages with <b>{which.number}</b> are removed
+        from this workspace, for everyone on your team.
+      </p>
+      <p style={{margin: 0}}>
+        Their own copy of the conversation is untouched — WhatsApp gives
+        businesses no way to delete a message from someone else&rsquo;s phone.
+      </p>
+    </>,
+    confirmLabel: 'Delete for my team',
     onConfirm: async () => {
       for (const message of which.messages) await messagesApi.remove(message.id);
       setMessages(old => (old ?? []).filter(m => m.counterparty !== which.number));
@@ -278,7 +295,8 @@ export function MessagesScreen() {
                     {newDay && <span className="chat-day">{dayLabel(message.createdAt)}</span>}
                     <div className={'chat-bubble ' + (message.direction === 'OUTBOUND' ? 'out' : 'in')}>
                       <div className="chat-bubble-tools">
-                        <button className="icon-btn" title="Delete from your log"
+                        <button className="icon-btn" aria-label="Delete this message"
+                          title="Delete from this workspace (it stays on their phone)"
                           onClick={() => remove(message)}><Trash2 size={13}/></button>
                       </div>
                       {message.templateName && <div className="small muted">

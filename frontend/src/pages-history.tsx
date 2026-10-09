@@ -47,6 +47,37 @@ function HandledBy({call}: {call: WireCall}) {
 // The list
 // ---------------------------------------------------------------------------
 
+/**
+ * A transcript, read as the conversation it was.
+ *
+ * Stored as "who: what" lines, which in a <pre> is a wall of text where the
+ * speakers are impossible to separate at a glance — the thing you are reading
+ * it for. Each turn becomes its own bubble, the caller on one side and the
+ * agent on the other, so a long call can be skimmed.
+ */
+function Transcript({text}: {text: string}) {
+  const turns = text.split('\n').map(line => {
+    const at = line.indexOf(':');
+    const who = at > 0 ? line.slice(0, at).trim().toLowerCase() : '';
+    const known = who === 'agent' || who === 'caller' || who === 'system';
+    return {
+      who: known ? who : 'agent',
+      text: known ? line.slice(at + 1).trim() : line.trim(),
+    };
+  }).filter(turn => turn.text);
+
+  if (turns.length === 0) return <p className="muted small">Nothing was said.</p>;
+
+  return <div className="transcript-turns">
+    {turns.map((turn, index) => turn.who === 'system'
+      ? <div className="transcript-note" key={index}>{turn.text}</div>
+      : <div className={'transcript-turn ' + turn.who} key={index}>
+          <span className="transcript-who">{turn.who === 'agent' ? 'Agent' : 'Caller'}</span>
+          <p>{turn.text}</p>
+        </div>)}
+  </div>;
+}
+
 /** Buttons inside a clickable row must not also open the row. */
 const stop = (event: React.MouseEvent) => event.stopPropagation();
 
@@ -441,12 +472,21 @@ export function CallDetailScreen() {
         </div>
 
         <div className="card stack">
-          <h2>What was said</h2>
+          <div className="row between">
+            <h2 style={{margin: 0}}>What was said</h2>
+            {call.transcript && <Button small variant="outline"
+              onClick={() => {
+                void navigator.clipboard?.writeText(call.transcript ?? '');
+                toast('Transcript copied');
+              }}>Copy</Button>}
+          </div>
           {call.summary && <div className="notice">{call.summary}</div>}
           {call.transcript
-            ? <pre className="transcript">{call.transcript}</pre>
+            ? <Transcript text={call.transcript}/>
             : <Empty icon={FileText} title="No transcript"
-                body="A transcript is kept for calls the agent handled. A call a person took in the browser has none."/>}
+                body={call.durationSeconds
+                  ? 'This call was not transcribed. A call a person took in the browser has no transcript, since no model was listening.'
+                  : 'Nobody spoke on this call, so there is nothing to transcribe.'}/>}
         </div>
       </div>
 

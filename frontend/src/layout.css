@@ -256,3 +256,47 @@
 .row-link:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
 /* Buttons inside the row keep their own hit area and stop the row's click. */
 .row-link .icon-btn:hover { background: var(--card); }
+
+/* --- A transcript, read as a conversation --------------------------------
+   Stored as "who: what" lines. In a <pre> that is a wall of text where the
+   two speakers are impossible to separate at a glance, which is the one thing
+   you are reading it for. */
+.transcript-turns {
+  display: flex; flex-direction: column; gap: 10px;
+  max-height: 520px; overflow: auto;
+  padding: 16px; background: var(--surface); border-radius: 12px;
+}
+.transcript-turn { max-width: 78%; padding: 10px 14px; border-radius: 14px; background: var(--card); }
+.transcript-turn.agent { align-self: flex-start; }
+.transcript-turn.caller {
+  align-self: flex-end;
+  background: color-mix(in oklch, var(--accent) 14%, var(--card));
+}
+.transcript-who {
+  display: block; font-size: .66rem; font-weight: 800; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--muted); margin-bottom: 3px;
+}
+.transcript-turn p { margin: 0; font-size: .88rem; line-height: 1.6; overflow-wrap: anywhere; }
+.transcript-note {
+  align-self: center; font-size: .72rem; color: var(--muted);
+  background: var(--card); padding: 4px 12px; border-radius: 100px;
+}
+
+/* The per-message delete was invisible until hover, which on a touch screen
+   means invisible full stop. Dimmed rather than hidden. */
+.chat-bubble-tools { opacity: .35; }
+.chat-bubble:hover .chat-bubble-tools,
+.chat-bubble:focus-within .chat-bubble-tools { opacity: 1; }
+@media (hover: none) { .chat-bubble-tools { opacity: .6; } }
+
+/* A bubble's own text must not run under the delete button. */
+.chat-bubble { padding-inline-end: 30px; }
+
+/* The recording player is the point of the call page, so it reads as a panel
+   rather than another line of text. */
+.player { gap: 16px; padding: 14px 16px; }
+.player-button { width: 46px; height: 46px; }
+
+/* Long numbers and ids in a two-column detail list wrap instead of pushing
+   the card wider than its grid cell. */
+.split .card .row.between > span:last-child { min-width: 0; }

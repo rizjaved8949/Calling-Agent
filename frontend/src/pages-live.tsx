@@ -7,7 +7,8 @@
  */
 import {useCallback, useEffect, useRef, useState} from 'react';
 import {Headphones, Loader2, PhoneCall, PhoneOff} from 'lucide-react';
-import {Badge, Button, Empty, Field, PageHead} from './app';
+import {Badge, Button, Empty, PageHead} from './app';
+import {Link} from 'react-router-dom';
 import {useApp} from './app-context';
 import {api} from './lib/api';
 import {joinCallAsOperator, type OperatorCall} from './lib/operator';
@@ -93,26 +94,44 @@ function PlaceCall({onPlaced}: {onPlaced: () => void}) {
   };
 
   return <div className="card stack">
-    <strong>{t('Have the agent call someone')}</strong>
-    <div className="row" style={{alignItems: 'flex-end', flexWrap: 'wrap', gap: 10}}>
-      <div style={{flex: '1 1 220px'}}>
-        <Field label="Number" value={number} onChange={setNumber}
-          placeholder="03001112222"
-          help="A local number is expanded using your country code."/>
+    <div>
+      <strong>{t('Have the agent call someone')}</strong>
+      <div className="help">{t('Your agent does the talking. To speak yourself, use the Dialer.')}</div>
+    </div>
+    {/* Two fields of comparable weight, then the actions. The number field used
+        to take the whole width and push the picker and the button into a
+        corner, which made the choice of number look like an afterthought. */}
+    <div className="field-grid">
+      <div className="field">
+        <label>{t('Number to call')}</label>
+        <input className="input" value={number} inputMode="tel" disabled={Boolean(busy)}
+          placeholder="03001112222" onChange={e => setNumber(e.target.value)}
+          onKeyDown={e => {if (e.key === 'Enter') void call()}}/>
+        <div className="help">{t('A local number is expanded using your country code.')}</div>
       </div>
-      <select className="select" style={{width: 'auto'}} value={lineId} disabled={Boolean(busy) || !lines.length}
-        onChange={e => setLineId(e.target.value)} aria-label={t('Call from')}>
-        {lines.length === 0 && <option value="">{t('No number with an outbound agent')}</option>}
-        {lines.map(l => <option key={l.id} value={l.id}>{l.kind === 'whatsapp' ? 'WhatsApp · ' : 'Phone · '}{numberName(l)}</option>)}
-      </select>
-      <Button onClick={() => void call()} disabled={Boolean(busy)}>
+      <div className="field">
+        <label>{t('Call from')}</label>
+        <select className="select" value={lineId} disabled={Boolean(busy) || !lines.length}
+          onChange={e => setLineId(e.target.value)}>
+          {lines.length === 0 && <option value="">{t('No number with an outbound agent')}</option>}
+          {lines.map(l => <option key={l.id} value={l.id}>{l.kind === 'whatsapp' ? 'WhatsApp · ' : 'Phone · '}{numberName(l)}</option>)}
+        </select>
+        <div className="help">
+          {lines.length === 0
+            ? <Link to="/app/numbers">{t('Give a verified number an outbound agent →')}</Link>
+            : t('The agent assigned to this number answers for it.')}
+        </div>
+      </div>
+    </div>
+    <div className="row wrap">
+      <Button onClick={() => void call()} disabled={Boolean(busy) || !number.trim() || !line}>
         {busy === 'call'
           ? <><Loader2 size={14} className="spin"/> {t('Calling…')}</>
           : <><PhoneCall size={14}/> {t('Call')}</>}
       </Button>
       {channel === 'WHATSAPP_CALL' && <Button variant="outline" disabled={Boolean(busy)}
         onClick={() => void askPermission()}>
-        {busy === 'permission' ? t('Asking…') : t('Ask permission')}
+        {busy === 'permission' ? t('Asking…') : t('Ask permission first')}
       </Button>}
     </div>
     {channel === 'WHATSAPP_CALL' && <p className="small muted">

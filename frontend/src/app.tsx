@@ -233,8 +233,12 @@ function Shell({children,platform=false}:{children:React.ReactNode;platform?:boo
     <div className={'mobile-backdrop '+(open?'show':'')} onClick={()=>setOpen(false)}/>
     <aside className={'sidebar '+(open?'open':'')} style={collapsed?{width:76}:undefined}>
       <Link to={home} className="brand"><span className="brand-mark"><Activity size={21}/></span>{!collapsed&&(platform?'platform':'calling agent')}</Link>
-      {!collapsed&&!platform&&role!=='staff'&&<select className="workspace" aria-label={t('Workspace')} value={org.id} onChange={e=>setOrg(e.target.value)} disabled={readOnly}>{store.organizations.filter(x=>store.memberships.some(m=>m.orgId===x.id&&m.userId===session?.userId)).map(x=><option value={x.id} key={x.id}>{x.name}</option>)}</select>}
-      {!collapsed&&!platform&&role==='staff'&&<div className="workspace-label">{org.name}</div>}
+      {/* A real account belongs to exactly one company, so there is nothing to
+          pick between — and the picker rendered empty, because memberships only
+          exist in the demo store. The company is named instead. */}
+      {!collapsed&&!platform&&(LIVE||role==='staff'
+        ?<div className="workspace-label" title={org.name}>{org.name}</div>
+        :<select className="workspace" aria-label={t('Workspace')} value={org.id} onChange={e=>setOrg(e.target.value)} disabled={readOnly}>{store.organizations.filter(x=>store.memberships.some(m=>m.orgId===x.id&&m.userId===session?.userId)).map(x=><option value={x.id} key={x.id}>{x.name}</option>)}</select>)}
       <nav>{nav.map(([group,links])=><div key={group}><div className="nav-group">{!collapsed&&t(group)}</div>{links.map(([Icon,label,path])=><NavLink className={({isActive})=>'nav-link '+(isActive?'active':'')} to={path} key={path} title={t(label)} onClick={()=>setOpen(false)}><Icon size={18}/>{!collapsed&&t(label)}</NavLink>)}</div>)}</nav>
       <div className="sidebar-bottom"><button className="ghost-btn" onClick={()=>setCollapsed(x=>!x)} title={t('Collapse sidebar')}><ChevronDown size={16} style={{transform:'rotate(90deg)'}}/>{!collapsed&&t('Collapse sidebar')}</button></div>
     </aside>
