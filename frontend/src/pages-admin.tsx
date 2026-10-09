@@ -11,7 +11,7 @@
 import {useCallback, useEffect, useState} from 'react';
 import {Link, useNavigate, useParams} from 'react-router-dom';
 import {
-  ArrowLeft, Building2, CheckCircle2, CircleAlert, Copy, KeyRound, Loader2, Plus,
+  ArrowLeft, Building2, CheckCircle2, CircleAlert, Copy, Cpu, KeyRound, Loader2, Plus,
   RefreshCw, ServerCog, Trash2, XCircle,
 } from 'lucide-react';
 import {Badge, Button, Empty, PageHead} from './app';
@@ -71,6 +71,43 @@ function Stat({label, value, hint}: {label: string; value: React.ReactNode; hint
 // ---------------------------------------------------------------------------
 // Companies
 // ---------------------------------------------------------------------------
+
+/**
+ * The speech engine, said on the page the operator actually lands on.
+ *
+ * The settings have their own screen, but a key that is missing or wrong makes
+ * every call on the platform connect and then sit in silence — and an operator
+ * who does not know the screen exists has no way to tell that is what happened.
+ * So the state is stated here, with the way to change it, rather than waiting
+ * to be looked for.
+ */
+function EngineBanner() {
+  const [state, setState] = useState<EngineState | null>(null);
+  useEffect(() => {
+    void request<EngineState>('/api/platform/engine')
+      .then(setState)
+      .catch(() => setState(null));
+  }, []);
+  if (!state) return null;
+
+  const wrong = !state.keySet || !state.supported;
+  return <div className={'card row between wrap' + (wrong ? ' notice danger' : '')} style={{gap: 14}}>
+    <div className="row" style={{gap: 12}}>
+      <Cpu size={20} color={wrong ? 'var(--destructive)' : 'var(--accent)'}/>
+      <div>
+        <strong>Speech engine — {state.engine}{state.model ? ` · ${state.model}` : ''}</strong>
+        <div className="small muted">
+          {state.keySet
+            ? `API key ${state.keyHint} in place, from ${state.source}. Every company uses this unless it has its own.`
+            : 'No API key is set. Calls will connect and then stay silent until one is.'}
+        </div>
+      </div>
+    </div>
+    <Button variant={wrong ? '' : 'outline'} to="/platform/engine">
+      {state.keySet ? 'Change the key or model' : 'Set the API key'}
+    </Button>
+  </div>;
+}
 
 export function AdminCompanies() {
   const {toast} = useApp();
@@ -138,6 +175,8 @@ export function AdminCompanies() {
       </div>}/>
 
     {error && <ErrorNote error={error} onRetry={() => void load()}/>}
+
+    <EngineBanner/>
 
     {totals && <div className="stat-grid">
       <Stat label="Companies" value={totals.companies}/>

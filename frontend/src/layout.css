@@ -91,11 +91,18 @@
    The old modal was one padded box: a long form grew past the viewport and
    took its buttons with it. This splits into a fixed head, a scrolling body
    and a fixed footer. */
+/* The backdrop centres its panel with grid. A grid item taller than the row
+   overflows in both directions and the top goes off-screen with nothing to
+   scroll — which is how the "Edit number" dialog lost its own title on a
+   short window. `safe center` keeps the top edge reachable, the backdrop
+   scrolls, and the panel is measured against the padding it actually sits
+   in rather than the whole viewport. */
+.modal-backdrop { overflow: auto; place-items: safe center; }
 .modal-panel {
   padding: 0;
   display: flex;
   flex-direction: column;
-  max-height: min(88vh, 860px);
+  max-height: min(calc(100dvh - 40px), 860px);
 }
 .modal-head {
   display: flex; justify-content: space-between; align-items: flex-start; gap: 14px;
@@ -357,3 +364,10 @@
   max-width: 68ch;
 }
 .guide-body p:last-of-type { margin-bottom: 4px; }
+
+/* A label that carries a state chip beside it — "Saved" on a write-only
+   secret, which is otherwise indistinguishable from an unfilled field. */
+.field-label {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+}
+.field-label .badge { text-transform: none; }

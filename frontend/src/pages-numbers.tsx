@@ -69,7 +69,10 @@ function ConnectNumber({existing, platformAllowed, onDone, onClose}: {
   const set = (patch: Partial<Draft>) => setD(old => ({...old, ...patch}));
   const wa = d.kind === 'whatsapp';
   const platform = d.usePlatformCredentials;
-  const secretHint = (v: string | null | undefined) => editing && v ? `Saved (${v}). Leave blank to keep it.` : undefined;
+  // A stored secret is never sent back, so the box is empty either way. The
+  // last four characters go on the label as a "Saved" chip instead, because an
+  // empty password field with grey text under it reads as "missing".
+  const saved = (v: string | null | undefined) => editing && v ? v : undefined;
 
   const missing = (): string[] => {
     const need: [string, string][] = [['Phone number', d.phoneNumber]];
@@ -183,6 +186,13 @@ function ConnectNumber({existing, platformAllowed, onDone, onClose}: {
             the credential fields below empty and the server's own are used.</div></span>
       </label>}
 
+      {editing && !platform && <div className="notice small">
+        A credential marked <b>Saved</b> is in place — its box is empty because
+        secrets are encrypted on the way in and cannot be read back out, by this
+        screen or by anyone. Leave a box empty to keep what is stored; type in
+        it only to replace it.
+      </div>}
+
       {!platform && (wa ? <>
         <div className="notice small">In <b>Meta for Developers → your app → WhatsApp → API Setup</b> you will find the first two values. Use a <b>System User</b> token (Business Settings → System users) so it does not expire in 24 hours.</div>
         <div className="field-grid">
@@ -192,12 +202,12 @@ function ConnectNumber({existing, platformAllowed, onDone, onClose}: {
             placeholder="1029384756" help="API Setup → “WhatsApp Business Account ID”."/>
         </div>
         <TextInput label="Access token" required={!editing} type="password" value={d.accessToken} onChange={v => set({accessToken: v})}
-          placeholder="EAAG…" help={secretHint(existing?.credentials.accessToken) ?? 'Permanent System User token with whatsapp_business_messaging and whatsapp_business_management.'}/>
+          placeholder="EAAG…" saved={saved(existing?.credentials.accessToken)} help={'Permanent System User token with whatsapp_business_messaging and whatsapp_business_management.'}/>
         <div className="field-grid">
           <TextInput label="App secret" required={!editing} type="password" value={d.appSecret} onChange={v => set({appSecret: v})}
-            help={secretHint(existing?.credentials.appSecret) ?? 'App settings → Basic → App secret. Used to check every webhook really came from Meta.'}/>
+            saved={saved(existing?.credentials.appSecret)} help={'App settings → Basic → App secret. Used to check every webhook really came from Meta.'}/>
           <TextInput label="Webhook verify token" type="password" value={d.verifyToken} onChange={v => set({verifyToken: v})}
-            help={secretHint(existing?.credentials.verifyToken) ?? 'Any phrase you choose. Type the same one into Meta when you add the callback URL.'}/>
+            saved={saved(existing?.credentials.verifyToken)} help={'Any phrase you choose. Type the same one into Meta when you add the callback URL.'}/>
         </div>
       </> : <>
         <div className="notice small">In the <b>Infobip portal</b>, your base URL and API keys are on the home page (Developers → API keys). The key needs the <b>Voice / Calls</b> scope.</div>
@@ -205,7 +215,8 @@ function ConnectNumber({existing, platformAllowed, onDone, onClose}: {
           <TextInput label="Base URL" required={!editing} value={d.infobipBaseUrl} onChange={v => set({infobipBaseUrl: v})}
             placeholder="xxxxx.api.infobip.com" help="Shown at the top of the Infobip portal home page."/>
           <TextInput label="API key" required={!editing} type="password" value={d.infobipApiKey} onChange={v => set({infobipApiKey: v})}
-            help={secretHint(existing?.credentials.infobipApiKey)}/>
+            saved={saved(existing?.credentials.infobipApiKey)}
+            help="Developers → API keys. Needs the Voice / Calls scope."/>
         </div>
         <TextInput label="Calls configuration ID" value={d.infobipCallsConfigurationId}
           onChange={v => set({infobipCallsConfigurationId: v})}

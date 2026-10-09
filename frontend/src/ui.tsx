@@ -179,7 +179,7 @@ export function Section({title, help, children, action}: {
 }
 
 /** An uncontrolled-feeling text input that does not fight the keyboard. */
-export function TextInput({label, value, onChange, help, placeholder, type = 'text', rows, required, disabled, autoFocus, suffix}: {
+export function TextInput({label, value, onChange, help, placeholder, type = 'text', rows, required, disabled, autoFocus, suffix, saved}: {
   label?: string;
   value: string;
   onChange: (v: string) => void;
@@ -191,13 +191,24 @@ export function TextInput({label, value, onChange, help, placeholder, type = 'te
   disabled?: boolean;
   autoFocus?: boolean;
   suffix?: React.ReactNode;
+  /**
+   * The last few characters of a secret already stored. A write-only field is
+   * empty whether the secret is set or missing, and the two look identical —
+   * so the state is said on the label, where it cannot be mistaken for an
+   * empty box, rather than only in grey help text underneath.
+   */
+  saved?: string;
 }) {
   const shared = {
-    value, placeholder, disabled, required, autoFocus,
+    value, disabled, required, autoFocus,
+    placeholder: saved ? `•••••••• ${saved} — typing replaces it` : placeholder,
     onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => onChange(e.target.value),
   };
   return <div className="field">
-    {label && <label>{label}{required ? ' *' : ''}</label>}
+    {label && <label className="field-label">
+      <span>{label}{required ? ' *' : ''}</span>
+      {saved && <span className="badge success"><Check size={11}/> Saved</span>}
+    </label>}
     {rows
       ? <textarea className="textarea" rows={rows} {...shared}/>
       : suffix
