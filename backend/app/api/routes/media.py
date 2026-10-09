@@ -31,7 +31,7 @@ from ...models.tenant import Tenant
 from ...repositories import calls as call_repo
 from ...repositories import tenants as tenant_repo
 from ...security import playback
-from ...services.agent import live
+from ...services.agent import claims, live
 from ...services.agent.audio_rate import FRAME_BYTES
 
 log = logging.getLogger(__name__)
@@ -96,33 +96,49 @@ async def _pump(socket: WebSocket, out: _Outbound, stop: asyncio.Event) -> None:
 # ---------------------------------------------------------------------------
 
 
-@router.websocket("/infobip/{call_id}")
-async def infobip_media(socket: WebSocket, call_id: str, token: str = Query(default="")):
-    """Infobip's media stream for one call.
+@router.websocket("/infobip")
+async def infobip_media(socket: WebSocket):
+    """The leg the carrier dials for call audio.
 
-    Infobip sends binary frames of linear PCM at the rate configured on the
-    media-streaming configuration, and expects the same back. Anything that is
-    not a binary frame is ignored rather than refused: the carrier occasionally
-    sends a text keepalive, and treating that as a protocol error would drop
-    a live call.
+    One fixed address, because that is what Infobip's saved endpoint
+    configuration holds — it has no way to carry a per-call URL or a token. The
+    call this socket belongs to is therefore claimed from the reservation made
+    just before the leg was dialled; see `services/agent/claims.py`.
+
+    Frames in are 20 ms of 16 kHz PCM16 from the caller, and frames out must be
+    the same shape **and binary only**. A text frame written back makes the
+    carrier hang up — which is how a call that sounded perfectly fine ends two
+    seconds in.
     """
-    tenant = await _authorise(token, call_id)
-    if tenant is None:
-        await socket.close(code=4401)
-        return
-    call = await call_repo.get_call(tenant.phone_number_id, call_id)
-    if call is None:
+    await socket.accept()
+    reserved = claims.claim()
+    if reserved is None:
+        log.warning("a carrier audio socket arrived with no call waiting for it")
         await socket.close(code=4404)
         return
 
-    await socket.accept()
+    call_id, tenant_id = reserved
+    tenant = await tenant_repo.get(tenant_id)
+    call = await call_repo.get_call(tenant_id, call_id) if tenant else None
+    if tenant is None or call is None:
+        log.error("call %s: claimed a socket but the call is gone", call_id)
+        await socket.close(code=4404)
+        return
+
+    # The credentials this call is actually running on, so the agent is built
+    # from the right number's settings.
+    from ...services import lines
+
+    tenant = await lines.tenant_for_call(tenant, call)
+
     out = _Outbound()
     stop = asyncio.Event()
-    log.info("call %s: carrier media socket open", call_id)
+    log.info("call %s: carrier audio socket attached", call_id)
 
     session = await live.start(tenant, call, out, keepalive=True)
     pump = asyncio.create_task(_pump(socket, out, stop))
-    reason = "the carrier closed the socket"
+    reason = "the carrier closed the audio socket"
+    frames = 0
     try:
         while True:
             message = await socket.receive()
@@ -130,12 +146,15 @@ async def infobip_media(socket: WebSocket, call_id: str, token: str = Query(defa
                 break
             data = message.get("bytes")
             if data:
+                frames += 1
                 session.feed_caller(data)
-            # A text frame is a keepalive or a control message; neither is audio.
+            # Text frames are the carrier's own control messages. They name the
+            # websocket child leg rather than the call, so there is nothing in
+            # them worth reading — and nothing may be written back.
     except WebSocketDisconnect:
         pass
     except Exception:  # noqa: BLE001
-        log.exception("call %s: carrier socket failed", call_id)
+        log.exception("call %s: carrier audio socket failed", call_id)
         reason = "the media socket failed"
     finally:
         stop.set()
@@ -145,6 +164,7 @@ async def infobip_media(socket: WebSocket, call_id: str, token: str = Query(defa
         await live.finish(tenant, call_id, reason)
         with contextlib.suppress(Exception):
             await socket.close()
+        log.info("call %s: carrier socket closed, %d frames from the caller", call_id, frames)
 
 
 # ---------------------------------------------------------------------------

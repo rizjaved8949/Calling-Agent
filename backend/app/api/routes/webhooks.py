@@ -543,43 +543,67 @@ def name_of(event: dict[str, Any]) -> str:
     return str(event.get("name") or event.get("type") or "").upper()
 
 
-async def _attach_media(tenant: Tenant, call: Call) -> None:
-    """Put the agent on a SIM call that has just connected.
+async def _bridge_agent(tenant: Tenant, call: Call) -> None:
+    """Put the agent on a SIM call by dialling a websocket leg into it.
 
-    Detached from the webhook for the usual reason — the carrier wants a quick
-    200 and retries anything slower — and silent on failure beyond the log,
-    because there is nowhere to report to and the call row already says what
-    happened.
+    This is how Infobip carries two-way audio to software: a dialog with two
+    legs, the caller and a leg terminating in our socket. `start-media-stream`,
+    which this replaced, is a one-way tap meant for recording — used for the
+    agent it produces a call that connects and then sits in silence, because
+    nothing we send has a path back to the caller.
+
+    Detached from the webhook for the usual reason: the carrier wants a quick
+    200 and retries anything slower. Never raises — there is nowhere to report
+    to, and the call row already says what happened.
     """
-    base = settings.public_base_url.strip().rstrip("/")
-    if not base:
-        log.error("call %s: PUBLIC_BASE_URL is not set, so no media socket exists", call.id)
-        return
-    url = (
-        base.replace("https://", "wss://").replace("http://", "ws://")
-        + f"/api/media/infobip/{call.id}?token="
-        + playback.mint(tenant.phone_number_id, call.id, ttl=4 * 3600)
+    from ...services import lines
+    from ...services.agent import claims
+
+    number = (
+        await number_repo.get_safe(tenant.phone_number_id, tenant.line_id)
+        if tenant.line_id else None
     )
     try:
-        await Infobip(tenant).start_media_stream(call.provider_call_id, url)
-        log.info("call %s: carrier media stream attached", call.id)
-    except Exception:  # noqa: BLE001
-        log.exception("call %s: could not attach the media stream", call.id)
+        if number is None:
+            raise RuntimeError("this call is not on a connected number")
+        config_id = number.infobip_websocket_config_id or await lines.ensure_audio_endpoint(
+            tenant, number
+        )
+        if not config_id:
+            raise RuntimeError("no audio endpoint is registered with the carrier")
+        # Reserved before the leg is dialled: the carrier can open the socket
+        # while this request is still in flight, and a socket with no call
+        # waiting for it is refused.
+        claims.reserve(call.id, tenant.phone_number_id)
+        await Infobip(tenant).bridge_to_websocket(
+            call.provider_call_id,
+            websocket_config_id=config_id,
+            from_number=tenant.infobip_phone_number,
+            record=False,  # the session records both sides itself
+        )
+        log.info("call %s: the agent's audio leg was dialled", call.id)
+    except Exception as exc:  # noqa: BLE001
+        claims.cancel(call.id)
+        log.exception("call %s: could not put the agent on the call", call.id)
+        with contextlib.suppress(Exception):
+            await Infobip(tenant).hangup(call.provider_call_id)
+        await _fail_call(tenant, call, f"the agent could not be connected: {exc}"[:200])
 
 
 async def _answer_inbound(tenant: Tenant, call: Call) -> None:
-    """Answer a SIM call the carrier is offering."""
+    """Take an inbound SIM call, or decline it.
+
+    Answering is not a separate step. Infobip answers the caller by itself the
+    moment the agent's leg connects, so answering first and bridging afterwards
+    only buys the caller a few seconds of silence.
+    """
     if not await _inbound_allowed(tenant):
         log.info("call %s: this number takes no inbound calls, hanging up", call.id)
         with contextlib.suppress(Exception):
             await Infobip(tenant).hangup(call.provider_call_id)
         await _fail_call(tenant, call, "this number is not set up to answer calls")
         return
-    try:
-        await Infobip(tenant).answer(call.provider_call_id)
-        log.info("call %s: answered on the carrier", call.id)
-    except Exception:  # noqa: BLE001
-        log.exception("call %s: could not answer", call.id)
+    await _bridge_agent(tenant, call)
 
 
 async def _handle_infobip(tenant: Tenant, payload: dict[str, Any]) -> None:
@@ -623,11 +647,11 @@ async def _handle_infobip(tenant: Tenant, payload: dict[str, Any]) -> None:
 
         name = str(event.get("name") or event.get("type") or "").upper()
         if name in {"CALL_ESTABLISHED", "CALL_ANSWERED"}:
-            # Established means audio can flow. Attaching the stream here
-            # rather than on RECEIVED is deliberate: a stream started before
-            # the line is up is refused, and the retry lands after the caller
-            # has already heard silence and gone.
-            asyncio.create_task(_attach_media(tenant, call))
+            # On an outbound call this is the person picking up, and the moment
+            # to put the agent on. An inbound call was bridged when it arrived,
+            # and bridging again would add a second agent leg to the same call.
+            if call.direction is Direction.OUTBOUND and live.get(call.id) is None:
+                asyncio.create_task(_bridge_agent(tenant, call))
             call.status = CallStatus.IN_PROGRESS
             call.answered_at = call.answered_at or time.time()
             if call_payload.get("dialogId"):
@@ -644,6 +668,13 @@ async def _handle_infobip(tenant: Tenant, payload: dict[str, Any]) -> None:
                 if call.answered_at
                 else (CallStatus.FAILED if name == "CALL_FAILED" else CallStatus.NO_ANSWER)
             )
+            # A call that died before its audio leg connected must not leave a
+            # reservation behind for the next caller to claim.
+            from ...services.agent import claims
+
+            claims.cancel(call.id)
+            if live.get(call.id) is not None:
+                asyncio.create_task(live.finish(tenant, call.id, "the call ended"))
             reports.schedule_sync(tenant)
 
         await call_repo.save_call(call)

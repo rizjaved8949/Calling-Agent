@@ -21,6 +21,7 @@ import httpx
 from ..config import settings
 from ..errors import AppError, UpstreamError
 from ..models.tenant import Tenant
+from .agent.audio_rate import PHONE_RATE
 
 log = logging.getLogger(__name__)
 
@@ -152,43 +153,102 @@ class Infobip:
         await self._request("POST", f"/calls/1/calls/{provider_call_id}/hangup", json={})
 
     async def answer(self, provider_call_id: str) -> None:
-        """Pick up an inbound call so media can start flowing."""
+        """Pick up an inbound call without bridging anything to it.
+
+        Rarely wanted: `bridge_to_websocket` answers the call as a side effect
+        of the agent's leg connecting, which is the arrangement that actually
+        carries audio. This is here for hanging up politely after answering.
+        """
         await self._request("POST", f"/calls/1/calls/{provider_call_id}/answer", json={})
 
-    async def start_media_stream(self, provider_call_id: str, websocket_url: str) -> None:
-        """Point the call's audio at one of our sockets.
+    # ---- Where the carrier sends this service's audio --------------------
 
-        Started per call rather than configured once, because the URL carries a
-        token scoped to this one call — a single static URL would have to be
-        either unauthenticated or hold a long-lived secret, and this endpoint
-        receives a customer's conversation.
+    async def media_stream_configs(self) -> list[dict[str, Any]]:
+        response = await self._request("GET", "/calls/1/media-stream-configs")
+        body = response.json() or {}
+        return body.get("results") or [] if isinstance(body, dict) else []
 
-        Infobip sends and expects linear PCM16 at the rate given here, which is
-        the rate `CallSession` already works in, so nothing resamples the
-        caller.
+    async def websocket_endpoint_configs(self) -> list[dict[str, Any]]:
+        """The WEBSOCKET_ENDPOINT configs on this account.
+
+        They sit under media-stream-configs beside the recording ones, and the
+        type is the whole difference: WEBSOCKET_ENDPOINT is a leg the carrier
+        *dials into* and talks both ways over, while MEDIA_STREAMING is a
+        one-way copy of the audio. The agent needs the first.
         """
-        await self._request(
+        return [
+            c for c in await self.media_stream_configs()
+            if c.get("type") == "WEBSOCKET_ENDPOINT"
+        ]
+
+    async def create_websocket_endpoint_config(self, name: str, url: str) -> dict[str, Any]:
+        """Register the socket the carrier should dial for call audio.
+
+        Two things the API will not forgive, both learned the hard way:
+        `type` is required and has no default, and `sampleRate` must be a
+        *string* — the number is rejected outright. A rejection here reads as
+        "Required request body is missing or not valid", which names no field
+        and sounds like a malformed request rather than a missing one.
+        """
+        response = await self._request(
             "POST",
-            f"/calls/1/calls/{provider_call_id}/start-media-stream",
+            "/calls/1/media-stream-configs",
             json={
-                "mediaStream": {
-                    "audioProperties": {
-                        "mediaStreamConfigId": None,
-                        "replaceMedia": False,
-                    },
-                },
-                "webSocketEndpointConfig": {
-                    "url": websocket_url,
-                    "sampleRate": 16000,
-                },
+                "type": "WEBSOCKET_ENDPOINT",
+                "name": name,
+                "url": url,
+                "sampleRate": str(PHONE_RATE),
             },
         )
+        return response.json() or {}
 
-    async def stop_media_stream(self, provider_call_id: str) -> None:
+    async def delete_media_stream_config(self, config_id: str) -> None:
         with contextlib.suppress(Exception):
-            await self._request(
-                "POST", f"/calls/1/calls/{provider_call_id}/stop-media-stream", json={}
+            await self._request("DELETE", f"/calls/1/media-stream-configs/{config_id}")
+
+    async def bridge_to_websocket(
+        self,
+        parent_call_id: str,
+        *,
+        websocket_config_id: str,
+        from_number: str = "",
+        record: bool = False,
+        max_seconds: int = 1800,
+    ) -> dict[str, Any]:
+        """Put the agent on this call, by dialling a websocket leg into it.
+
+        This is how Infobip carries two-way audio to software: a *dialog* with
+        two legs — the caller, and a leg that terminates in our websocket. The
+        carrier answers the caller automatically once that second leg connects,
+        so an inbound call needs no explicit answer.
+
+        The obvious-looking alternative, `start-media-stream`, is a one-way tap
+        for recording. Used for the agent it produces a call that connects and
+        then sits in silence, because nothing we send has a path back.
+        """
+        self._require()
+        if not websocket_config_id:
+            raise AppError(
+                409,
+                "This number has no audio endpoint registered with the carrier yet.",
+                code="no_websocket_config",
             )
+        payload: dict[str, Any] = {
+            "parentCallId": parent_call_id,
+            "childCallRequest": {
+                "endpoint": {
+                    "type": "WEBSOCKET",
+                    "websocketEndpointConfigId": websocket_config_id,
+                },
+                "from": (from_number or self.tenant.infobip_phone_number).strip(),
+                "connectTimeout": 30,
+            },
+            "maxDuration": max_seconds,
+        }
+        if record:
+            payload["recording"] = {"recordingType": "AUDIO"}
+        response = await self._request("POST", "/calls/1/dialogs", json=payload)
+        return response.json() or {}
 
     async def dialog_recordings(self, dialog_id: str) -> list[dict]:
         response = await self._request("GET", f"/calls/1/recordings/dialogs/{dialog_id}")

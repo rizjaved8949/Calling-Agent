@@ -91,6 +91,12 @@ class PhoneNumber(BaseModel):
     infobip_calls_configuration_id: str = Field(
         default="", alias="infobipCallsConfigurationId"
     )
+    # Registered in the company's own Infobip account the first time a call is
+    # bridged, and remembered here. Not a credential and not something a
+    # company types: it names the socket this deployment listens on.
+    infobip_websocket_config_id: str = Field(
+        default="", alias="infobipWebsocketConfigId"
+    )
 
     created_at: float = Field(default_factory=time.time, alias="createdAt")
 
@@ -140,6 +146,7 @@ class PhoneNumber(BaseModel):
                 "infobipBaseUrl": self.infobip_base_url or None,
                 "infobipCallsConfigurationId": self.infobip_calls_configuration_id or None,
             },
+            "audioEndpointRegistered": bool(self.infobip_websocket_config_id),
         }
 
 

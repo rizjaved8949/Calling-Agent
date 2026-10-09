@@ -16,6 +16,7 @@ import httpx
 
 from ..config import settings
 from ..models.call import Call
+from ..errors import AppError
 from ..models.number import NumberKind, NumberStatus, PhoneNumber
 from ..models.tenant import Tenant
 from ..repositories import numbers as number_repo
@@ -168,3 +169,46 @@ async def tenant_for_call(tenant: Tenant, call: Call) -> Tenant:
 
 def webhook_base() -> str:
     return settings.public_base_url.strip().rstrip("/")
+
+
+def audio_socket_url() -> str:
+    """The one address the carrier dials for call audio on this deployment."""
+    base = webhook_base()
+    if not base:
+        return ""
+    return base.replace("https://", "wss://").replace("http://", "ws://") + "/api/media/infobip"
+
+
+async def ensure_audio_endpoint(tenant: Tenant, number: PhoneNumber) -> str:
+    """The id of this deployment's audio socket in the company's Infobip account.
+
+    Registered on first use rather than asked for on the settings form: it is
+    not a credential and not something a customer could reasonably know — it
+    names a socket on *our* server. Reused when one already points at the same
+    URL, so a redeploy does not litter the account with duplicates, and
+    re-registered automatically if the deployment's address changes.
+    """
+    from .telephony import Infobip
+
+    url = audio_socket_url()
+    if not url:
+        raise AppError(
+            503,
+            "PUBLIC_BASE_URL is not set on the server, so the carrier has nowhere "
+            "to send call audio.",
+            code="no_public_base_url",
+        )
+    carrier = Infobip(tenant)
+    existing = await carrier.websocket_endpoint_configs()
+    match = next((c for c in existing if (c.get("url") or "") == url), None)
+    if match is None:
+        match = await carrier.create_websocket_endpoint_config(
+            f"calling-agent {number.phone_number}".strip(), url
+        )
+        log.info("number %s: registered the audio endpoint %s with Infobip",
+                 number.id, match.get("id"))
+    config_id = str(match.get("id") or "")
+    if config_id and config_id != number.infobip_websocket_config_id:
+        number.infobip_websocket_config_id = config_id
+        await number_repo.save(number)
+    return config_id
