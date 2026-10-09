@@ -383,10 +383,19 @@ export function Channels(){
       return <div className="card stack" key={type}>
         <div className="row between">
           <div><h2>{t(CHANNEL_LABEL[type])}</h2><p className="small muted">{t(CHANNEL_BLURB[type])}</p></div>
-          {canManage&&<Button small variant="outline" onClick={()=>{setAdding(type);setLabel('')}}><Plus size={14}/> Add another</Button>}
+          {/* LIVE: a number comes from the WhatsApp/Infobip account you
+              connect in Settings, not from a request queued here — there is
+              no provisioning backend behind this yet, and the modal below
+              used to promise "we will email you when it is live" for
+              something that would just fail. Said plainly instead. */}
+          {canManage&&!LIVE&&<Button small variant="outline" onClick={()=>{setAdding(type);setLabel('')}}><Plus size={14}/> Add another</Button>}
         </div>
         {group.length===0
-          ?<Empty icon={Radio} title={'No '+t(CHANNEL_LABEL[type]).toLowerCase()+' yet'} body="Ask us for one and we will set it up for you." action={canManage&&<Button small onClick={()=>{setAdding(type);setLabel('')}}>Request one</Button>}/>
+          ?<Empty icon={Radio} title={'No '+t(CHANNEL_LABEL[type]).toLowerCase()+' yet'}
+              body={LIVE?'Connect this in Settings — it comes from your own WhatsApp or carrier account.':'Ask us for one and we will set it up for you.'}
+              action={canManage&&(LIVE
+                ?<Button small to="/app/settings">{t('Go to Settings')}</Button>
+                :<Button small onClick={()=>{setAdding(type);setLabel('')}}>Request one</Button>)}/>
           :<div className="stack">{group.map(ch=>{
             const [tone,statusLabel,blurb]=viewFor(ch);
             const agents=store.agents.filter(a=>a.orgId===org.id&&a.channelIds.includes(ch.id));
