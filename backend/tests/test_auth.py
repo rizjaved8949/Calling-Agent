@@ -10,40 +10,8 @@ against a stand-in for the one external call.
 """
 from __future__ import annotations
 
-import pytest
-
-
-@pytest.fixture
-def firebase(monkeypatch):
-    """A fake Firebase: `Authorization: Bearer <uid>:<email>` decodes as that
-    person, and a users collection lives in a plain dict instead of Firestore.
-    """
-    from app.api import deps
-    from app.repositories import users as user_repo
-
-    store: dict[str, dict] = {}
-
-    def fake_verify(token: str) -> dict:
-        from app.errors import Unauthorized
-
-        if ":" not in token:
-            raise Unauthorized("bad test token")
-        uid, email = token.split(":", 1)
-        return {"uid": uid, "email": email, "name": email.split("@")[0]}
-
-    async def fake_get(uid: str):
-        return store.get(uid)
-
-    async def fake_create(uid: str, *, email: str, display_name: str, phone_number_id: str):
-        store[uid] = {
-            "email": email, "displayName": display_name, "phoneNumberId": phone_number_id,
-        }
-
-    monkeypatch.setattr("app.services.firebase.verify_id_token", fake_verify)
-    monkeypatch.setattr(deps.firebase, "verify_id_token", fake_verify)
-    monkeypatch.setattr(user_repo, "get", fake_get)
-    monkeypatch.setattr(user_repo, "create", fake_create)
-    return store
+# The `firebase` fixture (fake Firebase + Firestore) lives in conftest.py now,
+# shared with test_team.py.
 
 
 def _auth(uid: str, email: str) -> dict[str, str]:

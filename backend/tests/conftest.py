@@ -184,3 +184,87 @@ def auth():
         return {"Authorization": f"Bearer {api_key}"}
 
     return headers
+
+
+@pytest.fixture
+def firebase(monkeypatch):
+    """A fake Firebase and Firestore for the sign-in and team routes.
+
+    `Authorization: Bearer <uid>:<email>` decodes as that person — good
+    enough to exercise the real routing and isolation logic in
+    `routes/auth.py` and `routes/team.py` without a real Google project in
+    the loop. `users` and `invites` live in plain dicts rather than
+    Firestore collections.
+    """
+    from app.api import deps
+    from app.repositories import users as user_repo
+
+    users: dict[str, dict] = {}
+    invites: dict[str, dict] = {}
+
+    def fake_verify(token: str) -> dict:
+        from app.errors import Unauthorized
+
+        if ":" not in token:
+            raise Unauthorized("bad test token")
+        uid, email = token.split(":", 1)
+        return {"uid": uid, "email": email, "name": email.split("@")[0]}
+
+    async def fake_get(uid: str):
+        return users.get(uid)
+
+    async def fake_create(
+        uid: str, *, email: str, display_name: str, phone_number_id: str, role: str = "owner"
+    ):
+        users[uid] = {
+            "email": email, "displayName": display_name, "phoneNumberId": phone_number_id,
+            "role": role, "createdAt": len(users),
+        }
+
+    async def fake_list_for_company(phone_number_id: str):
+        people = [
+            {"uid": uid, **data} for uid, data in users.items()
+            if data.get("phoneNumberId") == phone_number_id
+        ]
+        people.sort(key=lambda p: p.get("createdAt", 0))
+        return people
+
+    async def fake_remove(uid: str):
+        users.pop(uid, None)
+
+    async def fake_create_invite(*, email, phone_number_id, role, invited_by):
+        token = f"invite-{len(invites)}"
+        invites[token] = {
+            "email": email.strip().lower(), "phoneNumberId": phone_number_id,
+            "role": role, "invitedBy": invited_by, "status": "pending",
+        }
+        return token
+
+    async def fake_get_invite(token: str):
+        return invites.get(token)
+
+    async def fake_consume_invite(token: str):
+        if token in invites:
+            invites[token]["status"] = "accepted"
+
+    async def fake_list_invites(phone_number_id: str):
+        return [
+            {"token": t, **i} for t, i in invites.items()
+            if i.get("phoneNumberId") == phone_number_id and i.get("status") == "pending"
+        ]
+
+    async def fake_revoke_invite(token: str):
+        invites.pop(token, None)
+
+    monkeypatch.setattr("app.services.firebase.verify_id_token", fake_verify)
+    monkeypatch.setattr(deps.firebase, "verify_id_token", fake_verify)
+    monkeypatch.setattr(user_repo, "get", fake_get)
+    monkeypatch.setattr(user_repo, "create", fake_create)
+    monkeypatch.setattr(user_repo, "list_for_company", fake_list_for_company)
+    monkeypatch.setattr(user_repo, "remove", fake_remove)
+    monkeypatch.setattr(user_repo, "create_invite", fake_create_invite)
+    monkeypatch.setattr(user_repo, "get_invite", fake_get_invite)
+    monkeypatch.setattr(user_repo, "consume_invite", fake_consume_invite)
+    monkeypatch.setattr(user_repo, "list_invites", fake_list_invites)
+    monkeypatch.setattr(user_repo, "revoke_invite", fake_revoke_invite)
+    return users

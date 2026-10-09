@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends
 from ..security.rate_limit import check_blanket, check_expensive
 from .routes import (
     agents, auth, calls, campaigns, companies, exports, gaps, google, health, knowledge,
-    media, messaging, recordings, usage, webhooks,
+    media, messaging, recordings, team, usage, webhooks,
 )
 
 api_router = APIRouter(prefix="/api")
@@ -30,6 +30,9 @@ _limited = [Depends(check_blanket)]
 # token-verification step itself once it has a valid token.
 api_router.include_router(
     auth.router, dependencies=[Depends(check_blanket), Depends(check_expensive)]
+)
+api_router.include_router(
+    team.router, dependencies=[Depends(check_blanket), Depends(check_expensive)]
 )
 api_router.include_router(companies.router, dependencies=_limited)
 api_router.include_router(calls.router, dependencies=_limited)
