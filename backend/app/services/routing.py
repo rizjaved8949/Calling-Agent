@@ -152,10 +152,17 @@ def persona_for(tenant: Tenant, resolved: Resolved) -> dict[str, str]:
             "persona": tenant.persona,
             "language": tenant.language,
             "ttsVoice": tenant.tts_voice,
+            "tone": "",
+            "escalation": "",
         }
     return {
         "greeting": agent.greeting or tenant.agent_greeting,
         "persona": agent.role_description or tenant.persona,
         "language": agent.language or tenant.language,
         "ttsVoice": agent.tts_voice or tenant.tts_voice,
+        # The settings screen collects these and nothing used to read them, so
+        # a company could write "never promise a refund" and watch the agent
+        # promise a refund.
+        "tone": agent.tone_notes,
+        "escalation": agent.escalation_rules,
     }

@@ -27,6 +27,7 @@ from ...repositories import calls as call_repo
 from ...repositories import knowledge
 from .. import recordings as recording_service
 from .. import reports
+from . import tools as tool_catalogue
 from .gemini import AgentPersona, LiveSettings
 from .session import CallSession
 
@@ -71,7 +72,8 @@ async def persona_for(tenant: Tenant, call: Call | None = None) -> AgentPersona:
         # own settings and all of its documents, as before.
         context = await knowledge.context_for(tenant.phone_number_id)
         voice = {"greeting": tenant.agent_greeting, "persona": tenant.persona,
-                 "language": tenant.language, "ttsVoice": tenant.tts_voice}
+                 "language": tenant.language, "ttsVoice": tenant.tts_voice,
+                 "tone": "", "escalation": ""}
     else:
         resolved = await routing.resolve(
             tenant,
@@ -98,18 +100,80 @@ async def persona_for(tenant: Tenant, call: Call | None = None) -> AgentPersona:
         "You are the voice assistant answering calls for this business. "
         "Be warm, brief and practical."
     )
+    language = (voice["language"] or "").strip()
+    can_message = bool(call) and await _can_send_whatsapp(tenant)
+
     rules = [
         persona,
         "",
-        "You are on a telephone call. Speak in short, natural sentences. Never "
-        "read out punctuation, lists or formatting — there is nothing to look at.",
+        # Deliberately naming no organisation. The company's own persona above
+        # says who they are, and repeating a name from the account record
+        # contradicted it whenever the two differed — an account called
+        # "Calling Agent" had its university assistant introduce itself as the
+        # assistant for Calling Agent, in the same breath as saying otherwise.
+        "You are a virtual assistant answering on this organisation's behalf. "
+        "You are not a person, and you are not the organisation itself. If "
+        "anyone asks who or what you are, say so plainly and warmly — never "
+        "claim to be human, and never pretend the caller has reached a "
+        "department or an individual.",
+        "",
+        # Everything below is about the medium, not the business, so it applies
+        # whatever persona the company wrote.
+        "You are on a telephone call:",
+        "- Speak in short, natural sentences, the way people actually talk.",
+        "- Never read out punctuation, bullet points or formatting. There is "
+        "nothing to look at.",
+        "- Never say a URL or an email address aloud if you can send it instead.",
+        "- One question at a time. Wait for the answer.",
+        "",
+        "Listen, and reply to what was actually said:",
+        "- Acknowledge what they told you before you answer. If they gave you "
+        "their name, use it.",
+        "- Never repeat your opening line. You have already said it.",
+        "- If you did not catch something, say so and ask them to repeat it, "
+        "rather than guessing and answering the wrong question.",
+        "- If they interrupt, stop and listen. What they are saying now matters "
+        "more than what you were saying.",
+        "- Be warm and unhurried. A caller should feel helped, not processed.",
     ]
-    language = (voice["language"] or "").strip()
     rules.append(
-        f"Speak {language} unless the caller uses another language, in which "
-        f"case follow them." if language
-        else "Speak whatever language the caller speaks."
+        f"Speak {_language_name(language)} unless the caller uses another "
+        "language, in which case follow them. Mirror their mix of languages "
+        "rather than forcing one."
+        if language
+        else "Speak whatever language the caller speaks, and mirror their mix of "
+             "languages rather than forcing one."
     )
+
+    tone = (voice.get("tone") or "").strip()
+    if tone:
+        rules += ["", "How this company wants you to sound:", tone]
+
+    escalation = (voice.get("escalation") or "").strip()
+    if escalation:
+        rules += ["", "When to hand over or follow up:", escalation]
+
+    if can_message:
+        rules += [
+            "",
+            "If they want anything in writing — a link, an address, a price, a "
+            "summary of what you agreed — send it with send_whatsapp_message. "
+            "You already have the number they are calling from, so never ask "
+            "them for it. Tell them it is on its way, then carry on.",
+        ]
+
+    rules += [
+        "",
+        "Ending the call:",
+        "- When their question is answered and they have nothing else, say a "
+        "warm goodbye and call end_call in the same turn.",
+        "- If the call is going nowhere — somebody testing you, saying the same "
+        "thing over and over, being abusive, or silent after you have twice "
+        "asked whether they are there — close it politely and call end_call.",
+        "- Never use end_call to escape a question you cannot answer. Offer to "
+        "have someone call them back instead.",
+    ]
+
     if context:
         rules += [
             "",
@@ -130,7 +194,130 @@ async def persona_for(tenant: Tenant, call: Call | None = None) -> AgentPersona:
         greeting=(voice["greeting"] or "").strip(),
         voice=(voice["ttsVoice"] or "").strip(),
         language=language,
+        tools=tool_catalogue.for_call(can_send_whatsapp=can_message),
     )
+
+
+# A language tag is for machines. "Speak ur-PK" is not an instruction anyone,
+# including a model, should have to decode.
+_LANGUAGE_NAMES = {
+    "ur": "Urdu", "en": "English", "ar": "Arabic", "hi": "Hindi", "pa": "Punjabi",
+    "ps": "Pashto", "sd": "Sindhi", "fa": "Persian", "tr": "Turkish",
+    "fr": "French", "es": "Spanish", "de": "German", "zh": "Chinese",
+    "bn": "Bengali", "id": "Indonesian", "ms": "Malay", "ru": "Russian",
+}
+
+
+def _language_name(tag: str) -> str:
+    """"ur-PK" -> "Urdu", and anything unrecognised through unchanged."""
+    base = tag.replace("_", "-").split("-")[0].lower()
+    return _LANGUAGE_NAMES.get(base, tag)
+
+
+async def _can_send_whatsapp(tenant: Tenant) -> bool:
+    """Whether this company could actually deliver a message if asked to.
+
+    Checked rather than assumed: declaring the tool for a company with no
+    WhatsApp number has the agent promise to text somebody and then fail
+    silently after they have hung up.
+    """
+    from .. import lines
+
+    try:
+        return await lines.whatsapp_sender(tenant) is not None
+    except Exception:  # noqa: BLE001 — a lookup failure is not a reason to fail a call
+        log.exception("tenant %s: could not check WhatsApp availability",
+                      tenant.phone_number_id)
+        return False
+
+
+def _tool_handler(tenant: Tenant, call: Call):
+    """Run what the agent asked for, and say in one line what happened.
+
+    Every answer is written for the model to read out, because that is what it
+    does with it. "Sent." is better than a JSON blob, and a failure has to come
+    back as words the agent can own — telling the caller a message is on its
+    way when it is not is the one outcome worth protecting against.
+    """
+    from ...services.whatsapp import to_e164
+
+    async def handle(name: str, args: dict) -> str:
+        if name == "send_whatsapp_message":
+            text = str(args.get("text") or "").strip()
+            if not text:
+                return "No message was sent: there was nothing to say."
+            from .. import lines
+            from ...services.whatsapp import WhatsApp
+
+            sender = await lines.whatsapp_sender(tenant)
+            if sender is None:
+                return (
+                    "That did not send: this company has no WhatsApp number. "
+                    "Offer to have someone follow up instead."
+                )
+            # The number on the call unless they named a different one, which
+            # is what keeps the agent from asking for a number it already has.
+            destination = str(args.get("to") or "").strip() or call.counterparty
+            try:
+                await WhatsApp(sender).send_text(
+                    to_e164(destination, sender), text, call_id=call.id
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning("call %s: the agent's message did not send: %s", call.id, exc)
+                return (
+                    "That did not send. Tell them it will follow shortly and "
+                    "do not promise it again."
+                )
+            log.info("call %s: the agent sent a WhatsApp message", call.id)
+            return "Sent. Tell them it is on its way."
+
+        if name == "end_call":
+            reason = str(args.get("reason") or "the agent ended the call")[:200]
+            log.info("call %s: the agent is ending the call (%s)", call.id, reason)
+            asyncio.create_task(_hang_up_after_goodbye(tenant, call, reason))
+            return "The call is ending. Say your goodbye now and stop talking."
+
+        return "That is not something you can do on this call."
+
+    return handle
+
+
+async def _hang_up_after_goodbye(tenant: Tenant, call: Call, reason: str) -> None:
+    """Let the farewell finish playing, then hang up.
+
+    Cutting the line the instant the model calls `end_call` clips the goodbye
+    mid-word, which sounds exactly like a dropped call. So this waits for the
+    outgoing audio to drain — bounded, because a model that never stops
+    talking must not hold the line open either.
+    """
+    session = _sessions.get(call.id)
+    deadline = time.time() + 12
+    try:
+        while session is not None and time.time() < deadline:
+            await asyncio.sleep(0.4)
+            if not session.speaking:
+                # A moment past the last frame, so the final word lands.
+                await asyncio.sleep(0.6)
+                break
+    finally:
+        await hang_up(tenant, call, reason)
+
+
+async def hang_up(tenant: Tenant, call: Call, reason: str) -> None:
+    """End the call with the provider and settle it here. Never raises."""
+    from ...models.call import Channel
+    from ...services.telephony import Infobip
+    from ...services.whatsapp import WhatsApp
+
+    with contextlib.suppress(Exception):
+        if call.provider_call_id and call.channel is Channel.PHONE:
+            await Infobip(tenant).hangup(call.provider_call_id)
+        elif call.provider_call_id and call.channel is Channel.WHATSAPP_CALL:
+            await WhatsApp(tenant).terminate_call(call.provider_call_id)
+            from . import whatsapp_media
+
+            await whatsapp_media.drop(call.id)
+    await finish(tenant, call.id, reason)
 
 
 async def start(
@@ -156,6 +343,7 @@ async def start(
         record=tenant.record_calls,
         keepalive=keepalive,
         on_transcript=lambda who, text: None,
+        on_tool=None if human else _tool_handler(tenant, call),
         human=human,
     )
     _sessions[call.id] = session

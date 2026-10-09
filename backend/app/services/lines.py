@@ -159,6 +159,29 @@ def normalise_base_url(value: str) -> str:
     return value
 
 
+async def whatsapp_sender(tenant: Tenant) -> Tenant | None:
+    """This company, speaking through a WhatsApp number that can send.
+
+    A call may be running on a SIM line, whose overlay holds carrier
+    credentials and no Meta ones. Sending a message from it would fail, so the
+    company's own WhatsApp number is found instead. Returns None when there is
+    none, which is how the agent is stopped from offering to text somebody.
+    """
+    company_id = tenant.phone_number_id
+    try:
+        numbers = await number_repo.list_for(company_id)
+    except Exception:  # noqa: BLE001
+        log.exception("tenant %s: could not read numbers", company_id)
+        return None
+    for number in numbers:
+        if number.kind is NumberKind.WHATSAPP and number.verified:
+            company = tenant.model_copy(update={"line_id": "", "meta_phone_number_id": ""})
+            return number_repo.as_tenant(company, number)
+    # A company from before numbers existed keeps its credentials on its own
+    # row, and those still work.
+    return tenant if tenant.configured else None
+
+
 async def tenant_for_call(tenant: Tenant, call: Call) -> Tenant:
     """The credentials a call was placed or answered with."""
     if tenant.line_id or not call.line_id:
