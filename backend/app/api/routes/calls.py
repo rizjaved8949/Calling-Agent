@@ -15,6 +15,7 @@ from fastapi import APIRouter, Query, Response, status
 from ...errors import AppError, NotFound
 from ...models.call import (
     Call,
+    CallPermissionRequest,
     CallStatus,
     Channel,
     Direction,
@@ -22,6 +23,8 @@ from ...models.call import (
     RecordingState,
 )
 from ...repositories import calls as call_repo
+from ...security import playback
+from ...services.agent import live
 from ...services import recordings as recording_service
 from ...services import reports
 from ...services.telephony import Infobip
@@ -54,6 +57,58 @@ async def list_calls(
 @router.get("/stats")
 async def stats(tenant: CurrentTenant) -> dict:
     return await call_repo.call_stats(tenant.phone_number_id)
+
+
+@router.get("/live")
+async def live_calls(tenant: CurrentTenant) -> dict:
+    """Calls happening right now, with what has been said so far.
+
+    Read from the in-process registry rather than the database: a row says a
+    call is `IN_PROGRESS`, but only this process knows whether audio is still
+    moving through it. Those differ exactly when something has gone wrong,
+    which is when somebody is looking at this screen.
+
+    Each entry carries a token for the operator socket, so taking over is one
+    click rather than a second round trip for a credential.
+    """
+    rows = await call_repo.list_calls(
+        tenant.phone_number_id, limit=50, status=CallStatus.IN_PROGRESS
+    )
+    entries = []
+    for call in rows:
+        session = live.get(call.id)
+        if session is None:
+            continue
+        entries.append(
+            {
+                "callId": call.id,
+                "counterparty": call.counterparty,
+                "channel": call.channel.value,
+                "direction": call.direction.value,
+                "startedAt": call.started_at,
+                "answeredAt": call.answered_at,
+                "seconds": round(time.time() - (call.answered_at or call.started_at)),
+                "handledBy": session.handler.value,
+                "speaking": session.speaking,
+                "transcript": session.transcript_text(),
+                # Scoped to this call and short-lived: a browser cannot send an
+                # Authorization header on a websocket.
+                "operatorToken": playback.mint(tenant.phone_number_id, call.id, ttl=3600),
+            }
+        )
+    return {"calls": entries, "total": len(entries)}
+
+
+@router.post("/{call_id}/hand-back")
+async def hand_back(tenant: CurrentTenant, call_id: str) -> dict:
+    """Give a call back to the agent after a person has been on it."""
+    session = live.get(call_id)
+    if session is None:
+        raise NotFound("Live call")
+    if session.call_id != call_id:
+        raise NotFound("Live call")
+    await session.hand_back()
+    return {"handledBy": session.handler.value}
 
 
 @router.get("/{call_id}")
@@ -93,14 +148,23 @@ async def start_call(tenant: CurrentTenant, payload: OutboundCallRequest) -> dic
             call.provider_call_id = str(result.get("id") or result.get("callId") or "")
             call.provider_dialog_id = str(result.get("dialogId") or "")
         elif payload.channel == Channel.WHATSAPP_CALL:
-            # Placing a WhatsApp call needs an SDP offer from the media layer,
-            # which is not part of this build. Refused explicitly rather than
-            # left to fail somewhere less obvious.
-            raise AppError(
-                501,
-                "Outbound WhatsApp calling needs the media bridge, which is not "
-                "enabled on this deployment.",
-                code="not_implemented",
+            from ...services.agent import whatsapp_media
+
+            if not whatsapp_media.available():
+                raise AppError(
+                    503,
+                    "This deployment has no WebRTC stack, so WhatsApp calls "
+                    "cannot be placed.",
+                    code="no_media_stack",
+                )
+            bridge = whatsapp_media.WhatsAppBridge(call.id, tenant)
+            whatsapp_media.register(call.id, bridge)
+            # The offer is made before Meta is asked, because `connect` carries
+            # it. Gathering ICE first is what makes the call connect rather
+            # than ring and stay silent.
+            result = await WhatsApp(tenant).place_call(destination, await bridge.offer())
+            call.provider_call_id = str(
+                (result.get("calls") or [{}])[0].get("id") or result.get("id") or ""
             )
         else:
             raise AppError(
@@ -119,6 +183,21 @@ async def start_call(tenant: CurrentTenant, payload: OutboundCallRequest) -> dic
     await call_repo.save_call(call)
     log.info("placed %s call %s to %s", payload.channel.value, call.id, mask(destination))
     return call.public()
+
+
+@router.post("/permission")
+async def ask_call_permission(tenant: CurrentTenant, payload: CallPermissionRequest) -> dict:
+    """Ask someone for permission to call them on WhatsApp.
+
+    Meta requires this before a business may place a call. It arrives as a
+    message with an accept button; until they accept, `POST /calls` with
+    WHATSAPP_CALL is refused by Meta.
+    """
+    result = await WhatsApp(tenant).request_call_permission(
+        payload.to, payload.template, payload.language
+    )
+    messages = result.get("messages") or [{}]
+    return {"status": "sent", "messageId": messages[0].get("id", "")}
 
 
 @router.post("/{call_id}/end")

@@ -205,6 +205,19 @@ class SendTextRequest(BaseModel):
     call_id: str | None = Field(default=None, alias="callId")
 
 
+class CallPermissionRequest(BaseModel):
+    """Asking someone whether a business may call them.
+
+    Only the number: the template is Meta's own and carries no parameters.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    to: str = Field(min_length=3)
+    template: str = "call_permission_request"
+    language: str = "en"
+
+
 class SendTemplateRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 

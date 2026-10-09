@@ -4,3 +4,7 @@ __pycache__/
 .env
 .pytest_cache/
 data/
+
+# Local server logs from a probe run
+live.log
+live.err

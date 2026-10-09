@@ -256,11 +256,12 @@ class WhatsApp:
     # ---- Calling ----------------------------------------------------------
 
     async def place_call(self, to: str, sdp_offer: str) -> dict[str, Any]:
-        """Start a business-initiated WhatsApp call.
+        """Start a business-initiated call, offering our end of the audio.
 
-        The SDP offer comes from the media layer, which is not in this build —
-        see the README. The request shape is here so the route exists and the
-        contract is fixed.
+        Only legal once the person has granted call permission — see
+        `request_call_permission`. Without it Meta refuses, and rightly: an
+        unsolicited voice call from a business is the thing that permission
+        exists to prevent.
         """
         return await self._post(
             f"{self.tenant.phone_number_id}/calls",
@@ -269,6 +270,29 @@ class WhatsApp:
                 "to": msisdn(to, self.tenant),
                 "action": "connect",
                 "session": {"sdp_type": "offer", "sdp": sdp_offer},
+            },
+        )
+
+    async def request_call_permission(
+        self, to: str, template: str = "call_permission_request",
+        language: str = "en",
+    ) -> dict[str, Any]:
+        """Ask someone for permission to call them.
+
+        Meta requires this before a business may place a WhatsApp call. It
+        arrives as a message with an accept button; granting it opens a window
+        during which `place_call` is allowed.
+
+        Sent as an ordinary template, because that is what it is — the name is
+        the only part Meta treats specially.
+        """
+        return await self._post(
+            f"{self.tenant.phone_number_id}/messages",
+            {
+                "messaging_product": "whatsapp",
+                "to": msisdn(to, self.tenant),
+                "type": "template",
+                "template": {"name": template, "language": {"code": language}},
             },
         )
 

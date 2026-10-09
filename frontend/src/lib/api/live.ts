@@ -295,6 +295,20 @@ export const live = {
 
   call: async (callId: string): Promise<Call> => toCall(await request<WireCall>(`/api/calls/${callId}`)),
 
+  /** Calls with audio actually moving through them, not just rows that say so. */
+  liveCalls: () =>
+    request<{ calls: Record<string, unknown>[]; total: number }>('/api/calls/live'),
+
+  /** Ask someone whether the business may call them on WhatsApp. */
+  askCallPermission: (to: string) =>
+    request<{ status: string; messageId: string }>('/api/calls/permission', {
+      method: 'POST',
+      body: { to },
+    }),
+
+  handBack: (callId: string) =>
+    request<{ handledBy: string }>(`/api/calls/${callId}/hand-back`, { method: 'POST' }),
+
   callStats: () => request<Record<string, number>>('/api/calls/stats'),
 
   endCall: async (callId: string): Promise<Call> =>

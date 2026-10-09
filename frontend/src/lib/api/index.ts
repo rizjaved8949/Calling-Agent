@@ -558,6 +558,25 @@ export const api = {
     : update(()=>true),
 
   /**
+   * Place a call. WhatsApp needs the person's permission first; a phone line
+   * needs the company's own carrier credentials.
+   */
+  placeCall: (to:string,channel:'PHONE'|'WHATSAPP_CALL') => LIVE
+    ? real(async()=>{ const c=await live.placeCall(to,channel); await hydrateCalls(); return c; })
+    : notSupported('Placing a call needs the live API.'),
+  askCallPermission: (to:string) => LIVE
+    ? real(()=>live.askCallPermission(to))
+    : notSupported('Asking for call permission needs the live API.'),
+
+  /** Live calls, for the screen that lets a person take one over. */
+  getLiveCalls: () => LIVE
+    ? real(()=>live.liveCalls())
+    : mock(()=>({calls:[],total:0})),
+  handBackCall: (callId:string) => LIVE
+    ? real(()=>live.handBack(callId))
+    : mock(()=>({handledBy:'agent'})),
+
+  /**
    * A URL that will actually play. Mock builds already hold a playable one on
    * the call; live builds mint a short-lived token, because a media element
    * cannot present a bearer token.

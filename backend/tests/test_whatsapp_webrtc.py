@@ -198,3 +198,92 @@ async def test_closing_twice_is_safe():
     await bridge.close()
     await bridge.close()
     assert bridge.closed
+
+
+# ---------------------------------------------------------------------------
+# The outbound offer Meta is given
+# ---------------------------------------------------------------------------
+#
+# Meta answers a malformed offer with "Parameter value is not valid" and
+# nothing else, so each of these is a rejection the earlier service had to
+# diagnose blind. They are cheap to check and expensive to rediscover.
+
+
+async def _raw_offer() -> str:
+    from aiortc import RTCPeerConnection
+    from aiortc.mediastreams import AudioStreamTrack
+
+    pc = RTCPeerConnection()
+    pc.addTrack(AudioStreamTrack())
+    await pc.setLocalDescription(await pc.createOffer())
+    sdp = pc.localDescription.sdp
+    await pc.close()
+    return sdp
+
+
+async def test_the_discard_address_replaces_the_gathered_one():
+    """aiortc rewrites m= and c= to its first candidate; browsers do not."""
+    from app.services.agent import meta_sdp
+
+    shaped = meta_sdp.prepare_outbound(await _raw_offer())
+    audio = next(l for l in shaped.splitlines() if l.startswith("m=audio "))
+    assert audio.split()[1] == "9"
+    assert "c=IN IP4 0.0.0.0" in shaped
+
+
+async def test_only_the_sha256_fingerprint_survives():
+    """aiortc emits 256, 384 and 512; Meta's examples carry one."""
+    from app.services.agent import meta_sdp
+
+    shaped = meta_sdp.prepare_outbound(await _raw_offer())
+    prints = [l for l in shaped.splitlines() if l.startswith("a=fingerprint:")]
+    assert prints, "the fingerprint was dropped entirely"
+    assert all(p.startswith("a=fingerprint:sha-256 ") for p in prints)
+
+
+async def test_trickle_and_extmap_allow_mixed_are_present():
+    from app.services.agent import meta_sdp
+
+    shaped = meta_sdp.prepare_outbound(await _raw_offer())
+    assert "a=ice-options:trickle" in shaped
+    assert "a=extmap-allow-mixed" in shaped
+
+
+async def test_the_real_candidates_are_kept():
+    """Presented as a browser would, but still able to receive media."""
+    from app.services.agent import meta_sdp
+
+    raw = await _raw_offer()
+    shaped = meta_sdp.prepare_outbound(raw)
+    if "a=candidate:" in raw:
+        assert "a=candidate:" in shaped, "candidates were lost; media cannot connect"
+
+
+async def test_payload_types_are_never_rewritten():
+    """Changing them in the string gives a call that connects and is silent —
+    far harder to diagnose than a rejection."""
+    from app.services.agent import meta_sdp
+
+    raw = await _raw_offer()
+    shaped = meta_sdp.prepare_outbound(raw)
+    before = sorted(l for l in raw.splitlines() if l.startswith("a=rtpmap:"))
+    after = sorted(l for l in shaped.splitlines() if l.startswith("a=rtpmap:"))
+    assert before == after
+
+
+async def test_validation_names_what_is_wrong():
+    from app.services.agent import meta_sdp
+
+    good = meta_sdp.validate_outbound(meta_sdp.prepare_outbound(await _raw_offer()))
+    assert good["ok"], meta_sdp.describe(good)
+
+    broken = meta_sdp.validate_outbound("v=0\r\nm=audio 5004 UDP/TLS/RTP/SAVPF 96\r\n")
+    assert not broken["ok"]
+    named = meta_sdp.describe(broken)
+    assert "discard_port" in named and "rtcp_mux" in named
+
+
+def test_shaping_an_empty_sdp_does_not_raise():
+    from app.services.agent import meta_sdp
+
+    assert meta_sdp.prepare_outbound("") == ""

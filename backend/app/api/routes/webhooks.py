@@ -295,6 +295,12 @@ async def _on_calls(tenant: Tenant, value: dict[str, Any]) -> None:
         if isinstance(session_info, dict) and session_info.get("sdp_type") == "offer":
             offer = str(session_info.get("sdp") or "")
 
+        # On an outbound call this is the other half of our own offer: the
+        # person picked up and Meta is handing back their answer.
+        answer = ""
+        if isinstance(session_info, dict) and session_info.get("sdp_type") == "answer":
+            answer = str(session_info.get("sdp") or "")
+
         if event in {"connect", "accepted", "answered"}:
             existing.status = CallStatus.IN_PROGRESS
             existing.answered_at = existing.answered_at or time.time()
@@ -303,6 +309,10 @@ async def _on_calls(tenant: Tenant, value: dict[str, Any]) -> None:
                 # Answered in the background: terminating WebRTC takes seconds
                 # and Meta retries a webhook that does not return promptly.
                 asyncio.create_task(_answer_whatsapp(tenant, existing, offer))
+                continue
+            if answer and existing.direction is Direction.OUTBOUND:
+                await call_repo.save_call(existing)
+                asyncio.create_task(_connect_outbound(tenant, existing, answer))
                 continue
         elif event in {"terminate", "ended", "completed"}:
             existing.status = CallStatus.COMPLETED
@@ -405,6 +415,40 @@ async def _answer_whatsapp(tenant: Tenant, call: Call, sdp_offer: str) -> None:
         log.exception("call %s: could not answer", call.id)
         if bridge is not None:
             await whatsapp_media.drop(call.id)
+        with contextlib.suppress(Exception):
+            await WhatsApp(tenant).terminate_call(call.provider_call_id)
+        await _fail_call(tenant, call, str(exc)[:200])
+
+
+async def _connect_outbound(tenant: Tenant, call: Call, sdp_answer: str) -> None:
+    """The person answered a call we placed. Finish the handshake and talk.
+
+    The bridge already exists — it made the offer before Meta was asked — so
+    this is only the second half: take their answer, wait for media, and put
+    the agent on.
+    """
+    from ...services.agent import whatsapp_media
+
+    bridge = whatsapp_media.get(call.id)
+    if bridge is None:
+        # The offer was made by a process that has since restarted, so the
+        # WebRTC state it belongs to is gone and cannot be recovered.
+        log.error("call %s: answered, but the bridge that offered is gone", call.id)
+        with contextlib.suppress(Exception):
+            await WhatsApp(tenant).terminate_call(call.provider_call_id)
+        await _fail_call(tenant, call, "the call was answered after a restart")
+        return
+
+    try:
+        await bridge.accept_answer(sdp_answer)
+        if not await bridge.wait_connected(timeout=30):
+            raise RuntimeError("the call was answered but media never connected")
+        session = await live.start(tenant, call, bridge.send_to_caller, keepalive=False)
+        bridge.attach(session)
+        log.info("call %s: outbound connected, the agent is on the line", call.id)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("call %s: outbound call failed after answer", call.id)
+        await whatsapp_media.drop(call.id)
         with contextlib.suppress(Exception):
             await WhatsApp(tenant).terminate_call(call.provider_call_id)
         await _fail_call(tenant, call, str(exc)[:200])

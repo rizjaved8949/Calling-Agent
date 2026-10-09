@@ -241,12 +241,41 @@ class WhatsAppBridge:
         return self.pc.localDescription.sdp
 
     async def offer(self) -> str:
-        """Our own offer, for a call the business places."""
-        from aiortc import RTCSessionDescription  # noqa: F401
+        """Our own offer, for a call the business places.
 
-        offer = await self.pc.createOffer()
-        await self.pc.setLocalDescription(offer)
-        return self.pc.localDescription.sdp
+        Waits for ICE gathering before shaping the result: an offer sent while
+        candidates are still arriving has none in it, and Meta accepts it and
+        then nothing connects — a call that rings and carries silence, which is
+        worse than one that is refused.
+        """
+        from . import meta_sdp
+
+        await self.pc.setLocalDescription(await self.pc.createOffer())
+        await self._wait_for_candidates()
+
+        shaped = meta_sdp.prepare_outbound(self.pc.localDescription.sdp)
+        checks = meta_sdp.validate_outbound(shaped)
+        if not checks["ok"]:
+            # Meta answers a malformed offer with "Parameter value is not
+            # valid" and nothing else, so the diagnosis has to be ours.
+            log.warning("call %s: outbound SDP looks wrong — %s",
+                        self.call_id, meta_sdp.describe(checks))
+        return shaped
+
+    async def _wait_for_candidates(self, timeout: float = 8.0) -> None:
+        """Give ICE a moment to gather, but do not wait on it forever.
+
+        Where outbound UDP is slow or blocked, gathering never completes and
+        waiting on it is a call that is never placed. Host candidates alone are
+        enough to connect on most networks, so this proceeds with what it has.
+        """
+        deadline = asyncio.get_running_loop().time() + timeout
+        while self.pc.iceGatheringState != "complete":
+            if asyncio.get_running_loop().time() > deadline:
+                log.info("call %s: ICE still gathering, sending what we have",
+                         self.call_id)
+                return
+            await asyncio.sleep(0.2)
 
     async def accept_answer(self, sdp_answer: str) -> None:
         from aiortc import RTCSessionDescription

@@ -732,3 +732,39 @@ def test_the_settings_screen_can_read_back_what_was_entered(client, tenant_facto
     assert body["persona"] == "You are Ayesha from admissions."
     assert body["agentGreeting"] == "Assalam-o-Alaikum."
     assert body["autoReply"] is True
+
+
+# ---------------------------------------------------------------------------
+# Live calls
+# ---------------------------------------------------------------------------
+
+
+def test_live_is_not_swallowed_by_the_call_id_route(client, tenant_factory, auth):
+    """/calls/live must be declared before /calls/{id}, or it reads as an id."""
+    _, key = tenant_factory("960")
+    body = client.get("/api/calls/live", headers=auth(key)).json()
+    assert body == {"calls": [], "total": 0}
+
+
+def test_live_lists_only_calls_actually_running(client, tenant_factory, auth):
+    """A row can say IN_PROGRESS while no audio is moving. Only the registry
+    knows the difference, and that difference is why someone is looking."""
+    import asyncio
+
+    from app.models.call import Call, CallStatus
+    from app.repositories import calls as call_repo
+
+    _, key = tenant_factory("960")
+    asyncio.run(
+        call_repo.save_call(
+            Call(id="ghost", tenantId="960", status=CallStatus.IN_PROGRESS,
+                 counterparty="+923001112222")
+        )
+    )
+    body = client.get("/api/calls/live", headers=auth(key)).json()
+    assert body["total"] == 0, "a row with no live session was reported as live"
+
+
+def test_handing_back_an_unknown_call_is_a_404(client, tenant_factory, auth):
+    _, key = tenant_factory("960")
+    assert client.post("/api/calls/nope/hand-back", headers=auth(key)).status_code == 404

@@ -252,6 +252,11 @@ class CallSession:
         return "\n".join(lines)
 
     @property
+    def speaking(self) -> bool:
+        """Whether the far end has audio queued to play right now."""
+        return self._pacer.speaking
+
+    @property
     def recording_rate(self) -> int:
         return RECORD_RATE
 

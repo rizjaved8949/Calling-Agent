@@ -65,6 +65,7 @@ import {AppCtx,useApp} from './app-context';
 import {ApiKeyGate,ComingSoon,hasBackendKey} from './connect-backend';
 import {AgentScreen,KnowledgeScreen} from './pages-agent';
 import {OperatorCompanies} from './pages-operator';
+import {LiveCalls} from './pages-live';
 import {LIVE,hydrate} from './lib/api';
 
 function Provider({children}:{children:React.ReactNode}){
@@ -334,7 +335,7 @@ function AppRoutes(){
     <Route path="/app/team" element={<Protected manage><NotYet title="Team" detail={"Invitations and roles arrive with sign-in."}><Team/></NotYet></Protected>}/>
     <Route path="/app/usage" element={<Protected manage><NotYet title="Usage and billing" detail={"Metering is not connected yet."}><Usage/></NotYet></Protected>}/>
     <Route path="/app/settings" element={<Protected manage><SettingsPage/></Protected>}/>
-    <Route path="/app/live" element={<Protected><NotYet title="Live calls" detail="Watching a call as it happens arrives with the voice engine."><Live/></NotYet></Protected>}/>
+    <Route path="/app/live" element={<Protected><WhenLive real={<LiveCalls/>}><Live/></WhenLive></Protected>}/>
     <Route path="/app/history" element={<Protected><HistoryPage/></Protected>}/>
     <Route path="/app/history/:id" element={<Protected><CallDetail/></Protected>}/>
     <Route path="/app/guides" element={<Protected><NotYet title="Guides"><Guides/></NotYet></Protected>}/>
