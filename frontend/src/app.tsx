@@ -65,7 +65,7 @@ import {HistoryNavigationProvider} from './history-navigation';
 import {AppCtx,useApp} from './app-context';
 import {ComingSoon,hasBackendKey} from './connect-backend';
 import {AgentsScreen,AgentDetailScreen,KnowledgeBasesScreen,KnowledgeBaseDetailScreen,CallSetupsScreen,TeamScreen,InviteAcceptScreen,StaffQueueScreen,StaffLookupScreen,StaffAskScreen} from './pages-workspace';
-import {OperatorCompanies} from './pages-operator';
+import {OperatorCompanies,PlatformLoginScreen} from './pages-operator';
 import {LiveCalls} from './pages-live';
 import {CampaignsScreen,GapsScreen,UsageScreen} from './pages-growth';
 import {LIVE,hydrate} from './lib/api';
@@ -108,7 +108,13 @@ function Provider({children}:{children:React.ReactNode}){
   // their own error — a blank app with one global message is worse.
   const [hydrated,setHydrated]=useState(!LIVE);
   useEffect(()=>{
-    if(!LIVE||!hasBackendKey()){setHydrated(!LIVE);return}
+    // No company key — a platform/admin session, or nobody signed in yet —
+    // means there is nothing company-scoped to wait for, so "hydrated" is
+    // immediately true rather than stuck false forever. It used to read
+    // `!LIVE` here, which left PlatformOnly's "Loading…" gate permanently
+    // stuck for an admin-key session, since that session never acquires a
+    // company key to hydrate against.
+    if(!LIVE||!hasBackendKey()){setHydrated(true);return}
     let cancelled=false;
     hydrate().finally(()=>{if(!cancelled)setHydrated(true)});
     return()=>{cancelled=true};
@@ -317,6 +323,10 @@ function AppRoutes(){
     <Route path="/forgot-password" element={<AuthScreen mode="forgot"/>}/>
     <Route path="/verify" element={<AuthScreen mode="verify"/>}/>
     <Route path="/invite" element={LIVE?<InviteAcceptScreen/>:<AuthScreen mode="invite"/>}/>
+    {/* Not linked from any nav or the login screen on purpose — see
+        PlatformLoginScreen's own docstring for what actually keeps a
+        stranger out (the admin key itself, not this URL being unlisted). */}
+    <Route path="/ops-login" element={<PlatformLoginScreen/>}/>
 
     <Route path="/app/dashboard" element={<Protected manage><Dashboard/></Protected>}/>
     <Route path="/app/onboarding" element={<Protected manage><Onboarding/></Protected>}/>

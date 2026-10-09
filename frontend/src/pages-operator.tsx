@@ -8,12 +8,63 @@
  * temporarily, until there is real sign-in.
  */
 import {useCallback, useEffect, useState} from 'react';
+import {useNavigate} from 'react-router-dom';
 import {Building2, KeyRound, Loader2, Plus} from 'lucide-react';
 import {Badge, Button, Empty, Field, PageHead} from './app';
 import {useApp} from './app-context';
 import {api, hasAdminKey, setAdminKey, setViewingCompany, getViewingCompany} from './lib/api';
 
 type Row = {org: {id: string; name: string; status: string}; health: string; openIssues: number};
+
+/**
+ * Where the platform operator signs in — deliberately not linked from
+ * anywhere a customer would see. The admin key itself is still the real
+ * security boundary (same as `AdminKeyGate` below and `require_admin` on the
+ * backend); this page being unlinked is a navigation nicety, not the thing
+ * actually keeping a stranger out.
+ */
+export function PlatformLoginScreen() {
+  const {setSession} = useApp();
+  const navigate = useNavigate();
+  const [key, setKey] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const candidate = key.trim();
+    if (!candidate) return;
+    setBusy(true);
+    setError('');
+    setAdminKey(candidate);
+    try {
+      await api.getPlatformCompanies();
+      setSession({
+        email: 'operator', name: 'Platform Operator', userId: 'platform-admin',
+        orgId: '', portal: 'platform', platformRole: 'superadmin',
+      });
+      navigate('/platform/companies');
+    } catch (cause) {
+      setAdminKey(null);
+      setError(cause instanceof Error ? cause.message : 'That key was not accepted.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return <div className="auth-page"><div className="card auth-card">
+    <h1 style={{fontSize: '1.5rem'}}><KeyRound size={20}/> Platform access</h1>
+    <p className="muted small">Not a customer login. Paste the server's ADMIN_API_KEY.</p>
+    <form className="stack" onSubmit={submit}>
+      <input className="input" type="password" autoFocus autoComplete="off" spellCheck={false}
+        placeholder="ADMIN_API_KEY" value={key} onChange={e => setKey(e.target.value)}/>
+      {error && <div className="notice danger">{error}</div>}
+      <Button type="submit" disabled={busy || !key.trim()}>
+        {busy ? <><Loader2 size={15} className="spin"/> Checking…</> : 'Continue'}
+      </Button>
+    </form>
+  </div></div>;
+}
 
 export function AdminKeyGate({onReady}: {onReady: () => void}) {
   const [key, setKey] = useState('');
