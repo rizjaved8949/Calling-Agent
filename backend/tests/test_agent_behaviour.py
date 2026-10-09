@@ -295,3 +295,20 @@ async def test_she_is_forbidden_from_claiming_an_unsent_message(fake_db, with_wh
     text = (await live.persona_for(_tenant(), _call())).instructions
     assert "Never tell a caller you have sent something unless you called" in text
     assert "is a lie to someone who will go and look for it" in text
+
+
+@pytest.mark.asyncio
+async def test_she_is_told_she_cannot_transfer_a_call(fake_db, no_whatsapp):
+    """On a real call she said "please hold, I will connect you to an
+    admissions officer". There is no switchboard behind her, so the caller
+    would have held a line where nothing was ever going to happen."""
+    text = (await live.persona_for(_tenant(), _call())).instructions
+    assert "You cannot transfer a call" in text
+    assert "There is no switchboard behind you" in text
+    assert "cannot put them" in text
+
+
+@pytest.mark.asyncio
+async def test_she_is_told_not_to_promise_a_time(fake_db, no_whatsapp):
+    text = (await live.persona_for(_tenant(), _call())).instructions
+    assert "Promise nothing with a time on it" in text
