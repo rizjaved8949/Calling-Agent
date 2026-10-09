@@ -28,7 +28,7 @@ import {ErrorNote, Loading, Section, Select, TextInput, useConfirm} from './ui';
 /** The fields the agent form edits as a draft, saved together on Save. */
 const FORM_FIELDS = [
   'name', 'greeting', 'roleDescription', 'language', 'ttsVoice', 'toneNotes',
-  'escalationRules',
+  'escalationRules', 'speakingPace',
 ] as const satisfies readonly (keyof Agent)[];
 
 const CHANNEL_LABEL: Record<Channel, string> = {
@@ -249,10 +249,18 @@ export function AgentDetailScreen() {
             help="It still follows a caller who speaks another language."/>
           <TextInput label="Voice" value={draft.ttsVoice} disabled={!canManage}
             onChange={v => set({ttsVoice: v})} placeholder="leave empty for the default"/>
+          <Select label="Talking speed" value={draft.speakingPace ?? 'natural'}
+            disabled={!canManage} onChange={v => set({speakingPace: v as Agent['speakingPace']})}
+            help="On a phone line the same words at the wrong speed are the difference between being understood and being asked to repeat.">
+            <option value="slow">Slow — clear pauses, good for numbers</option>
+            <option value="natural">Natural — ordinary conversation</option>
+            <option value="brisk">Brisk — straight to the point</option>
+          </Select>
         </div>
-        <TextInput label="Tone notes" value={draft.toneNotes} disabled={!canManage}
-          onChange={v => set({toneNotes: v})}
-          placeholder="Never promise a refund. Always confirm the spelling of a name."/>
+        <TextInput label="Tone and hard rules" rows={3} value={draft.toneNotes}
+          disabled={!canManage} onChange={v => set({toneNotes: v})}
+          placeholder="Warm and patient. Never promise a refund. Always confirm the spelling of a name."
+          help="How it should sound, and anything it must never say. This reaches the agent on every call."/>
         <TextInput label="When to hand off to a person" rows={3} value={draft.escalationRules}
           disabled={!canManage} onChange={v => set({escalationRules: v})}
           placeholder="If the caller asks for a manager, or sounds upset, offer a callback."/>

@@ -491,6 +491,9 @@ async def _answer_whatsapp(tenant: Tenant, call: Call, sdp_offer: str) -> None:
         answer_sdp = await bridge.answer(sdp_offer)
         await WhatsApp(tenant).answer_call(call.provider_call_id, answer_sdp)
         log.info("call %s: accepted with Meta, waiting for media", call.id)
+        # Opening the model session overlaps the WebRTC handshake rather than
+        # following it, which is several seconds of silence the caller keeps.
+        asyncio.create_task(live.warm_up(tenant, call, keepalive=False))
 
         if not await bridge.wait_connected(timeout=30):
             raise RuntimeError(
@@ -530,6 +533,7 @@ async def _connect_outbound(tenant: Tenant, call: Call, sdp_answer: str) -> None
         return
 
     try:
+        asyncio.create_task(live.warm_up(tenant, call, keepalive=False))
         await bridge.accept_answer(sdp_answer)
         if not await bridge.wait_connected(timeout=30):
             raise RuntimeError("the call was answered but media never connected")
@@ -637,6 +641,11 @@ async def _bridge_agent(tenant: Tenant, call: Call) -> None:
         # while this request is still in flight, and a socket with no call
         # waiting for it is refused.
         claims.reserve(call.id, tenant.phone_number_id)
+        # Connected now rather than when the socket arrives: the model takes
+        # about four seconds to open a session, and the carrier takes about as
+        # long to connect the leg. Run together, the caller hears the greeting
+        # as the line opens instead of after it.
+        asyncio.create_task(live.warm_up(tenant, call))
         await Infobip(tenant).bridge_to_websocket(
             call.provider_call_id,
             websocket_config_id=config_id,

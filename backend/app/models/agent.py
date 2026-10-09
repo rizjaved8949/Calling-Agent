@@ -69,6 +69,20 @@ class AgentMode(str, Enum):
     BOTH = "both"
 
 
+class SpeakingPace(str, Enum):
+    """How fast the agent talks.
+
+    A phone line is not a podcast: the same words at the wrong speed are the
+    difference between being understood and being asked to repeat. Slow suits
+    an older or less confident caller and anything with numbers in it; brisk
+    suits a busy caller who already knows what they want.
+    """
+
+    SLOW = "slow"
+    NATURAL = "natural"
+    BRISK = "brisk"
+
+
 class AgentStatus(str, Enum):
     DRAFT = "draft"
     LIVE = "live"
@@ -99,6 +113,7 @@ class Agent(BaseModel):
     tone_notes: str = Field(default="", alias="toneNotes")
     escalation_rules: str = Field(default="", alias="escalationRules")
     tts_voice: str = Field(default="", alias="ttsVoice")
+    speaking_pace: SpeakingPace = Field(default=SpeakingPace.NATURAL, alias="speakingPace")
 
     # ---- What it knows ---------------------------------------------------
     # Blank means "everything this company has uploaded", which is how a
@@ -121,6 +136,7 @@ class AgentCreate(BaseModel):
     tone_notes: str = Field(default="", alias="toneNotes", max_length=2000)
     escalation_rules: str = Field(default="", alias="escalationRules", max_length=2000)
     tts_voice: str = Field(default="", alias="ttsVoice")
+    speaking_pace: SpeakingPace = Field(default=SpeakingPace.NATURAL, alias="speakingPace")
     knowledge_base_id: str = Field(default="", alias="knowledgeBaseId")
     status: AgentStatus = AgentStatus.DRAFT
     mode: AgentMode = AgentMode.BOTH
@@ -136,6 +152,7 @@ class AgentUpdate(BaseModel):
     tone_notes: str | None = Field(default=None, alias="toneNotes", max_length=2000)
     escalation_rules: str | None = Field(default=None, alias="escalationRules", max_length=2000)
     tts_voice: str | None = Field(default=None, alias="ttsVoice")
+    speaking_pace: SpeakingPace | None = Field(default=None, alias="speakingPace")
     knowledge_base_id: str | None = Field(default=None, alias="knowledgeBaseId")
     status: AgentStatus | None = None
     mode: AgentMode | None = None

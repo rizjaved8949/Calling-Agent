@@ -73,7 +73,7 @@ async def persona_for(tenant: Tenant, call: Call | None = None) -> AgentPersona:
         context = await knowledge.context_for(tenant.phone_number_id)
         voice = {"greeting": tenant.agent_greeting, "persona": tenant.persona,
                  "language": tenant.language, "ttsVoice": tenant.tts_voice,
-                 "tone": "", "escalation": ""}
+                 "tone": "", "escalation": "", "pace": ""}
     else:
         resolved = await routing.resolve(
             tenant,
@@ -170,6 +170,10 @@ async def persona_for(tenant: Tenant, call: Call | None = None) -> AgentPersona:
              "of languages rather than forcing one."
     )
 
+    pace = (voice.get("pace") or "").strip()
+    if pace in _PACE_RULES:
+        conduct.append("- " + _PACE_RULES[pace])
+
     tone = (voice.get("tone") or "").strip()
     if tone:
         conduct += ["", "How this company wants you to sound:", tone]
@@ -231,6 +235,20 @@ async def persona_for(tenant: Tenant, call: Call | None = None) -> AgentPersona:
         language=language,
         tools=tool_catalogue.for_call(can_send_whatsapp=can_message),
     )
+
+
+# Said as behaviour rather than a number, because the model has no dial. The
+# effect is real: the same sentence at the wrong speed is the difference
+# between being understood and being asked to repeat it.
+_PACE_RULES = {
+    "slow": "Speak slowly and leave a clear pause between sentences. Say "
+            "numbers, dates and amounts one part at a time, and offer to "
+            "repeat anything the caller might be writing down.",
+    "natural": "Speak at a normal conversational speed — unhurried, but do "
+               "not drag.",
+    "brisk": "Speak briskly and get to the point. Keep answers to a sentence "
+             "or two unless they ask for more. Still slow down for numbers.",
+}
 
 
 # A language tag is for machines. "Speak ur-PK" is not an instruction anyone,
@@ -355,6 +373,52 @@ async def hang_up(tenant: Tenant, call: Call, reason: str) -> None:
     await finish(tenant, call.id, reason)
 
 
+def _discard(_frame: bytes) -> None:
+    """Where a warmed session's audio goes until a transport arrives.
+
+    Nothing reaches here in practice: the pacer holds its queue until it is
+    ticked, and a warmed session is not ticked. This is the sink of last
+    resort if one ever is.
+    """
+
+
+async def warm_up(tenant: Tenant, call: Call, *, keepalive: bool = True) -> None:
+    """Connect the agent before the caller is on the line.
+
+    Six seconds used to pass between a caller answering and hearing anything:
+    one and a half to read the company's material, nearly four to open the
+    model session, and the rest for the first word. All of it ran *after* the
+    carrier had connected the leg, so all of it was silence the caller sat
+    through — long enough that they say "hello?" first, which is how the call
+    starts on the wrong foot.
+
+    None of it needs the caller. Started when the leg is dialled instead, it
+    overlaps the carrier's own setup, and the greeting is usually waiting in
+    the pacer's queue before the socket arrives.
+
+    Never raises: a warm-up that fails leaves `start` to do the work as before.
+    """
+    if call.id in _sessions:
+        return
+    try:
+        session = CallSession(
+            call.id,
+            send_to_caller=_discard,
+            live_settings=live_settings(),
+            persona=await persona_for(tenant, call),
+            record=tenant.record_calls,
+            keepalive=keepalive,
+            on_transcript=lambda who, text: None,
+            on_tool=_tool_handler(tenant, call),
+        )
+        _sessions[call.id] = session
+        await session.start(paced=False)
+        log.info("call %s: the agent is connected and waiting for the line", call.id)
+    except Exception:  # noqa: BLE001
+        _sessions.pop(call.id, None)
+        log.exception("call %s: could not warm the agent up", call.id)
+
+
 async def start(
     tenant: Tenant,
     call: Call,
@@ -365,6 +429,14 @@ async def start(
     """Answer a call: bring up the agent and start moving audio."""
     existing = _sessions.get(call.id)
     if existing is not None:
+        # Warmed while the carrier was connecting. Hand it the line; anything
+        # it has already said is queued and plays from its first word.
+        existing.attach_transport(send_to_caller)
+        call.status = CallStatus.IN_PROGRESS
+        call.answered_at = call.answered_at or time.time()
+        if tenant.record_calls and call.recording_state is RecordingState.NONE:
+            call.recording_state = RecordingState.PENDING
+        await call_repo.save_call(call)
         return existing
 
     human = call.mode == "human"

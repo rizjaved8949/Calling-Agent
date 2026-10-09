@@ -40,7 +40,7 @@ function errorText(cause: unknown, fallback: string): string {
   return cause instanceof Error && cause.message ? cause.message : fallback;
 }
 
-const TABS = ['Company', 'Default agent', 'Recordings', 'Your data'];
+const TABS = ['Company', 'Recordings', 'Your data'];
 
 export function SettingsScreen() {
   const {t, toast, canManage} = useApp();
@@ -83,7 +83,6 @@ export function SettingsScreen() {
     {error && <ErrorNote error={error}/>}
 
     {tab === 'Company' && <CompanyTab company={company} save={save} canManage={canManage}/>}
-    {tab === 'Default agent' && <DefaultAgentTab company={company} save={save} canManage={canManage}/>}
     {tab === 'Recordings' && <RecordingsTab company={company} save={save} canManage={canManage} reload={load}/>}
     {tab === 'Your data' && <DataTab company={company}/>}
   </div>;
@@ -111,48 +110,16 @@ function CompanyTab({company, save, canManage}: TabProps) {
         <Button disabled={!dirty} onClick={() => void save({name, language})}>Save</Button>
       </div>}
     </Section>
+    <Section title="What your agent says"
+      help="Greeting, persona, tone and talking speed all live on the agent itself, so each number can sound different.">
+      <div className="row"><Link className="button outline" to="/app/agents">Go to Agents</Link></div>
+    </Section>
     <Section title="Numbers and credentials">
       <p className="small muted" style={{margin: 0}}>
         Each number carries its own Meta or Infobip credentials, so they are set on the
         number itself rather than here.
       </p>
       <div className="row"><Link className="button outline" to="/app/numbers">Go to Numbers</Link></div>
-    </Section>
-  </div>;
-}
-
-/**
- * The company's own persona — the bottom of the chain in `services/routing.py`.
- * A company whose numbers all have agents never reaches it; one that has not
- * built an agent yet answers from this on every number.
- */
-function DefaultAgentTab({company, save, canManage}: TabProps) {
-  const [persona, setPersona] = useState(company.persona ?? '');
-  const [greeting, setGreeting] = useState(company.agentGreeting ?? '');
-  const [voice, setVoice] = useState(company.ttsVoice ?? '');
-  const dirty = persona !== (company.persona ?? '') || greeting !== (company.agentGreeting ?? '')
-    || voice !== (company.ttsVoice ?? '');
-
-  return <div className="card">
-    <Section title="The fallback agent"
-      help="Used on a number that has no agent of its own. Build proper agents under Agents — this is only the safety net.">
-      <TextInput label="Opening line" value={greeting} onChange={setGreeting} disabled={!canManage}
-        placeholder="Thank you for calling. How can I help?"/>
-      <TextInput label="Who it answers as" rows={5} value={persona} onChange={setPersona}
-        disabled={!canManage} placeholder="You are the assistant for Acme…"/>
-      <TextInput label="Voice" value={voice} onChange={setVoice} disabled={!canManage}
-        placeholder="leave empty for the default"/>
-      {canManage && <div className="row">
-        <Button disabled={!dirty}
-          onClick={() => void save({persona, agentGreeting: greeting, ttsVoice: voice})}>Save</Button>
-      </div>}
-    </Section>
-    <Section title="WhatsApp messages">
-      <p className="small muted" style={{margin: 0}}>
-        Whether the agent answers incoming WhatsApp messages by itself is set per number,
-        since one of your numbers may be staffed by people and another by the agent.
-      </p>
-      <div className="row"><Link className="button outline" to="/app/numbers">Set it per number</Link></div>
     </Section>
   </div>;
 }

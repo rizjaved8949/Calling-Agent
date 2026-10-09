@@ -86,11 +86,31 @@ class CallSession:
 
     # ---- lifecycle --------------------------------------------------------
 
-    async def start(self) -> None:
-        """Bring up the agent and begin releasing audio at line rate."""
-        self._pacer_task = asyncio.create_task(self._run_pacer())
+    async def start(self, *, paced: bool = True) -> None:
+        """Bring up the agent, and begin releasing audio at line rate.
+
+        `paced=False` brings the agent up without starting the clock, which is
+        how a session is warmed before the caller is connected. Anything the
+        agent says meanwhile accumulates in the pacer's queue rather than being
+        played to nobody, and is released the instant a transport arrives — so
+        the greeting starts the moment the line opens instead of several
+        seconds later. See `attach_transport`.
+        """
+        if paced:
+            self._pacer_task = asyncio.create_task(self._run_pacer())
         if not self.human:
             await self._start_agent()
+
+    def attach_transport(self, send_to_caller: Callable[[bytes], None]) -> None:
+        """Point this session at the leg that will carry its audio.
+
+        Starts the clock if `start(paced=False)` left it stopped. Whatever the
+        agent has already said is still queued, so it plays from its first
+        word rather than being cut into.
+        """
+        self._pacer.send = send_to_caller
+        if self._pacer_task is None and not self._closed:
+            self._pacer_task = asyncio.create_task(self._run_pacer())
 
     async def _start_agent(self) -> None:
         self._agent = GeminiLiveSession(

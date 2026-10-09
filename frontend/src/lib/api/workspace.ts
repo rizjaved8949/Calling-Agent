@@ -43,6 +43,7 @@ export type KbDocument = {
 
 export type AgentStatus = 'draft' | 'live' | 'paused';
 export type AgentMode = 'inbound' | 'outbound' | 'both';
+export type SpeakingPace = 'slow' | 'natural' | 'brisk';
 
 export type Agent = {
   id: string;
@@ -55,6 +56,7 @@ export type Agent = {
   toneNotes: string;
   escalationRules: string;
   ttsVoice: string;
+  speakingPace: SpeakingPace;
   knowledgeBaseId: string;
   createdAt: number;
 };

@@ -60,6 +60,7 @@ async def save(
         },
     )
     log.info("tenant %s: stored %r (%d chars)", tenant_id, name, len(text))
+    forget_context(tenant_id)
     return {"id": row_id, **{k: v for k, v in document.items() if k != "text"}}
 
 
@@ -98,9 +99,41 @@ async def delete(tenant_id: str, document_id: str) -> None:
     await supabase.delete(
         TABLE, params={"id": f"eq.{document_id}", "tenant_id": f"eq.{tenant_id}"}
     )
+    forget_context(tenant_id)
+
+
+# The prompt text for one knowledge base, briefly. Reading and joining tens of
+# thousands of characters took 1.7 seconds of every call's opening silence, and
+# documents do not change between two calls a minute apart. Invalidated on
+# upload and delete; stale for at most this long otherwise.
+_CONTEXT_TTL_SECONDS = 120.0
+_context_cache: dict[tuple[str, str, int], tuple[float, str]] = {}
+
+
+def forget_context(tenant_id: str = "") -> None:
+    """Drop cached prompt text after documents change."""
+    if not tenant_id:
+        _context_cache.clear()
+        return
+    for key in [k for k in _context_cache if k[0] == tenant_id]:
+        _context_cache.pop(key, None)
 
 
 async def context_for(
+    tenant_id: str,
+    limit: int = MAX_CONTEXT_CHARS,
+    knowledge_base_id: str = "",
+) -> str:
+    key = (tenant_id, knowledge_base_id, limit)
+    cached = _context_cache.get(key)
+    if cached and time.monotonic() - cached[0] < _CONTEXT_TTL_SECONDS:
+        return cached[1]
+    text = await _read_context(tenant_id, limit, knowledge_base_id)
+    _context_cache[key] = (time.monotonic(), text)
+    return text
+
+
+async def _read_context(
     tenant_id: str,
     limit: int = MAX_CONTEXT_CHARS,
     knowledge_base_id: str = "",

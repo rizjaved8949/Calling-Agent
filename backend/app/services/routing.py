@@ -154,6 +154,7 @@ def persona_for(tenant: Tenant, resolved: Resolved) -> dict[str, str]:
             "ttsVoice": tenant.tts_voice,
             "tone": "",
             "escalation": "",
+            "pace": "",
         }
     return {
         "greeting": agent.greeting or tenant.agent_greeting,
@@ -165,4 +166,5 @@ def persona_for(tenant: Tenant, resolved: Resolved) -> dict[str, str]:
         # promise a refund.
         "tone": agent.tone_notes,
         "escalation": agent.escalation_rules,
+        "pace": agent.speaking_pace.value,
     }

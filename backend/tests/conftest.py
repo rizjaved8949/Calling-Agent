@@ -94,6 +94,17 @@ class FakeSupabase:
 
 
 @pytest.fixture(autouse=True)
+def _reset_prompt_cache():
+    """Prompt text is cached for two minutes in production. Inside one test
+    run that means the previous test's documents, so every test starts cold."""
+    from app.repositories import knowledge as knowledge_repo
+
+    knowledge_repo.forget_context()
+    yield
+    knowledge_repo.forget_context()
+
+
+@pytest.fixture(autouse=True)
 def _reset_rate_limits():
     """A fresh rate-limit window per test.
 
@@ -143,9 +154,15 @@ def fake_db(monkeypatch) -> FakeSupabase:
             monkeypatch.setattr(module, "supabase", fake)
 
     tenant_repo.invalidate()
+    from app.repositories import knowledge as knowledge_repo
     from app.security import superadmin
+
     superadmin._cache = None
+    # Prompt text is cached for two minutes in production, which inside one
+    # test run means the previous test's documents.
+    knowledge_repo.forget_context()
     yield fake
+    knowledge_repo.forget_context()
     tenant_repo.invalidate()
 
 
