@@ -124,9 +124,9 @@ export function AuthScreen({mode}:{mode:'login'|'signup'|'forgot'|'verify'|'invi
         </>}
       {error&&<div className="notice danger">{t(error)}</div>}
       <Button type="submit" disabled={busy}>{t(busy?'Please wait…':needsCompanyName?'Create company':mode==='forgot'?'Send reset link':mode==='invite'?'Accept invitation':mode==='signup'?'Create account':'Sign in')}</Button>
-      {mode==='login'&&!needsCompanyName&&(LIVE
-        ?<button className="button outline" type="button" disabled={busy} onClick={submitGoogle}>{t('Sign in with Google')}</button>
-        :<button className="button outline" type="button" onClick={()=>{setSession({email:'demo@example.com',name:'Demo User',userId:'user-1',orgId:store.organizations[0].id,portal:'company'});navigate('/app/dashboard')}}>{t('Sign in with Google')}</button>)}
+      {(mode==='login'||mode==='signup')&&!needsCompanyName&&(LIVE
+        ?<button className="button outline" type="button" disabled={busy} onClick={submitGoogle}>{t('Continue with Google')}</button>
+        :<button className="button outline" type="button" onClick={()=>{setSession({email:'demo@example.com',name:'Demo User',userId:'user-1',orgId:store.organizations[0].id,portal:'company'});navigate('/app/dashboard')}}>{t('Continue with Google')}</button>)}
       {mode==='login'&&!LIVE&&<div className="demo-logins"><div className="small muted">{t('Or open one of the three portals')}</div><div className="demo-row"><button className="button outline small" type="button" onClick={()=>{setSession({email:'samira@northstar.edu',name:'Samira Khan',userId:'user-1',orgId:'org-northstar',portal:'company'});navigate('/app/dashboard')}}>{t('Company admin')}</button><button className="button outline small" type="button" onClick={()=>{setSession({email:'omar@northstar.edu',name:'Omar Farooq',userId:'user-2',orgId:'org-northstar',portal:'company'});navigate('/app/queue')}}>{t('Company staff')}</button><button className="button outline small" type="button" onClick={()=>{api.setProfile('user-platform');setSession({email:'ops@platform.internal',name:'Platform Operations',userId:'user-platform',orgId:'org-northstar',portal:'platform',platformRole:'superadmin'});navigate('/platform/companies')}}>{t('Platform (us)')}</button></div></div>}
     </form>}
     {!needsCompanyName&&<div className="row between small" style={{marginTop:24}}><Link to={mode==='login'?'/signup':'/login'}>{t(mode==='login'?'Create an account':'Sign in')}</Link><Link to="/forgot-password">{t('Forgot password?')}</Link></div>}
