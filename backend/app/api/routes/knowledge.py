@@ -26,8 +26,16 @@ MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 
 
 @router.get("")
-async def list_documents(tenant: CurrentTenant) -> dict:
-    documents = await knowledge.listing(tenant.phone_number_id)
+async def list_documents(
+    tenant: CurrentTenant, knowledgeBaseId: str | None = None
+) -> dict:
+    """Every document, or one knowledge base's.
+
+    No `knowledgeBaseId` lists all of them; passing one narrows to that
+    base, and passing an empty one lists the documents filed under no base
+    at all — everything uploaded before knowledge bases existed.
+    """
+    documents = await knowledge.listing(tenant.phone_number_id, knowledgeBaseId)
     return {
         "documents": documents,
         "totalChars": sum(d["chars"] for d in documents),
@@ -36,12 +44,19 @@ async def list_documents(tenant: CurrentTenant) -> dict:
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
-async def upload(tenant: CurrentTenant, request: Request, name: str = "") -> dict:
+async def upload(
+    tenant: CurrentTenant, request: Request, name: str = "",
+    knowledgeBaseId: str = "",
+) -> dict:
     """Store a document.
 
     Takes the file as the raw body, with `?name=` for what to call it. A PDF is
     read for its text; anything else is treated as text. The same name replaces
     rather than duplicates, so correcting a price list is re-uploading it.
+
+    `knowledgeBaseId` files it under one base, so a number pointed at that
+    base answers from it and other numbers do not. Left out, it joins the
+    company's general pile, which every agent can read.
     """
     raw = await request.body()
     if not raw:
@@ -67,7 +82,17 @@ async def upload(tenant: CurrentTenant, request: Request, name: str = "") -> dic
         except UnicodeDecodeError:
             text = raw.decode("utf-8", "replace")
 
-    stored = await knowledge.save(tenant.phone_number_id, label, text)
+    if knowledgeBaseId:
+        from ...repositories import agents as agent_repo
+
+        if await agent_repo.get_knowledge_base(
+            tenant.phone_number_id, knowledgeBaseId
+        ) is None:
+            raise AppError(422, "That knowledge base does not exist.", code="no_such_kb")
+
+    stored = await knowledge.save(
+        tenant.phone_number_id, label, text, knowledge_base_id=knowledgeBaseId
+    )
     return stored
 
 

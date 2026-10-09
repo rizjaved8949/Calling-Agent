@@ -129,6 +129,7 @@ def fake_db(monkeypatch) -> FakeSupabase:
         "app.repositories.tenants",
         "app.repositories.campaigns",
         "app.repositories.knowledge",
+        "app.repositories.agents",
         "app.services.storage",
     ):
         module = importlib.import_module(name)

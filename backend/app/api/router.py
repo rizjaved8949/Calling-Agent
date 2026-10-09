@@ -11,8 +11,8 @@ from fastapi import APIRouter, Depends
 
 from ..security.rate_limit import check_blanket, check_expensive
 from .routes import (
-    auth, calls, campaigns, companies, exports, gaps, google, health, knowledge, media,
-    messaging, recordings, usage, webhooks,
+    agents, auth, calls, campaigns, companies, exports, gaps, google, health, knowledge,
+    media, messaging, recordings, usage, webhooks,
 )
 
 api_router = APIRouter(prefix="/api")
@@ -38,6 +38,9 @@ api_router.include_router(calls.router, dependencies=_limited)
 api_router.include_router(recordings.router, dependencies=_limited)
 api_router.include_router(messaging.router, dependencies=_limited)
 api_router.include_router(knowledge.router, dependencies=_limited)
+# Agents, knowledge bases and the routing between them. Mounted after
+# knowledge so /knowledge-bases is not swallowed by /knowledge's own paths.
+api_router.include_router(agents.router, dependencies=_limited)
 # Not rate-limited: mostly websocket routes, and `Depends` needs a `Request`
 # to key off, which a websocket handshake does not give it. Each socket is
 # already gated by a call-specific token from `_authorise`, not a bare key.
