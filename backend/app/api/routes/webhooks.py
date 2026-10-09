@@ -162,6 +162,20 @@ async def _tenant_for_meta(phone_number_id: str) -> Tenant | None:
     return await tenant_repo.get(phone_number_id)
 
 
+async def _inbound_allowed_for(tenant: Tenant, call: Call) -> bool:
+    """Whether the number this call arrived on answers calls at all."""
+    number = await _line_for(tenant, call)
+    if number is None:
+        # No numbers connected at all is the pre-numbers arrangement, which
+        # answered everything. A company that has connected numbers but none
+        # matching this call is a misconfiguration, not an invitation.
+        try:
+            return not await number_repo.list_for(tenant.phone_number_id)
+        except Exception:  # noqa: BLE001
+            return True
+    return bool(number.verified and number.takes_inbound and number.inbound_agent_id)
+
+
 async def _inbound_allowed(tenant: Tenant) -> bool:
     """Whether this number answers calls at all.
 
@@ -543,6 +557,47 @@ def name_of(event: dict[str, Any]) -> str:
     return str(event.get("name") or event.get("type") or "").upper()
 
 
+def _digits(value: str) -> str:
+    return "".join(ch for ch in (value or "") if ch.isdigit())
+
+
+async def _line_for(tenant: Tenant, call: Call, dialled: str = ""):
+    """Which connected number this call is on.
+
+    Three ways, because a call reaches us by three routes. The per-number
+    webhook names it, so the overlay already carries it. The older
+    per-company webhook does not — it knows the company and nothing more —
+    and that is how a SIM call ended up with no number, no audio endpoint,
+    and a bridge that gave up one second after the caller answered. So the
+    number recorded on the call is tried first, and failing that the number
+    that was dialled is matched against the company's own.
+    """
+    from ...models.number import NumberKind
+
+    company_id = tenant.phone_number_id
+    for candidate in (call.line_id, tenant.line_id):
+        if candidate:
+            found = await number_repo.get_safe(company_id, candidate)
+            if found is not None:
+                return found
+
+    wanted = _digits(dialled) or _digits(call.from_number) or _digits(tenant.infobip_phone_number)
+    kind = NumberKind.WHATSAPP if call.channel is Channel.WHATSAPP_CALL else NumberKind.SIM
+    try:
+        numbers = await number_repo.list_for(company_id)
+    except Exception:  # noqa: BLE001
+        log.exception("call %s: could not read the company's numbers", call.id)
+        return None
+    matching = [n for n in numbers if n.kind is kind]
+    if wanted:
+        exact = next((n for n in matching if _digits(n.phone_number) == wanted), None)
+        if exact is not None:
+            return exact
+    # One number of the right kind is unambiguous even without a match.
+    verified = [n for n in matching if n.verified]
+    return verified[0] if len(verified) == 1 else None
+
+
 async def _bridge_agent(tenant: Tenant, call: Call) -> None:
     """Put the agent on a SIM call by dialling a websocket leg into it.
 
@@ -559,13 +614,20 @@ async def _bridge_agent(tenant: Tenant, call: Call) -> None:
     from ...services import lines
     from ...services.agent import claims
 
-    number = (
-        await number_repo.get_safe(tenant.phone_number_id, tenant.line_id)
-        if tenant.line_id else None
-    )
+    number = await _line_for(tenant, call)
     try:
         if number is None:
-            raise RuntimeError("this call is not on a connected number")
+            raise RuntimeError(
+                "this call is not on a connected number — add it under Numbers"
+            )
+        # The credentials of the number carrying the call, which the older
+        # per-company webhook does not supply.
+        if not tenant.line_id:
+            tenant = number_repo.as_tenant(tenant, number)
+        if not call.line_id:
+            call.line_id = number.id
+            with contextlib.suppress(Exception):
+                await call_repo.save_call(call)
         config_id = number.infobip_websocket_config_id or await lines.ensure_audio_endpoint(
             tenant, number
         )
@@ -597,7 +659,7 @@ async def _answer_inbound(tenant: Tenant, call: Call) -> None:
     moment the agent's leg connects, so answering first and bridging afterwards
     only buys the caller a few seconds of silence.
     """
-    if not await _inbound_allowed(tenant):
+    if not await _inbound_allowed_for(tenant, call):
         log.info("call %s: this number takes no inbound calls, hanging up", call.id)
         with contextlib.suppress(Exception):
             await Infobip(tenant).hangup(call.provider_call_id)
@@ -628,6 +690,7 @@ async def _handle_infobip(tenant: Tenant, payload: dict[str, Any]) -> None:
                 log.debug("Infobip event for a call we do not have: %s", provider_call_id)
                 continue
             caller = str(call_payload.get("from") or event.get("from") or "")
+            dialled = str(call_payload.get("to") or event.get("to") or "")
             call = Call(
                 tenantId=tenant.phone_number_id,
                 channel=Channel.PHONE,
@@ -636,7 +699,7 @@ async def _handle_infobip(tenant: Tenant, payload: dict[str, Any]) -> None:
                 counterparty=caller,
                 providerCallId=provider_call_id,
                 lineId=tenant.line_id,
-                fromNumber=tenant.infobip_phone_number,
+                fromNumber=dialled or tenant.infobip_phone_number,
                 recordingState=(
                     RecordingState.PENDING if tenant.record_calls else RecordingState.NONE
                 ),

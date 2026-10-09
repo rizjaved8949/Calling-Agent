@@ -85,9 +85,21 @@ async def lifespan(_app: FastAPI):
 
     await campaign_runner.resume_all()
 
+    # Rows the provider never reported the end of. A single one can make a
+    # number unreachable — WhatsApp refuses a second call to someone it
+    # believes is already on one — so they are swept rather than left.
+    import asyncio
+
+    from .services import reaper
+
+    reaping = asyncio.create_task(reaper.run_forever())
+
     try:
         yield
     finally:
+        reaping.cancel()
+        with __import__("contextlib").suppress(asyncio.CancelledError, Exception):
+            await reaping
         # A call still running when the process goes away would otherwise
         # leave a row IN_PROGRESS forever and its recording unwritten.
         from .services.agent import live

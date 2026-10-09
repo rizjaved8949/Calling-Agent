@@ -191,3 +191,106 @@ async def test_a_missing_public_base_url_is_a_clear_refusal(fake_db, monkeypatch
             PhoneNumber(tenantId="t", kind=NumberKind.SIM, phoneNumber="+92300"),
         )
     assert refused.value.code == "no_public_base_url"
+
+
+# ---------------------------------------------------------------------------
+# Finding the number a call arrived on
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_a_call_on_the_per_company_webhook_still_finds_its_number(fake_db):
+    """The older webhook names the company and nothing else. Without this the
+    bridge found no number, no audio endpoint, and gave up — which is a SIM
+    call that connects and dies one second after the caller answers."""
+    from app.api.routes.webhooks import _line_for
+    from app.models.call import Call, Channel, Direction
+    from app.models.number import NumberKind, NumberStatus, PhoneNumber
+    from app.models.tenant import Tenant
+    from app.repositories import numbers as number_repo
+
+    tenant = Tenant(phoneNumberId="co-1", name="Acme", infobipPhoneNumber="+92516028402")
+    line = await number_repo.save(PhoneNumber(
+        tenantId="co-1", kind=NumberKind.SIM, phoneNumber="+92516028402",
+        status=NumberStatus.VERIFIED, infobipWebsocketConfigId="cfg-1",
+    ))
+    # No line on the tenant (per-company webhook) and none on the call yet.
+    call = Call(tenantId="co-1", channel=Channel.PHONE, direction=Direction.INBOUND,
+                counterparty="+923191611020", fromNumber="+92516028402")
+    found = await _line_for(tenant, call)
+    assert found is not None and found.id == line.id
+
+
+@pytest.mark.asyncio
+async def test_the_number_recorded_on_the_call_wins(fake_db):
+    from app.api.routes.webhooks import _line_for
+    from app.models.call import Call, Channel, Direction
+    from app.models.number import NumberKind, NumberStatus, PhoneNumber
+    from app.models.tenant import Tenant
+    from app.repositories import numbers as number_repo
+
+    tenant = Tenant(phoneNumberId="co-2", name="Acme")
+    first = await number_repo.save(PhoneNumber(
+        tenantId="co-2", kind=NumberKind.SIM, phoneNumber="+92516028402",
+        status=NumberStatus.VERIFIED))
+    second = await number_repo.save(PhoneNumber(
+        tenantId="co-2", kind=NumberKind.SIM, phoneNumber="+92519999999",
+        status=NumberStatus.VERIFIED))
+    call = Call(tenantId="co-2", channel=Channel.PHONE, direction=Direction.OUTBOUND,
+                counterparty="+923191611020", lineId=second.id)
+    found = await _line_for(tenant, call)
+    assert found.id == second.id and found.id != first.id
+
+
+@pytest.mark.asyncio
+async def test_a_whatsapp_call_never_matches_a_sim_number(fake_db):
+    """Matching on digits alone would hand a WhatsApp call a carrier line."""
+    from app.api.routes.webhooks import _line_for
+    from app.models.call import Call, Channel, Direction
+    from app.models.number import NumberKind, NumberStatus, PhoneNumber
+    from app.models.tenant import Tenant
+    from app.repositories import numbers as number_repo
+
+    tenant = Tenant(phoneNumberId="co-3", name="Acme")
+    await number_repo.save(PhoneNumber(
+        tenantId="co-3", kind=NumberKind.SIM, phoneNumber="+92516028402",
+        status=NumberStatus.VERIFIED))
+    call = Call(tenantId="co-3", channel=Channel.WHATSAPP_CALL,
+                direction=Direction.INBOUND, counterparty="+92319",
+                fromNumber="+92516028402")
+    assert await _line_for(tenant, call) is None
+
+
+@pytest.mark.asyncio
+async def test_an_unmatched_call_on_a_company_with_numbers_is_not_answered(fake_db):
+    """Connecting numbers and then taking a call on none of them is a
+    misconfiguration, not an invitation to answer with whatever is to hand."""
+    from app.api.routes.webhooks import _inbound_allowed_for
+    from app.models.call import Call, Channel, Direction
+    from app.models.number import NumberKind, NumberStatus, PhoneNumber
+    from app.models.tenant import Tenant
+    from app.repositories import numbers as number_repo
+
+    tenant = Tenant(phoneNumberId="co-4", name="Acme")
+    await number_repo.save(PhoneNumber(
+        tenantId="co-4", kind=NumberKind.SIM, phoneNumber="+92511111111",
+        status=NumberStatus.VERIFIED, inboundAgentId="a-1"))
+    stray = Call(tenantId="co-4", channel=Channel.PHONE, direction=Direction.INBOUND,
+                 counterparty="+92319", fromNumber="+92517777777")
+    # Two numbers so there is no unambiguous single candidate to fall back to.
+    await number_repo.save(PhoneNumber(
+        tenantId="co-4", kind=NumberKind.SIM, phoneNumber="+92512222222",
+        status=NumberStatus.VERIFIED, inboundAgentId="a-1"))
+    assert await _inbound_allowed_for(tenant, stray) is False
+
+
+@pytest.mark.asyncio
+async def test_a_company_with_no_numbers_answers_as_it_always_did(fake_db):
+    """The arrangement from before numbers existed must keep working."""
+    from app.api.routes.webhooks import _inbound_allowed_for
+    from app.models.call import Call, Channel, Direction
+    from app.models.tenant import Tenant
+
+    tenant = Tenant(phoneNumberId="co-5", name="Acme")
+    call = Call(tenantId="co-5", channel=Channel.PHONE, direction=Direction.INBOUND,
+                counterparty="+92319")
+    assert await _inbound_allowed_for(tenant, call) is True
