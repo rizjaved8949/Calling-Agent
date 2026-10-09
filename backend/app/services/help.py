@@ -109,6 +109,19 @@ over a live call, look up a customer and ask the documents, but cannot see
 credentials, change settings or manage the team. There is one owner.
 No email is sent — you are given a link to pass on yourself.
 
+# Contacting the platform operator
+Contact support, under Manage, is a live chat with the people who run the
+platform. Messages arrive instantly while both sides have it open, and a badge
+appears on the link when a reply is waiting.
+Photos, videos, voice notes, PDFs and text files can be attached, and the
+microphone button records a voice note in the browser. Photos and voice notes
+are limited to 10 MB, video to 40 MB.
+A message can be deleted, and it goes for both sides — there is one shared
+history, so hiding it from only yourself would leave the other person
+answering something you cannot see. You can only delete your own.
+This is the place for anything about your own account. The assistant on the
+Guides page answers how the product works and cannot see your account.
+
 # Recordings and privacy
 Recording is on by default and can be turned off in Settings, which affects new
 calls only. Connect Google Drive and each recording is also copied to a folder

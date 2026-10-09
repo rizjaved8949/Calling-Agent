@@ -212,3 +212,83 @@ def describe(reference: str) -> str:
     if reference.startswith(REMOTE_PREFIX):
         return "supabase"
     return "local-disk" if reference else "none"
+
+
+# ---------------------------------------------------------------------------
+# Objects that are not call recordings
+# ---------------------------------------------------------------------------
+#
+# Support attachments take the same backends minus Google Drive. A company's
+# Drive is deliberately skipped: the person on the other end of that
+# conversation is the platform operator, who has no access to the customer's
+# Drive folder, so storing a shared file there would make it unreadable by the
+# only other party who needs it.
+
+
+async def put_object(key: str, data: bytes, mime: str) -> str | None:
+    """Store bytes under an exact key. Returns the reference, or None."""
+    if settings.supabase_configured:
+        if len(data) > settings.supabase_max_upload_bytes:
+            return None
+        try:
+            response = await supabase.storage().post(
+                f"/object/{settings.supabase_bucket}/{key}",
+                content=data,
+                headers={"content-type": mime, "x-upsert": "true"},
+            )
+        except httpx.HTTPError as exc:
+            log.warning("upload of %s failed: %s", key, exc)
+            return None
+        if response.status_code >= 400:
+            log.warning("upload of %s returned %s: %s",
+                        key, response.status_code, response.text[:200])
+            return None
+        return f"{REMOTE_PREFIX}{key}"
+
+    target = settings.recordings_path / key
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(data)
+    stored: Path = target
+    with contextlib.suppress(ValueError):
+        stored = target.relative_to(BASE_DIR)
+    return stored.as_posix()
+
+
+async def get_object(reference: str) -> bytes | None:
+    """Bytes stored by `put_object`, or None. No Drive, no tenant needed."""
+    if not reference:
+        return None
+    if reference.startswith(REMOTE_PREFIX):
+        if not settings.supabase_configured:
+            return None
+        key = reference[len(REMOTE_PREFIX):]
+        try:
+            response = await supabase.storage().get(
+                f"/object/{settings.supabase_bucket}/{key}"
+            )
+        except httpx.HTTPError as exc:
+            log.warning("fetch of %s failed: %s", key, exc)
+            return None
+        return response.content if response.status_code < 400 and response.content else None
+
+    file = Path(reference) if Path(reference).is_absolute() else BASE_DIR / reference
+    if file.exists() and file.stat().st_size > 0:
+        return file.read_bytes()
+    return None
+
+
+async def delete_object(reference: str) -> None:
+    """Best effort erase, so deleting a message still deletes it."""
+    if not reference:
+        return
+    if reference.startswith(REMOTE_PREFIX):
+        if settings.supabase_configured:
+            key = reference[len(REMOTE_PREFIX):]
+            with contextlib.suppress(httpx.HTTPError):
+                await supabase.storage().delete(
+                    f"/object/{settings.supabase_bucket}/{key}"
+                )
+        return
+    file = Path(reference) if Path(reference).is_absolute() else BASE_DIR / reference
+    with contextlib.suppress(OSError):
+        file.unlink()

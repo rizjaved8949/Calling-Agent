@@ -70,6 +70,8 @@ import {DialerScreen} from './pages-dialer';
 import {CallHistoryScreen,CallDetailScreen} from './pages-history';
 import {MessagesScreen} from './pages-messages';
 import {AdminCompanies,AdminCompanyDetail,AdminHealth,AdminEngine} from './pages-admin';
+import {SupportScreen,PlatformSupport,PlatformSupportThread} from './pages-support';
+import * as supportUnread from './lib/support-unread';
 import {DashboardScreen} from './pages-dashboard';
 import {SettingsScreen} from './pages-settings';
 import {GuidesScreen,GuideScreen} from './pages-guides';
@@ -211,16 +213,35 @@ type NavGroup=[string,[React.ComponentType<{size?:number}>,string,string][]][];
 const ADMIN_NAV:NavGroup=[
   ['Setup',[[LayoutDashboard,'Dashboard','/app/dashboard'],[Radio,'Numbers','/app/numbers'],[Mic2,'Agents','/app/agents'],[BrainCircuit,'Knowledge','/app/knowledge']]],
   ['Calls',[[Phone,'Dialer','/app/dialer'],[Activity,'Live','/app/live'],[PhoneOutgoing,'Campaigns','/app/campaigns'],[AudioLines,'Call recordings','/app/recordings'],[MessageSquare,'Messages','/app/messages'],[ListChecks,'Unanswered','/app/unanswered']]],
-  ['Manage',[[Users,'Team','/app/team'],[ChartNoAxesCombined,'Usage','/app/usage'],[Settings,'Settings','/app/settings'],[BookOpen,'Guides','/app/guides']]],
+  ['Manage',[[Users,'Team','/app/team'],[ChartNoAxesCombined,'Usage','/app/usage'],[Settings,'Settings','/app/settings'],[BookOpen,'Guides','/app/guides'],[LifeBuoy,'Contact support','/app/support']]],
 ];
 const STAFF_NAV:NavGroup=[
   ['My work',[[Phone,'Dialer','/app/dialer'],[Activity,'Live','/app/live'],[AudioLines,'Call recordings','/app/recordings']]],
   ['Help me',[[Search,'Customer lookup','/app/lookup'],[HelpCircle,'Ask the documents','/app/ask'],[BookOpen,'Guides','/app/guides']]],
 ];
 const PLATFORM_NAV:NavGroup=[
-  ['Customers',[[Building2,'Companies','/platform/companies']]],
+  ['Customers',[[Building2,'Companies','/platform/companies'],[LifeBuoy,'Support','/platform/support']]],
   ['This server',[[Mic2,'Speech engine','/platform/engine'],[ServerCog,'Health','/platform/health']]],
 ];
+
+/**
+ * How many support messages are waiting, for the badge beside the nav link.
+ *
+ * A live chat nobody notices is a slow chat: without this, a reply only exists
+ * once you happen to open the page. One socket for the whole app, started here
+ * and shared through a module store — see `lib/support-unread.ts`.
+ */
+function useSupportUnread(platform:boolean):number{
+  const [count,setCount]=useState(0);
+  const {session}=useApp();
+  useEffect(()=>{
+    if(!LIVE||!session)return;
+    supportUnread.start(platform);
+    const stop=supportUnread.subscribe(setCount);
+    return ()=>{stop()};
+  },[platform,session]);
+  return count;
+}
 
 function Shell({children,platform=false}:{children:React.ReactNode;platform?:boolean}){
   const {session,org,setOrg,store,t,theme,setTheme,setSession,connection,role,readOnly}=useApp();
@@ -229,6 +250,7 @@ function Shell({children,platform=false}:{children:React.ReactNode;platform?:boo
   const viewing=getViewingCompany();
   useEffect(()=>{const handle=(e:KeyboardEvent)=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();setPalette(x=>!x)}if(e.key==='Escape')setPalette(false)};window.addEventListener('keydown',handle);return()=>window.removeEventListener('keydown',handle)},[]);
   const nav=platform?PLATFORM_NAV:role==='staff'?STAFF_NAV:ADMIN_NAV;
+  const supportWaiting=useSupportUnread(platform);
   const current=nav.flatMap(x=>x[1]).filter(x=>location.pathname.startsWith(x[2])).sort((a,b)=>b[2].length-a[2].length)[0]?.[1]||(platform?'Platform':'Overview');
   const home=platform?'/platform/companies':role==='staff'?'/app/dialer':'/app/dashboard';
   const endImpersonation=()=>{if(session?.impersonating){api.endImpersonation(session.impersonating.orgId);setSession({...session,impersonating:undefined});navigate('/platform/companies')}};
@@ -242,7 +264,7 @@ function Shell({children,platform=false}:{children:React.ReactNode;platform?:boo
       {!collapsed&&!platform&&(LIVE||role==='staff'
         ?<div className="workspace workspace-label" title={org.name}>{org.name}</div>
         :<select className="workspace" aria-label={t('Workspace')} value={org.id} onChange={e=>setOrg(e.target.value)} disabled={readOnly}>{store.organizations.filter(x=>store.memberships.some(m=>m.orgId===x.id&&m.userId===session?.userId)).map(x=><option value={x.id} key={x.id}>{x.name}</option>)}</select>)}
-      <nav>{nav.map(([group,links])=><div key={group}><div className="nav-group">{!collapsed&&t(group)}</div>{links.map(([Icon,label,path])=><NavLink className={({isActive})=>'nav-link '+(isActive?'active':'')} to={path} key={path} title={t(label)} onClick={()=>setOpen(false)}><Icon size={18}/>{!collapsed&&t(label)}</NavLink>)}</div>)}</nav>
+      <nav>{nav.map(([group,links])=><div key={group}><div className="nav-group">{!collapsed&&t(group)}</div>{links.map(([Icon,label,path])=><NavLink className={({isActive})=>'nav-link '+(isActive?'active':'')} to={path} key={path} title={t(label)} onClick={()=>setOpen(false)}><Icon size={18}/>{!collapsed&&t(label)}{path.endsWith('/support')&&supportWaiting>0&&<span className="nav-count" aria-label={`${supportWaiting} unread`}>{supportWaiting>9?'9+':supportWaiting}</span>}</NavLink>)}</div>)}</nav>
       <div className="sidebar-bottom"><button className="ghost-btn" onClick={()=>setCollapsed(x=>!x)} title={t('Collapse sidebar')}><ChevronDown size={16} style={{transform:'rotate(90deg)'}}/>{!collapsed&&t('Collapse sidebar')}</button></div>
     </aside>
     <div className="main">
@@ -362,6 +384,7 @@ function AppRoutes(){
     {/* The tab was called History. Old links still land in the right place. */}
     <Route path="/app/history" element={<Navigate to="/app/recordings" replace/>}/>
     <Route path="/app/history/:id" element={<HistoryRedirect/>}/>
+    <Route path="/app/support" element={<Protected><SupportScreen/></Protected>}/>
     <Route path="/app/guides" element={<Protected><WhenLive real={<GuidesScreen/>}><Guides/></WhenLive></Protected>}/>
     <Route path="/app/guides/:slug" element={<Protected><WhenLive real={<GuideScreen/>}><GuideDetail/></WhenLive></Protected>}/>
     <Route path="/app/queue" element={<Protected><WhenLive real={<StaffQueueScreen/>}><StaffQueue/></WhenLive></Protected>}/>
@@ -372,6 +395,8 @@ function AppRoutes(){
     <Route path="/platform/companies/:id" element={<PlatformOnly><WhenLive real={<AdminCompanyDetail/>}><PlatformCompanyDetail/></WhenLive></PlatformOnly>}/>
     <Route path="/platform/health" element={<PlatformOnly><WhenLive real={<AdminHealth/>}><PlatformHealth/></WhenLive></PlatformOnly>}/>
     <Route path="/platform/engine" element={<PlatformOnly><AdminEngine/></PlatformOnly>}/>
+    <Route path="/platform/support" element={<PlatformOnly><PlatformSupport/></PlatformOnly>}/>
+    <Route path="/platform/support/:tenantId" element={<PlatformOnly><PlatformSupportThread/></PlatformOnly>}/>
     {/* The portal used to list screens for features that do not exist —
         provisioning, shared presets, a search console, an audit trail. They
         redirect rather than 404 so an old bookmark still lands somewhere. */}

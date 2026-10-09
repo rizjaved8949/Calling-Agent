@@ -247,9 +247,27 @@ async def delete_company(_: AdminOnly, phone_number_id: str) -> None:
     Their call rows and stored audio are left alone: deleting a tenant is an
     account action, and erasing a year of recordings as a side effect of it is
     not something an operator can undo.
+
+    The support conversation is the exception, and goes. It is a thread with
+    *us*, not a record of the company's own business, and the photos and
+    videos uploaded into it would otherwise sit in the bucket forever belonging
+    to nobody — invisible, because the operator's thread list is drawn from the
+    companies that exist.
     """
     tenant = await tenant_repo.get(phone_number_id)
     if tenant is None:
         raise NotFound("Company")
+    await _purge_support(phone_number_id)
     await tenant_repo.delete(phone_number_id)
     log.info("removed company %s", phone_number_id)
+
+
+async def _purge_support(phone_number_id: str) -> None:
+    """Erase the support thread and anything uploaded into it."""
+    from ...repositories import support as support_repo
+    from ...services import storage
+
+    for message in await support_repo.history(phone_number_id, limit=500):
+        if message.attachment and message.attachment.reference:
+            await storage.delete_object(message.attachment.reference)
+    await support_repo.purge(phone_number_id)

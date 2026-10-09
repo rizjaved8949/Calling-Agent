@@ -146,6 +146,7 @@ def fake_db(monkeypatch) -> FakeSupabase:
         "app.repositories.knowledge",
         "app.repositories.agents",
         "app.repositories.numbers",
+        "app.repositories.support",
         "app.security.superadmin",
         "app.services.storage",
     ):
