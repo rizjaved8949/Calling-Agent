@@ -182,6 +182,7 @@ export function toMessage(wire: WireMessage): Message {
     orgId: wire.tenantId,
     callId: wire.callId ?? undefined,
     toNumber: wire.counterparty,
+    direction: wire.direction,
     templateId: wire.templateName ?? undefined,
     body: wire.body,
     status: messageStatus(wire.status),

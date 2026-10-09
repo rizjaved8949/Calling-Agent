@@ -347,8 +347,8 @@ function AppRoutes(){
     <Route path="/app/live" element={<Protected><WhenLive real={<LiveCalls/>}><Live/></WhenLive></Protected>}/>
     <Route path="/app/history" element={<Protected><HistoryPage/></Protected>}/>
     <Route path="/app/history/:id" element={<Protected><CallDetail/></Protected>}/>
-    <Route path="/app/guides" element={<Protected><NotYet title="Guides"><Guides/></NotYet></Protected>}/>
-    <Route path="/app/guides/:slug" element={<Protected><NotYet title="Guide"><GuideDetail/></NotYet></Protected>}/>
+    <Route path="/app/guides" element={<Protected><Guides/></Protected>}/>
+    <Route path="/app/guides/:slug" element={<Protected><GuideDetail/></Protected>}/>
     <Route path="/app/queue" element={<Protected><WhenLive real={<StaffQueueScreen/>}><StaffQueue/></WhenLive></Protected>}/>
     <Route path="/app/lookup" element={<Protected><WhenLive real={<StaffLookupScreen/>}><StaffLookup/></WhenLive></Protected>}/>
     <Route path="/app/ask" element={<Protected><WhenLive real={<StaffAskScreen/>}><StaffAsk/></WhenLive></Protected>}/>

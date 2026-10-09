@@ -391,7 +391,7 @@ export const api = {
         await hydrateMessages();
         return row;
       })
-    : update(()=> { const row:Message={id:'msg-'+id(),orgId,toNumber,body,templateId,status:'sent',sentAt:new Date().toISOString()};store.messages.unshift(row);return row; }),
+    : update(()=> { const row:Message={id:'msg-'+id(),orgId,toNumber,direction:'OUTBOUND',body,templateId,status:'sent',sentAt:new Date().toISOString()};store.messages.unshift(row);return row; }),
   /** Read straight from Meta each time: approval status changes on their schedule. */
   getTemplates: (orgId:string) => LIVE
     ? real(async()=>{ const rows=await live.templates(orgId); store.templates=rows; notify(); return clone(rows); })

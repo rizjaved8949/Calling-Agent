@@ -203,7 +203,7 @@ export const initialStore: Store = {
   ],
   campaignContacts: Array.from({ length: 24 }, (_, i) => ({ id: 'cc-' + i, campaignId: i < 16 ? 'camp-1' : 'camp-2', number: calls[i + 40].phoneNumber, name: ['Hamza', 'Fatima', 'Bilal', 'Ayesha'][i % 4] + ' ' + ['Ali', 'Khan', 'Sheikh'][i % 3], attempts: i % 3, lastOutcome: i % 4 === 0 ? 'No answer' : 'Connected', callIds: [] })),
   unanswered,
-  messages: Array.from({ length: 27 }, (_, i) => ({ id: 'msg-' + i, orgId, toNumber: calls[i].phoneNumber, templateId: i % 2 === 0 ? 'tpl-1' : undefined, body: i % 2 === 0 ? 'Your appointment is confirmed for tomorrow.' : 'Thank you for contacting Northstar University.', status: i % 9 === 0 ? 'failed' : i % 3 === 0 ? 'read' : 'delivered', sentAt: date(i / 3) })),
+  messages: Array.from({ length: 27 }, (_, i) => ({ id: 'msg-' + i, orgId, toNumber: calls[i].phoneNumber, direction: (i % 2 === 0 ? 'OUTBOUND' : 'INBOUND') as 'OUTBOUND' | 'INBOUND', templateId: i % 2 === 0 ? 'tpl-1' : undefined, body: i % 2 === 0 ? 'Your appointment is confirmed for tomorrow.' : 'Thank you for contacting Northstar University.', status: i % 9 === 0 ? 'failed' : i % 3 === 0 ? 'read' : 'delivered', sentAt: date(i / 3) })),
   templates: [
     { id: 'tpl-1', orgId, name: 'Appointment reminder', language: 'en', category: 'Utility', status: 'approved', bodyPreview: 'Your appointment is confirmed for {{1}}.', variables: ['date'] },
     { id: 'tpl-2', orgId, name: 'Application update', language: 'en', category: 'Utility', status: 'pending', bodyPreview: 'Your application {{1}} has an update.', variables: ['reference'] },

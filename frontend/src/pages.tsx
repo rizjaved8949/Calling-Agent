@@ -5,7 +5,8 @@ import {Area,AreaChart,Bar,BarChart,CartesianGrid,Legend,ResponsiveContainer,Too
 import {api,LIVE,setAuthToken} from './lib/api';
 import {friendlyAuthError,loginWithEmail,loginWithGoogle,completeGoogleSignup,registerWithEmail,sendPasswordReset,NeedsSignup} from './lib/api/auth';
 import {exportCallsXlsx} from './lib/exportXlsx';
-import type {Call,ChannelType,Persona,Role} from './lib/types';
+import type {Call,ChannelType,Message,Persona,Role} from './lib/types';
+import {REAL_GUIDES} from './lib/guides-content';
 import {Badge,Button,Empty,Field,PageHead,Tabs} from './app';
 import {useApp} from './app-context';
 import {formatDate,formatDuration} from './lib/format';
@@ -167,27 +168,114 @@ const personaTemplates:Record<string,Partial<Persona>>={
 function compiled(p:Persona){return ['You are '+p.agentName+'.','Greeting: '+p.greeting,'Role: '+p.roleDescription,'Language: '+p.languagePolicy,'Tone: '+p.toneNotes,'Avoid: '+p.forbiddenPhrases.join(', '),'Escalate: '+p.escalationRules,'Closing: '+p.closingBehaviour,'Speaker gender: '+p.gender+'. Apply correct grammatical agreement where relevant.'].join('\n\n')}
 export function Live(){const {store,org,t,run,setConnection}=useApp();const [selected,setSelected]=useState<string|null>(null),[listening,setListening]=useState(false),[offline,setOffline]=useState(false);const bottom=useRef<HTMLDivElement>(null);useEffect(()=>api.startLiveSimulation(),[]);const calls=store.calls.filter(x=>x.orgId===org.id&&x.status==='active');const chosen=calls.find(x=>x.id===(selected||calls[0]?.id));const transcript=store.transcripts.filter(x=>x.callId===chosen?.id),queries=store.ragQueries.filter(x=>x.callId===chosen?.id);useEffect(()=>{bottom.current?.scrollIntoView({behavior:'smooth'})},[transcript.length]);return <><PageHead eyebrow="Operations" title="Live monitoring" description="Follow the conversation and every retrieval decision as it happens." action={<Badge tone={offline?'danger':'live'}>{t(offline?'offline':'live')}</Badge>}/>{offline&&<div className="notice danger" style={{marginBottom:18}}>{t('The simulated connection is offline. Live events are paused.')} <Button small variant="outline" onClick={()=>{setOffline(false);setConnection('reconnecting');setTimeout(()=>setConnection('live'),1200)}}>{t('Reconnect')}</Button></div>}{calls.length?<div className="split"><div className="card"><h2>{t('Active calls')} · {calls.length}</h2><div className="stack">{calls.map(c=><button className="result-card" style={{textAlign:'start',background:selected===c.id?'var(--surface)':'var(--card)',color:'var(--foreground)',width:'100%'}} key={c.id} onClick={()=>setSelected(c.id)}><div className="row between"><strong className="phone">{c.phoneNumber}</strong><Badge tone="live">{t('live')}</Badge></div><div className="small muted">{t(channelNames[c.channelType])} · {t(c.direction)} · {store.agents.find(x=>x.id===c.agentId)?.name}</div></button>)}</div><button className="ghost-btn small" onClick={()=>setOffline(x=>{setConnection(x?'live':'offline');return !x})} style={{marginTop:20}}><WifiOff size={14}/>{t('Simulate connection drop')}</button></div>{chosen&&<div className="stack"><div className="card"><div className="row between"><div className="row"><div className="live-orb"/><div><strong>{store.agents.find(x=>x.id===chosen.agentId)?.name}</strong><div className="small muted">{chosen.mode==='operator'?t('A person'):t('Your agent is handling this')}</div></div></div><span className="mono">{formatDuration(Math.round((Date.now()-new Date(chosen.startedAt).getTime())/1000))}</span></div><div className="row wrap" style={{marginTop:25}}><Button variant="outline" onClick={()=>setListening(x=>!x)}>{listening?t('Stop listening'):t('Listen in')}</Button><Button variant="outline" disabled={chosen.mode==='operator'} onClick={()=>run(()=>api.takeOverCall(chosen.id),'You are on the call now')}>{t('Take over')}</Button><Button variant="danger" onClick={()=>run(()=>api.endCall(chosen.id),'Call ended')}>{t('End call')}</Button></div></div><div className="card"><h2>{t('Live transcript')}</h2><div aria-live="polite" style={{height:250,overflowY:'auto'}}>{transcript.map(line=><div className="result-card" key={line.id}><div className="small muted">{formatDate(line.timestamp)} · {line.speaker}</div><p>{line.text}</p></div>)}<div ref={bottom}/></div></div><div className="card"><h2>{t('Retrieval activity')}</h2>{queries.length?queries.map(q=><div className="notice" key={q.id} style={{marginBottom:10,borderColor:q.answered?'var(--success)':'var(--warning)'}}><strong>{q.query}</strong><div className="small">{q.documentName?t('From')+' '+q.documentName:t('Nothing in your documents covered this')} · {t(q.answered?'Answered':'Offered to find out')}</div></div>):<MiniEmpty text={t('This shows what your agent looks up while it is on the call.')}/>}</div></div>}</div>:<Empty icon={AudioLines} title="No active calls" body="Calls will appear here with live transcripts and retrieval events." action={<Button to="/app/history" variant="outline">{t('View history')}</Button>}/>}</>}
 export function HistoryPage(){const {store,org,t}=useApp();const calls=store.calls.filter(x=>x.orgId===org.id);const [search,setSearch]=useState(''),[channel,setChannel]=useState('all'),[numberId,setNumberId]=useState('all'),[direction,setDirection]=useState('all'),[mode,setMode]=useState('all'),[outcome,setOutcome]=useState('all'),[agent,setAgent]=useState('all'),[days,setDays]=useState('90'),[view,setView]=useState('all');const filtered=calls.filter(c=>(!search||c.phoneNumber.includes(search)||store.transcripts.some(x=>x.callId===c.id&&x.text.toLowerCase().includes(search.toLowerCase())))&&(channel==='all'||c.channelType===channel)&&(numberId==='all'||c.channelId===numberId)&&(direction==='all'||c.direction===direction)&&(mode==='all'||c.mode===mode)&&(outcome==='all'||c.outcome===outcome)&&(agent==='all'||c.agentId===agent)&&(Date.now()-new Date(c.startedAt).getTime()<Number(days)*86400000)&&(view!=='needs-attention'||c.outcome==='Escalated'||c.status==='failed'));const csv=['Time,Direction,Caller,Number called,Channel,Handled by,Duration,Outcome,Knowledge used,Recording',...filtered.map(c=>[c.startedAt,c.direction,c.phoneNumber,store.channels.find(x=>x.id===c.channelId)?.label||'',c.channelType,c.mode,c.durationSeconds,c.outcome,c.knowledgeBaseName,c.recordingState].map(x=>'"'+String(x).replaceAll('"','""')+'"').join(','))].join('\r\n');const download=(name:string,content:string,type:string)=>{const url=URL.createObjectURL(new Blob([content],{type}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)};return <><PageHead eyebrow="Operations" title="Call history" description={filtered.length+' '+t('calls match your filters')} action={<div className="row"><Button variant="outline" onClick={()=>download('calls.csv',csv,'text/csv')}>{t('Export CSV')}</Button><Button variant="outline" onClick={()=>exportCallsXlsx(filtered)}>{t('Export Excel')}</Button></div>}/><div className="card"><div className="field-grid" style={{marginBottom:18}}><Field label="Search number or transcript" value={search} onChange={setSearch}/><FieldSelect label="Saved view" value={view} onChange={setView} options={['all','needs-attention']} labels={{all:'All calls','needs-attention':'Needs attention'}}/><FieldSelect label="Date range" value={days} onChange={setDays} options={['7','30','90']} labels={{'7':'Last 7 days','30':'Last 30 days','90':'Last 90 days'}}/><FieldSelect label="Channel" value={channel} onChange={setChannel} options={['all','sim','whatsapp_call']} labels={{all:'Every channel',sim:'Phone line',whatsapp_call:'WhatsApp'}}/><FieldSelect label="Number called" value={numberId} onChange={setNumberId} options={['all',...store.channels.filter(x=>x.orgId===org.id).map(x=>x.id)]} labels={Object.fromEntries([['all','Any of your numbers'],...store.channels.filter(x=>x.orgId===org.id).map(x=>[x.id,x.label])])}/><FieldSelect label="Direction" value={direction} onChange={setDirection} options={['all','INBOUND','OUTBOUND']} labels={{all:'Both ways',INBOUND:'They called us',OUTBOUND:'We called them'}}/><FieldSelect label="Handled by" value={mode} onChange={setMode} options={['all','agent','operator']} labels={{all:'Anyone',agent:'The agent',operator:'A person'}}/><FieldSelect label="Outcome" value={outcome} onChange={setOutcome} options={['all',...Array.from(new Set(calls.map(x=>x.outcome)))]} labels={{all:'Any outcome'}}/><FieldSelect label="Agent" value={agent} onChange={setAgent} options={['all',...store.agents.filter(x=>x.orgId===org.id).map(x=>x.id)]} labels={Object.fromEntries([['all','Any agent'],...store.agents.filter(x=>x.orgId===org.id).map(x=>[x.id,x.name])])}/></div>{filtered.length?<CallTable calls={filtered} limit={100}/>:<Empty title="No matching calls" body="Try broadening the date range or clearing a filter."/>}{filtered.length>100&&<p className="small muted">{t('Showing first 100 calls. Export includes all filtered calls.')}</p>}</div></>}
+/** A short clock time for a chat bubble — "6:48 PM", not a full date. The
+ * contact list keeps the full `formatDate` since a day boundary matters
+ * there and a bare time would be ambiguous for anything not from today. */
+function chatTime(iso:string):string{
+  return new Date(iso).toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'});
+}
+
+/**
+ * Messages — one contact at a time, the way WhatsApp Web itself is laid
+ * out: a fixed-height shell, a contact list on the left that never grows
+ * the page, a thread on the right that scrolls inside itself with the
+ * compose box pinned to its bottom. The old version was a flat, undated
+ * list behind a plain dropdown filter; this groups by number because that
+ * is what "who are we talking to" actually means here — not a filter on
+ * one long log, a set of conversations.
+ */
 export function Messages(){
   const {store,org,t,run,readiness}=useApp();
   const messages=store.messages.filter(x=>x.orgId===org.id),templates=store.templates.filter(x=>x.orgId===org.id);
-  const [to,setTo]=useState(''),[body,setBody]=useState(''),[template,setTemplate]=useState('free'),[contact,setContact]=useState('all');
   const approved=templates.filter(x=>x.status==='approved');
-  // LIVE: templates come from Meta, fetched once per visit rather than
-  // trusting whatever another screen happened to load into the store first —
-  // the old version blocked sending on `readiness.whatsappMessagingReady`,
-  // which also required an approved template to exist in the store. A free-
-  // text message needs neither — only an open 24-hour window, which the
-  // backend itself enforces — so a company that had simply never opened the
-  // Templates screen first saw every send refused with no real reason why.
   useEffect(()=>{if(LIVE)void api.getTemplates(org.id)},[org.id]);
   const whatsappConnected=LIVE
     ?store.channels.some(x=>x.orgId===org.id&&x.type==='whatsapp_message'&&x.status==='connected')
     :readiness.whatsappMessagingReady;
-  const send=async()=>{if(!to||!body)return;const row=await run(()=>api.sendMessage(org.id,to,body,template==='free'?undefined:template),'Message sent');if(row){setBody('');setTo('')}};
-  const visible=messages.filter(x=>contact==='all'||x.toNumber===contact);
-  return <><PageHead eyebrow="Operations" title="Messages" description="Follow delivery and compose approved WhatsApp messages."/><div className="split"><div className="card stack"><h2>{t('Compose message')}</h2>{!whatsappConnected&&<div className="notice warning">{t('WhatsApp messaging is not connected yet.')} <Link to="/app/channels">{t('Connect it')} →</Link></div>}<Field label="To number" value={to} onChange={setTo} placeholder="+923001234567"/><FieldSelect label="Message type" value={template} onChange={x=>{setTemplate(x);if(x!=='free')setBody(templates.find(y=>y.id===x)?.bodyPreview||'')}} options={['free',...approved.map(x=>x.id)]} labels={{free:'Free text'}}/><Field label="Message" value={body} onChange={setBody} rows={4}/><Button disabled={!whatsappConnected||!to||!body} title={!whatsappConnected?'Connect WhatsApp messaging in Numbers first':undefined} onClick={send}><Send size={16}/>{t('Send message')}</Button><div className="notice">{t('A free-text message only reaches someone inside the 24-hour window since they last messaged you. Outside it, use an approved template.')}</div><div className="stack">{templates.filter(x=>x.status!=='approved').map(x=><div className="row between small" key={x.id}><span>{x.name}</span><Badge tone={statusTone(x.status)}>{t(x.status)}</Badge></div>)}</div></div><div className="card"><div className="row between"><h2>{t('Message history')}</h2><select className="select" style={{maxWidth:180}} value={contact} onChange={e=>setContact(e.target.value)}><option value="all">{t('All contacts')}</option>{Array.from(new Set(messages.map(x=>x.toNumber))).slice(0,10).map(x=><option key={x}>{x}</option>)}</select></div><div className="stack">{visible.slice(0,30).map(m=><div className="result-card" key={m.id}><div className="row between"><strong className="phone">{m.toNumber}</strong><Badge tone={statusTone(m.status)}>{t(m.status)}</Badge></div><p>{m.body}</p><div className="small muted">{formatDate(m.sentAt)}</div></div>)}</div></div></div></>}
-export function Guides(){const {store,t}=useApp();const [search,setSearch]=useState(''),[category,setCategory]=useState('All');const categories=['All',...Array.from(new Set(store.guides.map(x=>x.category)))];const guides=store.guides.filter(x=>(category==='All'||x.category===category)&&(x.title.toLowerCase().includes(search.toLowerCase())||x.bodyMd.toLowerCase().includes(search.toLowerCase())));return <><PageHead eyebrow="Self-serve help" title="Guides" description="Practical setup and troubleshooting for every part of the platform."/><div className="split"><div className="card"><Field label="Search guides" value={search} onChange={setSearch} placeholder="Search by topic or error"/><div className="row wrap" style={{marginTop:16}}>{categories.map(x=><button key={x} className={'badge '+(category===x?'success':'')} style={{border:0,cursor:'pointer'}} onClick={()=>setCategory(x)}>{t(x)}</button>)}</div></div><div className="card"><h2>{t('Start here')}</h2><p className="muted">{t('New here? Follow the 30-minute guide, then use the pre-launch checklist before enabling calls.')}</p><Button to="/app/guides/getting-started">{t('Read getting started')} <ArrowRight size={16}/></Button></div></div><div className="grid cols-3" style={{marginTop:18}}>{guides.map(g=><Link className="card lift" to={'/app/guides/'+g.slug} key={g.slug}><div className="eyebrow">{t(g.category)}</div><h2>{t(g.title)}</h2><p className="small muted">{g.bodyMd.slice(0,115)}...</p><div className="row between small muted"><span>{g.readingMinutes} {t('min read')}</span><ArrowRight size={16}/></div></Link>)}</div>{!guides.length&&<Empty icon={BookOpen} title="No matching guides" body="Try another search term or category."/>}</>}
-export function GuideDetail(){const {slug}=useParams();const {store,t,toast}=useApp();const guide=store.guides.find(x=>x.slug===slug);const [helpful,setHelpful]=useState<string|null>(null);if(!guide)return <Empty title="Guide not found" body="Browse the guide library for another topic." action={<Button to="/app/guides">{t('Guides')}</Button>}/>;const actions:Record<string,string>={'getting-started':'/app/onboarding','knowledge-writing':'/app/knowledge','strictness':'/app/settings','persona':'/app/agents','multiple-knowledge':'/app/knowledge','routing':'/app/routing','campaigns':'/app/campaigns','unanswered':'/app/unanswered','staff':'/app/team','recording':'/app/settings','numbers':'/app/channels','go-live':'/app/onboarding'};return <><PageHead eyebrow={guide.category} title={guide.title} description={guide.readingMinutes+' '+t('min read')+' · '+t('Updated')+' '+formatDate(guide.updatedAt)} action={<Button to="/app/guides" variant="outline">{t('All guides')}</Button>}/><div className="split"><article className="card"><p style={{fontSize:'1.05rem',lineHeight:1.9}}>{guide.bodyMd}</p><h2>{t('Do this now')}</h2><p className="muted">{t('Open the relevant workspace page and apply this step.')}</p><Button to={actions[guide.slug]||'/app/dashboard'}>{t('Open settings')} <ArrowRight size={16}/></Button><div style={{marginTop:30}} className="notice"><div className="row between"><strong>{t('Was this helpful?')}</strong><div className="row"><Button small variant={helpful==='yes'?'':'outline'} onClick={()=>{setHelpful('yes');toast(t('Thanks for the feedback'))}}>{t('Yes')}</Button><Button small variant={helpful==='no'?'':'outline'} onClick={()=>{setHelpful('no');toast(t('Thanks for the feedback'))}}>{t('No')}</Button></div></div></div></article><div className="card"><h2>{t('Related guides')}</h2>{store.guides.filter(x=>x.slug!==guide.slug&&x.category===guide.category).slice(0,4).map(x=><Link to={'/app/guides/'+x.slug} className="nav-link" key={x.slug}><BookOpen size={16}/>{t(x.title)}</Link>)}</div></div></>}
+
+  const contacts=useMemo(()=>{
+    const byNumber=new Map<string,Message[]>();
+    for(const m of messages){
+      const list=byNumber.get(m.toNumber);
+      if(list)list.push(m);else byNumber.set(m.toNumber,[m]);
+    }
+    return Array.from(byNumber.entries())
+      .map(([number,msgs])=>({number,msgs:msgs.slice().sort((a,b)=>+new Date(a.sentAt)-+new Date(b.sentAt))}))
+      .sort((a,b)=>+new Date(b.msgs[b.msgs.length-1].sentAt)-+new Date(a.msgs[a.msgs.length-1].sentAt));
+  },[messages]);
+
+  const [selected,setSelected]=useState<string|null>(null);
+  const [startingNew,setStartingNew]=useState(false);
+  const [newNumber,setNewNumber]=useState('');
+  useEffect(()=>{if(!selected&&contacts.length)setSelected(contacts[0].number)},[contacts,selected]);
+  const active=selected??(startingNew?newNumber:'');
+  const thread=contacts.find(c=>c.number===selected)?.msgs??[];
+
+  const [body,setBody]=useState(''),[template,setTemplate]=useState('free');
+  const [sending,setSending]=useState(false);
+  const bottom=useRef<HTMLDivElement>(null);
+  useEffect(()=>{bottom.current?.scrollIntoView({block:'end'})},[thread.length,selected]);
+
+  const send=async()=>{
+    if(!active||!body||sending)return;
+    setSending(true);
+    const row=await run(()=>api.sendMessage(org.id,active,body,template==='free'?undefined:template),undefined);
+    setSending(false);
+    if(row){setBody('');setTemplate('free');if(startingNew){setStartingNew(false);setSelected(active);setNewNumber('')}}
+  };
+
+  return <><PageHead eyebrow="Operations" title="Messages" description="One conversation at a time, the way WhatsApp itself shows them."/>
+    {!whatsappConnected&&<div className="notice warning" style={{marginBottom:16}}>{t('WhatsApp messaging is not connected yet.')} <Link to="/app/channels">{t('Connect it')} →</Link></div>}
+    <div className="chat-shell">
+      <div className="chat-contacts">
+        <div className="chat-contacts-head">
+          <Button small variant="outline" onClick={()=>{setStartingNew(true);setSelected(null);setNewNumber('')}}><Plus size={14}/> {t('New conversation')}</Button>
+        </div>
+        <div className="chat-contacts-list">
+          {contacts.length===0&&!startingNew&&<div style={{padding:20}}><MiniEmpty text={t('No conversations yet. Start one above.')}/></div>}
+          {contacts.map(c=>{const last=c.msgs[c.msgs.length-1];return (
+            <button key={c.number} className={'chat-contact'+(selected===c.number&&!startingNew?' active':'')}
+              onClick={()=>{setSelected(c.number);setStartingNew(false)}}>
+              <div className="chat-contact-top"><span className="mono">{c.number}</span><span className="chat-contact-time">{formatDate(last.sentAt)}</span></div>
+              <div className="chat-contact-preview">{last.direction==='OUTBOUND'?t('You')+': ':''}{last.body}</div>
+            </button>
+          )})}
+        </div>
+      </div>
+      <div className="chat-thread">
+        {startingNew
+          ?<div className="chat-thread-head"><Field label="" value={newNumber} onChange={setNewNumber} placeholder="+923001234567"/></div>
+          :active&&<div className="chat-thread-head mono">{active}</div>}
+        {!active&&!startingNew
+          ?<div className="chat-empty">{t('Choose a conversation, or start a new one.')}</div>
+          :<>
+            <div className="chat-thread-body">
+              {thread.map(m=><div className={'chat-bubble '+(m.direction==='OUTBOUND'?'out':'in')} key={m.id}>
+                <div>{m.body}</div>
+                <div className="chat-bubble-meta"><span>{chatTime(m.sentAt)}</span>{m.direction==='OUTBOUND'&&<Badge tone={statusTone(m.status)}>{t(m.status)}</Badge>}</div>
+              </div>)}
+              <div ref={bottom}/>
+            </div>
+            <div className="chat-compose">
+              {approved.length>0&&<select className="select" style={{maxWidth:160}} value={template} onChange={e=>{setTemplate(e.target.value);if(e.target.value!=='free')setBody(templates.find(y=>y.id===e.target.value)?.bodyPreview||'')}}>
+                <option value="free">{t('Free text')}</option>
+                {approved.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}
+              </select>}
+              <textarea className="textarea" rows={1} value={body} onChange={e=>setBody(e.target.value)}
+                placeholder={t('Type a message')}
+                onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();void send()}}}/>
+              <Button disabled={!whatsappConnected||!active||!body||sending}
+                title={!whatsappConnected?t('Connect WhatsApp messaging in Numbers first'):undefined}
+                onClick={send}><Send size={16}/></Button>
+            </div>
+          </>}
+      </div>
+    </div>
+    <div className="notice" style={{marginTop:14}}>{t('A free-text message only reaches someone inside the 24-hour window since they last messaged you. Outside it, use an approved template.')}</div>
+  </>;
+}
+export function Guides(){const {store,t}=useApp();const [search,setSearch]=useState(''),[category,setCategory]=useState('All');const allGuides=LIVE?REAL_GUIDES:store.guides;const categories=['All',...Array.from(new Set(allGuides.map(x=>x.category)))];const guides=allGuides.filter(x=>(category==='All'||x.category===category)&&(x.title.toLowerCase().includes(search.toLowerCase())||x.bodyMd.toLowerCase().includes(search.toLowerCase())));return <><PageHead eyebrow="Self-serve help" title="Guides" description="Practical setup and troubleshooting for every part of the platform."/><div className="split"><div className="card"><Field label="Search guides" value={search} onChange={setSearch} placeholder="Search by topic or error"/><div className="row wrap" style={{marginTop:16}}>{categories.map(x=><button key={x} className={'badge '+(category===x?'success':'')} style={{border:0,cursor:'pointer'}} onClick={()=>setCategory(x)}>{t(x)}</button>)}</div></div><div className="card"><h2>{t('Start here')}</h2><p className="muted">{t('New here? Follow the 30-minute guide, then use the pre-launch checklist before enabling calls.')}</p><Button to="/app/guides/getting-started">{t('Read getting started')} <ArrowRight size={16}/></Button></div></div><div className="grid cols-3" style={{marginTop:18}}>{guides.map(g=><Link className="card lift" to={'/app/guides/'+g.slug} key={g.slug}><div className="eyebrow">{t(g.category)}</div><h2>{t(g.title)}</h2><p className="small muted">{g.bodyMd.slice(0,115)}...</p><div className="row between small muted"><span>{g.readingMinutes} {t('min read')}</span><ArrowRight size={16}/></div></Link>)}</div>{!guides.length&&<Empty icon={BookOpen} title="No matching guides" body="Try another search term or category."/>}</>}
+export function GuideDetail(){const {slug}=useParams();const {store,t,toast}=useApp();const allGuides=LIVE?REAL_GUIDES:store.guides;const guide=allGuides.find(x=>x.slug===slug);const [helpful,setHelpful]=useState<string|null>(null);if(!guide)return <Empty title="Guide not found" body="Browse the guide library for another topic." action={<Button to="/app/guides">{t('Guides')}</Button>}/>;const actions:Record<string,string>={'getting-started':'/app/agents','knowledge-writing':'/app/knowledge','persona':'/app/agents','multiple-knowledge':'/app/knowledge','routing':'/app/setups','campaigns':'/app/campaigns','unanswered':'/app/unanswered','staff':'/app/team','recording':'/app/history','numbers':'/app/channels','go-live':'/app/setups'};return <><PageHead eyebrow={guide.category} title={guide.title} description={guide.readingMinutes+' '+t('min read')+' · '+t('Updated')+' '+formatDate(guide.updatedAt)} action={<Button to="/app/guides" variant="outline">{t('All guides')}</Button>}/><div className="split"><article className="card"><p style={{fontSize:'1.05rem',lineHeight:1.9}}>{guide.bodyMd}</p><h2>{t('Do this now')}</h2><p className="muted">{t('Open the relevant workspace page and apply this step.')}</p><Button to={actions[guide.slug]||'/app/dashboard'}>{t('Open it')} <ArrowRight size={16}/></Button><div style={{marginTop:30}} className="notice"><div className="row between"><strong>{t('Was this helpful?')}</strong><div className="row"><Button small variant={helpful==='yes'?'':'outline'} onClick={()=>{setHelpful('yes');toast(t('Thanks for the feedback'))}}>{t('Yes')}</Button><Button small variant={helpful==='no'?'':'outline'} onClick={()=>{setHelpful('no');toast(t('Thanks for the feedback'))}}>{t('No')}</Button></div></div></div></article><div className="card"><h2>{t('Related guides')}</h2>{allGuides.filter(x=>x.slug!==guide.slug&&x.category===guide.category).slice(0,4).map(x=><Link to={'/app/guides/'+x.slug} className="nav-link" key={x.slug}><BookOpen size={16}/>{t(x.title)}</Link>)}</div></div></>}
 export function Team(){
   const {store,org,session,t,run}=useApp();
   const members=store.memberships.filter(x=>x.orgId===org.id), invitations=store.invitations.filter(x=>x.orgId===org.id&&x.status==='pending'),audit=store.audit.filter(x=>x.orgId===org.id);

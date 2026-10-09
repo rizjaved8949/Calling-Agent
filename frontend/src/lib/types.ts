@@ -41,7 +41,7 @@ export interface Campaign { id:string; orgId:string; name:string; setupId:string
 export interface CampaignContact { id:string; campaignId:string; number:string; name?:string; attempts:number; lastOutcome?:string; callIds:string[] }
 /** A question the agent declined, so the company can close the gap. */
 export interface UnansweredQuestion { id:string; orgId:string; question:string; askedCount:number; lastAskedAt:string; knowledgeBaseId:string; exampleCallIds:string[]; status:'open'|'answered'|'ignored' }
-export interface Message { id:string; orgId:string; callId?:string; toNumber:string; templateId?:string; body:string; status:'sent'|'delivered'|'read'|'failed'; sentAt:string }
+export interface Message { id:string; orgId:string; callId?:string; toNumber:string; direction:'INBOUND'|'OUTBOUND'; templateId?:string; body:string; status:'sent'|'delivered'|'read'|'failed'; sentAt:string }
 export interface WaTemplate { id:string; orgId:string; name:string; language:string; category:string; status:'approved'|'pending'|'rejected'; bodyPreview:string; variables:string[] }
 export interface UsageEvent { id:string; orgId:string; kind:'call_minute'|'message'|'storage'; quantity:number; occurredAt:string }
 export interface Plan { id:string; name:string; priceMonthly:number; includedMinutes:number; includedMessages:number; agentLimit:number; seatLimit:number; storageMb:number; features:string[] }
