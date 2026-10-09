@@ -131,6 +131,8 @@ export function AgentDetailScreen() {
   const [agent, setAgent] = useState<Agent | null>(null);
   const [draft, setDraft] = useState<Agent | null>(null);
   const [bases, setBases] = useState<KnowledgeBase[]>([]);
+  const [voices, setVoices] = useState<{name: string; gender: string; description: string}[]>([]);
+  const [voiceNote, setVoiceNote] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [confirm, confirmDialog] = useConfirm();
@@ -141,6 +143,7 @@ export function AgentDetailScreen() {
       .then(row => {setAgent(row); setDraft(row)})
       .catch(c => setError(errorText(c, 'Could not load this agent.')));
     workspace.knowledgeBases().then(b => setBases(b.knowledgeBases)).catch(() => {});
+    workspace.voices().then(b => {setVoices(b.voices); setVoiceNote(b.note)}).catch(() => {});
   }, [id]);
   useEffect(() => {load()}, [load]);
 
@@ -247,8 +250,23 @@ export function AgentDetailScreen() {
           <TextInput label="Language" value={draft.language} disabled={!canManage}
             onChange={v => set({language: v})} placeholder="Urdu, English…"
             help="It still follows a caller who speaks another language."/>
-          <TextInput label="Voice" value={draft.ttsVoice} disabled={!canManage}
-            onChange={v => set({ttsVoice: v})} placeholder="leave empty for the default"/>
+          <Select label="Voice" value={draft.ttsVoice} disabled={!canManage}
+            onChange={v => set({ttsVoice: v})} help={voiceNote}>
+            <option value="">Use the default voice</option>
+            <optgroup label="Woman's voice">
+              {voices.filter(v => v.gender === 'female').map(v =>
+                <option key={v.name} value={v.name}>{v.name} — {v.description}</option>)}
+            </optgroup>
+            <optgroup label="Man's voice">
+              {voices.filter(v => v.gender === 'male').map(v =>
+                <option key={v.name} value={v.name}>{v.name} — {v.description}</option>)}
+            </optgroup>
+            {/* A voice set before this list existed, or one the engine added
+                since, must still show as the current choice rather than
+                silently reading as "default". */}
+            {draft.ttsVoice && !voices.some(v => v.name === draft.ttsVoice) &&
+              <option value={draft.ttsVoice}>{draft.ttsVoice}</option>}
+          </Select>
           <Select label="Talking speed" value={draft.speakingPace ?? 'natural'}
             disabled={!canManage} onChange={v => set({speakingPace: v as Agent['speakingPace']})}
             help="On a phone line the same words at the wrong speed are the difference between being understood and being asked to repeat.">

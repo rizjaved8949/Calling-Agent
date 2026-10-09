@@ -312,3 +312,32 @@ async def test_she_is_told_she_cannot_transfer_a_call(fake_db, no_whatsapp):
 async def test_she_is_told_not_to_promise_a_time(fake_db, no_whatsapp):
     text = (await live.persona_for(_tenant(), _call())).instructions
     assert "Promise nothing with a time on it" in text
+
+
+# ---------------------------------------------------------------------------
+# Choosing a voice
+# ---------------------------------------------------------------------------
+
+def test_voices_are_offered_grouped_by_gender(client, tenant_factory, auth):
+    """Free text meant knowing that "Kore" is a voice and "female" is not."""
+    _, key = tenant_factory("960")
+    body = client.get("/api/agents/voices", headers=auth(key)).json()
+    genders = {v["gender"] for v in body["voices"]}
+    assert genders == {"male", "female"}
+    assert all(v["description"] for v in body["voices"]), "a voice with no description"
+    assert len([v for v in body["voices"] if v["gender"] == "male"]) >= 4
+    assert len([v for v in body["voices"] if v["gender"] == "female"]) >= 4
+
+
+def test_the_voices_path_is_not_read_as_an_agent_id(client, tenant_factory, auth):
+    _, key = tenant_factory("961")
+    assert client.get("/api/agents/voices", headers=auth(key)).status_code == 200
+
+
+def test_a_voice_the_list_does_not_describe_is_still_accepted():
+    """The engine may add voices faster than this file is updated."""
+    from app.services.agent import voices
+
+    assert voices.known("Kore")
+    assert voices.known("Sulafat"), "a real engine voice was treated as unknown"
+    assert not voices.known("NotAVoice")

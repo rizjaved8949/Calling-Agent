@@ -117,6 +117,18 @@ async def delete_knowledge_base(tenant: CurrentTenant, kb_id: str) -> None:
 # Agents
 # ---------------------------------------------------------------------------
 
+@router.get("/agents/voices")
+async def list_voices(tenant: CurrentTenant) -> dict:
+    """The voices an agent can speak in, grouped by how people pick one.
+
+    Above `/agents/{agent_id}` in the file so the literal path is matched
+    first — otherwise "voices" is read as an agent id and this 404s.
+    """
+    from ...services.agent import voices
+
+    return voices.catalogue()
+
+
 @router.get("/agents")
 async def list_agents(tenant: CurrentTenant) -> dict:
     return {"agents": [a.public() for a in await repo.list_agents(tenant.phone_number_id)]}

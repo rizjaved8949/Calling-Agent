@@ -118,6 +118,9 @@ export const workspace = {
   // ---- Agents ------------------------------------------------------------
 
   agents: () => request<{ agents: Agent[] }>('/api/agents'),
+  voices: () =>
+    request<{ voices: {name: string; gender: 'male' | 'female'; description: string}[];
+              note: string }>('/api/agents/voices'),
   agent: (id: string) => request<Agent>(`/api/agents/${id}`),
   createAgent: (payload: Partial<Agent> & { name: string }) =>
     request<Agent>('/api/agents', { method: 'POST', body: payload }),
