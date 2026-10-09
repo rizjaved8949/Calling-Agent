@@ -1,6 +1,6 @@
 import {useEffect,useState} from 'react';
 import {Link,useNavigate,useParams} from 'react-router-dom';
-import {AlertTriangle,CheckCircle2,Clock,MessageSquare,Sparkles} from 'lucide-react';
+import {AlertTriangle,CheckCircle2,Clock,Download,MessageSquare,Sparkles} from 'lucide-react';
 import {Badge,Button,Empty,Field,PageHead,Tabs} from './app';
 import {useApp} from './app-context';
 import {formatDate,formatDuration} from './lib/format';
@@ -150,7 +150,12 @@ function RecordingPlayer({call}:{call:Call}){
   if(!url)return <div className="small muted">{t('Loading the recording…')}</div>;
   return <>
     <audio controls src={url} style={{width:'100%'}}/>
-    <div className="small muted">{t('This recording contains')}: {t(SCOPE[call.recordingScope])}</div>
+    <div className="row between">
+      <div className="small muted">{t('This recording contains')}: {t(SCOPE[call.recordingScope])}</div>
+      <Button small variant="outline" onClick={()=>api.downloadRecording(call.id)}>
+        <Download size={14}/> {t('Download')}
+      </Button>
+    </div>
   </>;
 }
 

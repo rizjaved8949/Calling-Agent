@@ -132,11 +132,13 @@ export const workspace = {
 
   // ---- Team ----------------------------------------------------------------
 
-  team: () => request<{ members: TeamMember[]; invites: TeamInvite[] }>('/api/team'),
-  invite: (email: string, role: 'staff') =>
-    request<TeamInvite>('/api/team/invite', { method: 'POST', body: { email, role } }),
-  revokeInvite: (token: string) => request<void>(`/api/team/invite/${token}`, { method: 'DELETE' }),
-  removeMember: (userId: string) => request<void>(`/api/team/${userId}`, { method: 'DELETE' }),
+  team: async () => request<{ members: TeamMember[]; invites: TeamInvite[] }>('/api/team', { bearer: await personToken() }),
+  invite: async (email: string, role: 'staff') =>
+    request<TeamInvite>('/api/team/invite', { method: 'POST', body: { email, role }, bearer: await personToken() }),
+  revokeInvite: async (token: string) =>
+    request<void>(`/api/team/invite/${token}`, { method: 'DELETE', bearer: await personToken() }),
+  removeMember: async (userId: string) =>
+    request<void>(`/api/team/${userId}`, { method: 'DELETE', bearer: await personToken() }),
 
   // ---- Lookup and ask -------------------------------------------------------
 
