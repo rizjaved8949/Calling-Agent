@@ -24,7 +24,7 @@ import {
 import {Badge, Button, Empty, PageHead} from './app';
 import {useApp} from './app-context';
 import {ErrorNote, Loading, Modal, Select, TextInput, useConfirm} from './ui';
-import {messagesApi, type WireMessage} from './lib/api/calls';
+import {fillTemplate, messagesApi, type WaTemplate, type WireMessage} from './lib/api/calls';
 import {numberName, numbers as numbersApi, type PhoneNumber} from './lib/api/numbers';
 
 const DAY_MS = 86_400_000;
@@ -92,7 +92,7 @@ export function MessagesScreen() {
   const [error, setError] = useState('');
   const [starting, setStarting] = useState(false);
   const [newNumber, setNewNumber] = useState('');
-  const [templates, setTemplates] = useState<{name: string; status: string; language: string}[]>([]);
+  const [templates, setTemplates] = useState<WaTemplate[]>([]);
   const [templateOpen, setTemplateOpen] = useState(false);
   const bottom = useRef<HTMLDivElement>(null);
 
@@ -376,61 +376,98 @@ export function MessagesScreen() {
 /**
  * Sending an approved template.
  *
- * Meta has no named parameters — a template's body carries `{{1}}`, `{{2}}` —
- * so the form asks for them in order and says so. The count is not knowable
- * from the catalogue listing, so this lets the sender add as many as the
- * template needs rather than guessing and failing.
+ * How many values a template takes is not something anyone should have to
+ * know: it is however many distinct {{n}} appear in a body that lives in
+ * Meta's catalogue, not here. Guessing gets "(#132000) Number of parameters
+ * does not match the expected number of params", which names neither the
+ * template nor the count — an error nobody can act on.
+ *
+ * So the form asks Meta, renders exactly that many boxes with the template's
+ * own examples as hints, and previews the finished message. What you see is
+ * what the person receives.
  */
 function TemplateSender({to, lineId, templates, onClose, onSent}: {
   to: string;
   lineId: string;
-  templates: {name: string; status: string; language: string}[];
+  templates: WaTemplate[];
   onClose: () => void;
   onSent: (message: WireMessage) => void;
 }) {
   const [name, setName] = useState(templates[0]?.name ?? '');
-  const [parameters, setParameters] = useState<string[]>([]);
+  const [values, setValues] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const chosen = templates.find(x => x.name === name);
+  const needed = chosen?.placeholders ?? 0;
+
+  // Each template wants its own number of values, so the boxes are rebuilt
+  // when the choice changes rather than carrying the last one's answers over.
+  useEffect(() => {
+    setValues(Array.from({length: needed}, () => ''));
+    setError('');
+  }, [name, needed]);
+
+  const missing = values.slice(0, needed).filter(v => !v.trim()).length;
+  const preview = chosen ? fillTemplate(chosen.body, values) : '';
 
   const send = async () => {
     setBusy(true); setError('');
     try {
       onSent(await messagesApi.sendTemplate(
-        to, name, parameters.filter(p => p.trim() !== ''), chosen?.language || 'en_US', lineId,
+        to, name, values.slice(0, needed), chosen?.language || 'en_US', lineId,
       ));
     } catch (cause) {
       setError(errorText(cause, 'That template could not be sent.'));
     } finally {setBusy(false)}
   };
 
-  return <Modal title="Send a template" onClose={onClose}
+  return <Modal title="Send a template" onClose={onClose} width={620}
     subtitle={`To ${to || 'nobody yet'} — approved templates from your WhatsApp account.`}
     footer={<>
       <button className="button secondary" onClick={onClose} disabled={busy}>Cancel</button>
-      <button className="button" onClick={() => void send()} disabled={busy || !name || !to}>
+      <button className="button" onClick={() => void send()}
+        disabled={busy || !name || !to || missing > 0}>
         {busy ? <><Loader2 size={15} className="spin"/> Sending…</> : 'Send template'}
       </button>
     </>}>
     <div className="stack">
       <Select label="Template" value={name} onChange={setName}
         help="Only templates Meta has approved appear here.">
-        {templates.map(x => <option key={x.name} value={x.name}>{x.name} ({x.language})</option>)}
+        {templates.map(x => <option key={x.name + x.language} value={x.name}>
+          {x.name} ({x.language}){x.placeholders ? ` — ${x.placeholders} value${x.placeholders > 1 ? 's' : ''}` : ''}
+        </option>)}
       </Select>
-      {parameters.map((value, index) => <TextInput key={index} label={`Value for {{${index + 1}}}`}
-        value={value} onChange={v => setParameters(old => old.map((x, i) => i === index ? v : x))}/>)}
-      <div className="row">
-        <Button small variant="outline" onClick={() => setParameters(old => [...old, ''])}>
-          <Plus size={14}/> Add a value
-        </Button>
-        {parameters.length > 0 && <Button small variant="outline"
-          onClick={() => setParameters(old => old.slice(0, -1))}>Remove the last</Button>}
-      </div>
-      <p className="help">
-        Templates with no placeholders need no values. Otherwise add one value per
-        <code> {'{{n}}'} </code> in the template's body, in order.
-      </p>
+
+      {needed === 0 && chosen && <p className="help" style={{margin: 0}}>
+        This template takes no values. It sends exactly as written below.
+      </p>}
+
+      {Array.from({length: needed}, (_, index) => <TextInput key={index}
+        label={`Value ${index + 1}`}
+        value={values[index] ?? ''}
+        onChange={v => setValues(old => {
+          const next = [...old];
+          next[index] = v;
+          return next;
+        })}
+        placeholder={chosen?.examples?.[index] ?? ''}
+        help={chosen?.examples?.[index]
+          ? `Goes where {{${index + 1}}} appears. Example: ${chosen.examples[index]}`
+          : `Goes where {{${index + 1}}} appears.`}/>)}
+
+      {chosen && <div className="field">
+        <label>What they will receive</label>
+        <div className="template-preview">
+          {chosen.header && <div className="template-head">{chosen.header}</div>}
+          <div style={{whiteSpace: 'pre-wrap'}}>{preview}</div>
+          {chosen.footer && <div className="template-foot">{chosen.footer}</div>}
+        </div>
+        {missing > 0 && <div className="help">
+          {missing} value{missing > 1 ? 's' : ''} still needed — the placeholders
+          above are shown as they are until you fill them.
+        </div>}
+      </div>}
+
       {error && <div className="notice danger small">{error}</div>}
     </div>
   </Modal>;

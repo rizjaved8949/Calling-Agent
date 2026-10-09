@@ -64,6 +64,28 @@ export type WireMessage = {
   lineId: string | null;
 };
 
+/** A template as Meta describes it, with the count it will check against. */
+export type WaTemplate = {
+  name: string;
+  status: string;
+  category: string;
+  language: string;
+  header: string;
+  body: string;
+  footer: string;
+  /** How many values Meta expects. Sending a different number is refused. */
+  placeholders: number;
+  examples: string[];
+};
+
+/** The template's words with the values filled in, as the reader will see it. */
+export function fillTemplate(body: string, values: string[]): string {
+  return body.replace(/\{\{\s*(\d+)\s*\}\}/g, (whole, n) => {
+    const value = values[Number(n) - 1];
+    return value && value.trim() ? value : whole;
+  });
+}
+
 export type CallQuery = {
   limit?: number;
   offset?: number;
@@ -126,10 +148,9 @@ export const messagesApi = {
   markRead: (messageId: string) =>
     request<{ status: string }>(`/api/messages/${messageId}/read`, { method: 'POST' }),
   templates: (lineId = '') =>
-    request<{ templates: { name: string; status: string; category: string; language: string }[] }>(
-      '/api/messages/templates',
-      { query: lineId ? { lineId } : undefined },
-    ),
+    request<{ templates: WaTemplate[] }>('/api/messages/templates', {
+      query: lineId ? { lineId } : undefined,
+    }),
 };
 
 // ---------------------------------------------------------------------------

@@ -314,3 +314,16 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* A template as the recipient will see it, so nobody has to imagine it. */
+.template-preview {
+  background: color-mix(in oklch, var(--accent) 10%, var(--card));
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-size: .88rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.template-head { font-weight: 800; margin-bottom: 6px; }
+.template-foot { margin-top: 8px; font-size: .76rem; color: var(--muted); }

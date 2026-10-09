@@ -125,15 +125,4 @@ async def list_templates(tenant: CurrentTenant, lineId: str = "") -> dict:
     debug a message that was never going to arrive.
     """
     tenant = await _speaking_as(tenant, lineId)
-    templates = await WhatsApp(tenant).templates()
-    return {
-        "templates": [
-            {
-                "name": t.get("name"),
-                "status": t.get("status"),
-                "category": t.get("category"),
-                "language": t.get("language"),
-            }
-            for t in templates
-        ]
-    }
+    return {"templates": await WhatsApp(tenant).templates()}

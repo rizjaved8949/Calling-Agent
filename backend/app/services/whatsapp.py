@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import contextlib
 import logging
 import re
 from typing import Any
@@ -201,6 +202,11 @@ class WhatsApp:
         call_id: str = "",
     ) -> Message:
         """Send an approved template — the only way to open a conversation."""
+        body_text = ""
+        with contextlib.suppress(Exception):
+            known = await self.template(template, language)
+            if known:
+                body_text = fill(known.get("body") or "", parameters or [])
         components: list[dict[str, Any]] = []
         if parameters:
             components.append(
@@ -220,9 +226,12 @@ class WhatsApp:
             },
         }
         result = await self._post(f"{self.tenant.graph_number_id}/messages", payload)
+        # Stored as the words the person actually received, not as the list of
+        # values we filled in. A log reading "482103" tells whoever reads it
+        # back nothing; the resolved sentence tells them everything.
         return await self._record(
             to=to,
-            body=" | ".join(parameters or []),
+            body=body_text or " | ".join(parameters or []),
             kind="template",
             result=result,
             template=template,
@@ -251,7 +260,14 @@ class WhatsApp:
             f"{self.tenant.waba_id}/message_templates",
             {"limit": 100, "fields": "name,status,category,language,components"},
         )
-        return body.get("data") or []
+        return [describe_template(t) for t in (body.get("data") or [])]
+
+    async def template(self, name: str, language: str = "") -> dict[str, Any] | None:
+        """One template, by name and optionally language."""
+        for found in await self.templates():
+            if found["name"] == name and (not language or found["language"] == language):
+                return found
+        return None
 
     # ---- Calling ----------------------------------------------------------
 
@@ -359,6 +375,49 @@ class WhatsApp:
             lineId=self.tenant.line_id,
         )
         return await call_repo.save_message(message)
+
+
+PLACEHOLDER = re.compile(r"\{\{\s*(\d+)\s*\}\}")
+
+
+def describe_template(raw: dict[str, Any]) -> dict[str, Any]:
+    """A template in the shape a screen can actually use.
+
+    Meta returns its parts as an unordered list of components, and the number
+    of values it expects is not stated anywhere — it is however many distinct
+    {{n}} appear in the body. Sending the wrong number is refused with
+    "(#132000) Number of parameters does not match the expected number of
+    params", which names no template and no count, so a form that guesses
+    produces an error nobody can act on.
+    """
+    parts = {str(c.get("type", "")).upper(): c for c in (raw.get("components") or [])}
+    body = (parts.get("BODY", {}).get("text") or "").strip()
+    numbers = {int(n) for n in PLACEHOLDER.findall(body)}
+    example = (
+        (parts.get("BODY", {}).get("example") or {}).get("body_text") or [[]]
+    )[0]
+    return {
+        "name": raw.get("name", ""),
+        "status": raw.get("status", ""),
+        "category": raw.get("category", ""),
+        "language": raw.get("language", ""),
+        "header": (parts.get("HEADER", {}).get("text") or "").strip(),
+        "body": body,
+        "footer": (parts.get("FOOTER", {}).get("text") or "").strip(),
+        # The count Meta will check against, and an example per placeholder so
+        # the form can show what belongs there.
+        "placeholders": max(numbers) if numbers else 0,
+        "examples": [str(x) for x in example],
+    }
+
+
+def fill(body: str, values: list[str]) -> str:
+    """The template's words with the values put in, as the reader sees them."""
+    def swap(match: re.Match[str]) -> str:
+        index = int(match.group(1)) - 1
+        return values[index] if 0 <= index < len(values) else match.group(0)
+
+    return PLACEHOLDER.sub(swap, body)
 
 
 def _graph_error(response: httpx.Response) -> str:
