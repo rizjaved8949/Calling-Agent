@@ -6,3 +6,7 @@ dist/
 .qa-chrome-*/
 .cdp-qa/
 google/
+
+# Scratch files for one-off verification scripts (decrypted keys, call ids).
+# Always deleted right after use, but ignored too, belt and suspenders.
+.tmp*
