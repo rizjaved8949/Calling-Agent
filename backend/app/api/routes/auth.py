@@ -43,6 +43,16 @@ class AcceptInviteRequest(BaseModel):
     token: str = Field(min_length=1)
 
 
+class ConnectNumberRequest(BaseModel):
+    """What Meta's own dashboard calls these, since there is no way to ask
+    for a "phone number ID" without naming where it comes from."""
+
+    phone_number_id: str = Field(min_length=1, max_length=64, alias="phoneNumberId")
+    display_phone_number: str = Field(default="", max_length=32, alias="displayPhoneNumber")
+
+    model_config = {"populate_by_name": True}
+
+
 def _response(tenant: Tenant, *, email: str, role: str) -> dict:
     return {
         # Shown on every login, not just once — see this module's docstring.
@@ -169,3 +179,61 @@ async def accept_invite(person: CurrentPerson, payload: AcceptInviteRequest) -> 
     log.info("tenant %s: %s accepted an invite as %s",
              tenant.phone_number_id, person.email, invite.get("role", "staff"))
     return _response(tenant, email=person.email, role=invite.get("role", "staff"))
+
+
+@router.post("/connect-number")
+async def connect_number(person: CurrentPerson, payload: ConnectNumberRequest) -> dict:
+    """Turn a signup's placeholder id into the company's real WhatsApp
+    phone_number_id — the one thing `PATCH /companies/me` deliberately
+    refuses to touch, because changing a tenant's primary key there would
+    silently orphan every call and credential already filed under the old
+    one (see credentials.py's own comment on why it is excluded).
+
+    This does the same change properly: copy the whole row onto the real
+    id, repoint Firestore at it, delete the placeholder. A company's own
+    phone_number_id in Meta's Graph API path — `whatsapp.py` sends every
+    outbound request to `.../{tenant.phone_number_id}/...` — so until this
+    runs, a self-signed-up company's WhatsApp number is credentials with
+    nowhere real to send them.
+
+    Owner only, and only once: a company already past this point already
+    has every call, message and credential filed under its real id, and
+    moving again would be exactly the orphaning this exists to avoid.
+    """
+    link = await user_repo.get(person.uid)
+    if link is None:
+        raise AppError(404, "No company is linked to this account yet.", code="needs_signup")
+    if link.get("role") != "owner":
+        raise AppError(403, "Only the company's owner can do this.", code="forbidden")
+
+    current = await tenant_repo.get(link["phoneNumberId"])
+    if current is None:
+        raise Conflict("Your company record is missing. Contact support.")
+    if not current.phone_number_id.startswith("pending-"):
+        raise Conflict(
+            "This company is already connected to a WhatsApp number. "
+            "Contact support to change it."
+        )
+
+    new_id = payload.phone_number_id.strip()
+    if await tenant_repo.get(new_id) is not None:
+        raise AppError(
+            409,
+            "That number is already connected to a different account. "
+            "If this is your number, contact support rather than signing up again.",
+            code="number_already_connected",
+        )
+
+    moved = current.model_copy(update={
+        "phone_number_id": new_id,
+        "display_phone_number": payload.display_phone_number.strip() or current.display_phone_number,
+    })
+    await tenant_repo.save(moved)
+    await user_repo.create(
+        person.uid, email=person.email, display_name=person.display_name,
+        phone_number_id=new_id, role="owner",
+    )
+    await tenant_repo.delete(current.phone_number_id)
+    log.info("tenant %s: connected real WhatsApp number, was %s",
+             new_id, current.phone_number_id)
+    return _response(moved, email=person.email, role="owner")

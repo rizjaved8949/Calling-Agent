@@ -175,3 +175,58 @@ def test_an_invite_can_be_peeked_at_before_signing_in(client, fake_db, firebase)
 def test_peeking_at_a_bogus_token_is_a_plain_404(client, fake_db, firebase):
     resp = client.get("/api/team/invite/not-a-real-token")
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Connecting a real WhatsApp number after signup
+# ---------------------------------------------------------------------------
+
+def test_the_owner_can_connect_a_real_number(client, fake_db, firebase):
+    signed_up = _signup(client)
+    assert signed_up["phoneNumberId"].startswith("pending-")
+
+    resp = client.post(
+        "/api/auth/connect-number", json={"phoneNumberId": "999888777", "displayPhoneNumber": "+1 555 0100"},
+        headers=_auth("owner-1", "owner@acme.test"),
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["phoneNumberId"] == "999888777"
+    assert body["apiKey"] == signed_up["apiKey"], "the same company's key should survive the move"
+
+    # The old placeholder row is gone; the real one answers in its place.
+    login = client.post("/api/auth/login", headers=_auth("owner-1", "owner@acme.test")).json()
+    assert login["phoneNumberId"] == "999888777"
+
+
+def test_connecting_a_number_twice_is_refused(client, fake_db, firebase):
+    _signup(client)
+    client.post("/api/auth/connect-number", json={"phoneNumberId": "999888777"},
+               headers=_auth("owner-1", "owner@acme.test"))
+
+    second = client.post("/api/auth/connect-number", json={"phoneNumberId": "111222333"},
+                         headers=_auth("owner-1", "owner@acme.test"))
+    assert second.status_code == 409
+
+
+def test_connecting_a_number_someone_else_already_has_is_refused(client, fake_db, firebase):
+    _signup(client, "Acme", "owner-1", "owner@acme.test")
+    client.post("/api/auth/connect-number", json={"phoneNumberId": "999888777"},
+               headers=_auth("owner-1", "owner@acme.test"))
+
+    _signup(client, "Northstar", "owner-2", "owner@northstar.test")
+    clash = client.post("/api/auth/connect-number", json={"phoneNumberId": "999888777"},
+                        headers=_auth("owner-2", "owner@northstar.test"))
+    assert clash.status_code == 409
+
+
+def test_a_staff_member_cannot_connect_a_number(client, fake_db, firebase):
+    _signup(client)
+    invite = client.post("/api/team/invite", json={"email": "staff@acme.test", "role": "staff"},
+                         headers=_auth("owner-1", "owner@acme.test")).json()
+    client.post("/api/auth/accept-invite", json={"token": invite["token"]},
+               headers=_auth("staff-1", "staff@acme.test"))
+
+    resp = client.post("/api/auth/connect-number", json={"phoneNumberId": "999888777"},
+                       headers=_auth("staff-1", "staff@acme.test"))
+    assert resp.status_code == 403
