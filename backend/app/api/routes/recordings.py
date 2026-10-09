@@ -244,6 +244,24 @@ def _requested_range(header: str | None, size: int) -> tuple[int, int] | None:
     return start, end
 
 
+@router.delete("", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+async def delete_recording(tenant: CurrentTenant, call_id: str) -> None:
+    """Erase the audio but keep the call.
+
+    Separate from deleting the call because they are different decisions: a
+    company may need the record of who rang and when long after it has to
+    stop keeping their voice.
+    """
+    call = await call_repo.get_call(tenant.phone_number_id, call_id)
+    if call is None:
+        raise NotFound("Call")
+    if not call.recording_path:
+        raise NotFound("Recording")
+    await recording_service.forget(tenant, call)
+    reports.schedule_sync(tenant)
+    log.info("recording for call %s deleted by the company", call_id)
+
+
 @router.post("/fetch", status_code=status.HTTP_202_ACCEPTED)
 async def fetch_from_carrier(tenant: CurrentTenant, call_id: str) -> dict:
     """Pull the recording the carrier made and keep our own copy.

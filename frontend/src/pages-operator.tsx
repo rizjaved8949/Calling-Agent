@@ -112,7 +112,8 @@ export function PlatformLoginScreen() {
       <p className="muted small">This is the only way to reset your password if you forget it. It is shown <b>once</b> — store it in a password manager. Each reset gives you a new one.</p>
       <code style={{fontSize: '1.15rem', padding: 14, background: 'var(--surface)', borderRadius: 10, textAlign: 'center', letterSpacing: '.06em'}}>{recovery}</code>
       <Button variant="outline" onClick={() => {void navigator.clipboard?.writeText(recovery)}}>Copy</Button>
-      <label className="row small"><input type="checkbox" checked={saved} onChange={e => setSaved(e.target.checked)}/> I have saved this code somewhere safe</label>
+      <label className="check"><input type="checkbox" checked={saved} onChange={e => setSaved(e.target.checked)}/>
+        <span>I have saved this code somewhere safe</span></label>
       <Button disabled={!saved || !pending} onClick={() => pending && enter(pending.token, pending.email, pending.name)}>Continue to the portal</Button>
     </div>}
 

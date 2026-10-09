@@ -76,7 +76,7 @@ async def verify_whatsapp(request: Request) -> Response:
     for tenant in await tenant_repo.list_all():
         if tenant.verify_token:
             accepted.add(tenant.verify_token.strip())
-    for number in await number_repo.list_all():
+    for number in await number_repo.list_all_safe():
         if number.verify_token:
             accepted.add(number.verify_token.strip())
     accepted.discard("")
@@ -170,7 +170,7 @@ async def _inbound_allowed(tenant: Tenant) -> bool:
     """
     if not tenant.line_id:
         return True
-    line = await number_repo.get(tenant.phone_number_id, tenant.line_id)
+    line = await number_repo.get_safe(tenant.phone_number_id, tenant.line_id)
     return bool(line and line.verified and line.takes_inbound and line.inbound_agent_id)
 
 

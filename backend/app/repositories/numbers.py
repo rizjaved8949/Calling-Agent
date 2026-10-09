@@ -111,6 +111,31 @@ async def list_all() -> list[PhoneNumber]:
     return [n for n in (_parse(r) for r in rows) if n is not None]
 
 
+async def list_all_safe() -> list[PhoneNumber]:
+    """Every number, or none if the table cannot be read.
+
+    For the paths an inbound webhook or a ringing call sits on. A deployment
+    whose migration has not been applied — or a database having a bad minute —
+    must not turn into a 502 that makes Meta retry and eventually disable the
+    subscription. Falling back to "this company has no numbers" degrades to the
+    behaviour from before numbers existed, which is survivable; failing the
+    webhook is not.
+    """
+    try:
+        return await list_all()
+    except Exception:  # noqa: BLE001 — see above
+        log.exception("could not read %s; treating it as empty", TABLE)
+        return []
+
+
+async def get_safe(tenant_id: str, number_id: str) -> PhoneNumber | None:
+    try:
+        return await get(tenant_id, number_id)
+    except Exception:  # noqa: BLE001
+        log.exception("could not read number %s; treating it as missing", number_id)
+        return None
+
+
 async def delete(tenant_id: str, number_id: str) -> None:
     await supabase.delete(TABLE, params={"id": f"eq.{number_id}", "tenant_id": f"eq.{tenant_id}"})
     _by_meta_cache.clear()
@@ -128,7 +153,7 @@ async def by_meta_phone_number_id(meta_id: str) -> PhoneNumber | None:
     if cached and time.monotonic() - cached[0] < _CACHE_TTL_SECONDS:
         return cached[1]
     found: PhoneNumber | None = None
-    for number in await list_all():
+    for number in await list_all_safe():
         if number.kind is NumberKind.WHATSAPP and _effective_meta_id(number) == key:
             found = number
             break

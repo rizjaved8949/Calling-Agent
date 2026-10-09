@@ -7,6 +7,12 @@
  *
  * `bodyMd` renders as one continuous paragraph (GuideDetail does not parse
  * markdown), so each is written as prose rather than headed sections.
+ *
+ * These describe the current flow: a number carries its own credentials, is
+ * verified against the provider, and is then given an agent for incoming calls,
+ * outgoing calls, or both. An earlier version of this file described entering
+ * credentials once in Settings and routing numbers with "call setups", which is
+ * not how any of it works now.
  */
 import type { Guide } from './types';
 
@@ -19,86 +25,115 @@ export const REAL_GUIDES: Guide[] = [
     category: 'Setup',
     readingMinutes: 4,
     updatedAt: UPDATED,
-    bodyMd: 'Start in Settings: connect your WhatsApp Business account and, if you take phone calls too, your Infobip carrier account. Once a number shows as connected under Numbers, build an Agent — give it a greeting, a short description of who it is, and point it at a Knowledge Base of your own documents. Then create a Call Setup to actually route a number to that agent: one inbound setup per number (a line can only be answered one way), and as many outbound setups as you want for different kinds of outgoing calls or campaigns. Until you create a call setup, every number falls back to a generic default and answers from everything you have ever uploaded rather than the specific agent and knowledge you built — so this step is what actually turns the agent on.',
+    bodyMd:
+      'There are four steps, and the Dashboard tracks them for you. First, Numbers → Connect a number: choose whether you bought it in Infobip (a phone line anyone can dial) or got it from Meta (a WhatsApp Business number), say whether it is for incoming calls, outgoing calls or both, and paste the credentials from that provider\'s own console — every field says exactly where to find it. The moment you save, we ask the provider whether those credentials work and tell you yes or no, so a typo is caught here rather than on a customer\'s call. Second, paste the webhook URL the page then shows into Infobip or Meta, which is how calls and messages reach us at all. Third, Agents → New agent: write its opening line and a short description of who it is. Fourth, Knowledge: create a knowledge base, upload your documents, and pick it on the agent. Then go back to Numbers and choose that agent as the number\'s inbound agent, its outbound agent, or both. That last click is what turns the number on: until an inbound agent is chosen, incoming calls are declined rather than answered badly.',
   },
   {
-    slug: 'knowledge-writing',
-    title: 'Writing knowledge your agent can use',
-    category: 'Knowledge',
-    readingMinutes: 3,
+    slug: 'numbers',
+    title: 'Connecting a number',
+    category: 'Setup',
+    readingMinutes: 5,
     updatedAt: UPDATED,
-    bodyMd: 'Upload PDF, DOCX, TXT or MD files up to 20 MB each from the Knowledge screen. A PDF has its text extracted on upload rather than read fresh on every call, so a scanned image with no selectable text will not work — if a document uploads but your agent cannot answer from it, that is usually why. Write documents the way you would answer a question yourself: plain sentences with the actual number, date or policy in them, not a cross-reference to another document. Your agent is instructed to answer only from what you have given it and to say it will check rather than guess when something is missing — which is also why an outdated price list does more harm than an empty one.',
-  },
-  {
-    slug: 'persona',
-    title: 'Shaping how an agent talks',
-    category: 'Agents',
-    readingMinutes: 3,
-    updatedAt: UPDATED,
-    bodyMd: 'Each agent under Agents has its own opening line, a short description of who it is ("You are Sara, the support assistant for this business…"), a language, tone notes, and rules for when to hand off to a person. These apply on both a phone call and a WhatsApp conversation — one description, both channels. An agent with nothing filled in falls back to your company\'s own default persona in Settings, which is why a brand-new agent still says something sensible before you have written anything for it. Leave Voice empty to use your company\'s default voice rather than naming one per agent.',
-  },
-  {
-    slug: 'multiple-knowledge',
-    title: 'Using more than one knowledge base',
-    category: 'Knowledge',
-    readingMinutes: 3,
-    updatedAt: UPDATED,
-    bodyMd: 'Create a separate Knowledge Base when two parts of your business should never answer from each other\'s documents — a sales line that should quote prices and a support line that should not, for instance. Mark one as default and it becomes the fallback for any agent that has not been given a base of its own. An agent you have pointed at a specific base answers only from that base\'s documents; a call setup can override that again and point a particular number at a different base still, which is what lets the same agent answer differently depending on which number took the call.',
+    bodyMd:
+      'You bring your own number and your own provider account, so your traffic and your bill are yours. For a phone line, buy a voice-capable number in Infobip, then copy your base URL (the top of the Infobip portal home page, something like xxxxx.api.infobip.com) and an API key with the Voice/Calls scope. For WhatsApp, in Meta for Developers open your app → WhatsApp → API Setup and copy the Phone number ID (not the phone number itself) and the WhatsApp Business Account ID; generate the access token as a System User token under Business Settings → System users, because the temporary token on that page expires in 24 hours and your agent will stop answering when it does. You also need the App secret from App settings → Basic, which is how we check that each webhook genuinely came from Meta rather than from someone pretending to be them. The webhook verify token is any phrase you invent — type the same one into Meta when you add the callback URL. After saving, the number shows Verified, or Not verified with the provider\'s own reason. Changing any credential later sends the number back to be verified again, so "verified" always means these exact values were accepted. Editing a number never shows a saved secret back; leave a secret field empty to keep the stored one.',
   },
   {
     slug: 'routing',
-    title: 'Which agent answers which number',
-    category: 'Numbers',
+    title: 'Choosing who answers a number',
+    category: 'Setup',
     readingMinutes: 3,
     updatedAt: UPDATED,
-    bodyMd: 'A Call Setup is the answer to "how does this number behave." Incoming is exclusive: a number can only have one enabled inbound setup, because a call arriving on it has to be answered by exactly one agent — creating a second one is refused rather than left to chance. Outgoing has no such limit; build as many outbound setups as you have reasons to call people, each with its own agent and knowledge. A single ad-hoc outbound call can also name its own agent and knowledge base directly, without a saved setup, for a one-off that does not need to be repeated.',
+    bodyMd:
+      'On the Numbers page, each verified number has up to two slots: the agent that answers calls coming in, and the agent that makes calls going out. An agent is marked inbound, outbound or both, and only fits a matching slot — so a sales agent written for outbound work cannot be dropped onto your support line by accident. Leave the inbound slot empty and incoming calls are declined, which is deliberate: a number answered by whatever agent happened to exist is worse than a number that does not answer. Leave the outbound slot empty and the number can still be used by a person from the Dialer, but your agent will not call out on it. Changing how a number behaves is changing which agent sits in its slot; nothing else about the number moves, and calls already made keep the record of which agent and which documents answered them. A call also records why that knowledge was chosen, which is what makes "why did it say that?" answerable weeks later.',
+  },
+  {
+    slug: 'knowledge-writing',
+    title: 'What to upload, and how to write it',
+    category: 'Knowledge',
+    readingMinutes: 5,
+    updatedAt: UPDATED,
+    bodyMd:
+      'Your agent answers only from what you upload, and says it will have someone call back when the answer is not there — it never invents a price, a date or a policy. That makes the quality of your documents the quality of your agent. Write short, direct answers to the questions people actually ask on the phone: opening hours, prices, what is included, how long something takes, what to bring, where to park. Prefer plain sentences over tables and bullet lists, because the agent is speaking, not showing a page, and a table read aloud is unbearable. Avoid anything that goes stale without someone noticing — "next Tuesday" rather than a date, a price that changed last month — since a confidently wrong answer costs you more than no answer. One fact per sentence, and spell out abbreviations the first time. PDFs, text, markdown and CSV are all read; a scanned PDF with no text layer has nothing to extract, so export a text-based one.',
+  },
+  {
+    slug: 'multiple-knowledge',
+    title: 'Keeping separate sets of documents',
+    category: 'Knowledge',
+    readingMinutes: 3,
+    updatedAt: UPDATED,
+    bodyMd:
+      'A knowledge base is a named set of documents, and an agent reads exactly one of them. That is what lets a support line answer from the support handbook while an outbound sales agent works from the price list on the same account, without either one quoting the other\'s material. Create a base per audience rather than per file, mark one as the default so anything unassigned still has somewhere to fall back to, and give each a purpose in your own words — you read that line when choosing between them months later. An agent with no base reads everything you have uploaded, which is fine for a company with one pile of documents and wrong as soon as you have two. Deleting a base keeps its documents but leaves them unfiled, so every agent can read them again; a base a live number currently answers from is refused rather than deleted out from under it.',
+  },
+  {
+    slug: 'persona',
+    title: 'Writing the agent itself',
+    category: 'Agents',
+    readingMinutes: 4,
+    updatedAt: UPDATED,
+    bodyMd:
+      'An agent has an opening line, a description of who it is, a language, tone notes and rules for when to hand over to a person — and these apply to both phone and WhatsApp conversations, so you write them once. Write the description as if briefing a new colleague on their first morning: "You are Sara, the support assistant for Acme. You are warm and brief. You never promise a refund." Keep the opening line to one sentence, since it is the first thing a caller hears and a paragraph sounds like a recording. Tone notes are where the hard rules go: what never to promise, what always to confirm, how to say no. The language field is only a starting point — the agent follows a caller who speaks something else. The page holds your changes as a draft and saves when you press Save, so a half-written sentence is never what the next caller hears.',
+  },
+  {
+    slug: 'dialer',
+    title: 'Calling someone yourself',
+    category: 'Calls',
+    readingMinutes: 3,
+    updatedAt: UPDATED,
+    bodyMd:
+      'The Dialer lets a person call a customer from one of the company\'s numbers and talk through their own browser. The customer sees the company number, not the employee\'s phone, and no agent is involved — your microphone is the one on the call. Staff you invite land on this screen, which is the point: they can make and take calls without being able to change settings, credentials or the team. You need a verified number set to outgoing or both; it does not need an outbound agent, because you are the one speaking. The browser asks permission for your microphone the first time, and the call ends when you hang up or leave the page. On WhatsApp there is one extra rule: a business may only call someone who has allowed it, so send the permission request first — they accept once, and after that you can call them.',
   },
   {
     slug: 'campaigns',
-    title: 'Running an outbound campaign',
-    category: 'Calling',
+    title: 'Working through a list of numbers',
+    category: 'Calls',
+    readingMinutes: 4,
+    updatedAt: UPDATED,
+    bodyMd:
+      'A campaign is a list of people your agent calls one at a time, with a gap between calls, and nobody is redialled automatically. Choose which of your numbers it calls from and which agent works the list — leave the agent empty and the number\'s own outbound agent is used. Paste the numbers one per line, optionally with a name after a comma. Pacing is deliberately conservative: one call at a time rather than several, because the aggressive dialling patterns are exactly where the regulatory trouble lives. Pause stops after the call in progress rather than cutting someone off mid-sentence. Give the campaign its own opening line when the first sentence should mention why you are calling — "this is Sara from Acme about your enquiry" lands very differently from a generic greeting on a call the person did not ask for. Check your local rules on calling hours and consent before you start; nothing here enforces them for you.',
+  },
+  {
+    slug: 'whatsapp-messages',
+    title: 'WhatsApp messages and the 24-hour window',
+    category: 'Calls',
     readingMinutes: 3,
     updatedAt: UPDATED,
-    bodyMd: 'A campaign works through a pasted list of numbers one at a time, with a gap between each call rather than calling several people at once. There is no automatic redial — someone who did not answer stays off the list until a person decides to call them again, because that is a decision about how much to pester somebody and not one this product makes for you. A campaign remembers which agent and knowledge base it uses, so a list worked for admissions and a list worked for fee reminders can answer completely differently even from the same number. Pausing a campaign lets whichever call is already in progress finish naturally rather than cutting someone off mid-sentence.',
+    bodyMd:
+      'The Messages screen shows one conversation at a time per number. The rule that catches everyone is Meta\'s, not ours: you may send a free-text message only within 24 hours of that person\'s last message to you. Outside that window Meta accepts your request and quietly never delivers it, which is why the compose box tells you which side of the window you are on and switches to templates when it has closed. A template is a message Meta has approved in advance; only approved ones appear in the picker, and any {{1}} placeholders in it are filled in order. Your agent can answer messages on its own — turn that on per number, since one number may be staffed by people and another by the agent. Deleting a message here removes it from your own log only: WhatsApp has no way to unsend, so the other person keeps their copy, and the confirmation says so rather than pretending otherwise.',
+  },
+  {
+    slug: 'recording',
+    title: 'Recordings: where they are kept and how to delete one',
+    category: 'Operations',
+    readingMinutes: 4,
+    updatedAt: UPDATED,
+    bodyMd:
+      'Recording is on by default and can be turned off in Settings → Recordings, which affects new calls only. A finished recording is playable from the call in History: press play and the audio streams with a scrub bar, and Download gives you the file. If you connect Google Drive, each recording is also copied into a folder in your own Google account, under your own storage, so you keep them whatever happens here — and disconnecting Drive leaves those copies alone. Deleting is two separate decisions, deliberately: Delete recording erases only the audio and keeps the record of who called and when, which is what you want when you must stop keeping someone\'s voice but still need the log; Delete call removes the whole thing. Both ask first and say exactly what goes. For a phone call recorded on the carrier\'s side, Fetch from the carrier pulls their copy into your own storage — worth doing, because carriers expire recordings and a dashboard that only ever points at theirs eventually plays nothing. Where you operate may require telling callers they are being recorded; if so, put it in the agent\'s opening line.',
   },
   {
     slug: 'unanswered',
-    title: 'Finding what your agent could not answer',
-    category: 'Knowledge',
-    readingMinutes: 2,
+    title: 'Questions your agent could not answer',
+    category: 'Operations',
+    readingMinutes: 3,
     updatedAt: UPDATED,
-    bodyMd: 'The Unanswered screen looks through your call transcripts for the moments your agent deferred — "I will check and get back to you," in whichever language or phrasing it used — and counts how often the same kind of question comes up. A question asked repeatedly is the clearest signal of what to add to your knowledge base next; one asked once might just be an edge case. This reads your existing transcripts rather than needing anything extra configured.',
+    bodyMd:
+      'Every time a caller asks something your documents do not cover, the agent offers to have someone call back rather than guessing — and the question is listed under Unanswered. This is not an error log. It is the most direct list you will ever get of what to write next, in your customers\' own words, ranked by how often they ask. Work it from the top: add a short answer to the relevant knowledge base, and the next caller gets it. The list is read out of your calls and messages rather than kept separately, so deleting a call takes its questions with it.',
   },
   {
     slug: 'staff',
     title: 'Adding your team',
-    category: 'Team',
+    category: 'Operations',
     readingMinutes: 2,
     updatedAt: UPDATED,
-    bodyMd: 'From Team, an owner can invite someone as staff. There is no email delivery set up yet, so invite creates a link you share yourself rather than one that gets emailed automatically. Staff can sign in, place and receive calls and messages, and use the live queue, lookup and ask-the-documents tools — but cannot create, edit or delete an agent, a knowledge base or a call setup, and cannot invite or remove anyone else. They can switch which existing call setup is active for a number, which is the one configuration action left open to them, because choosing which already-built preset answers right now is a day-to-day decision, not a design one.',
-  },
-  {
-    slug: 'recording',
-    title: 'Call recordings',
-    category: 'Calls',
-    readingMinutes: 2,
-    updatedAt: UPDATED,
-    bodyMd: 'Turn recording on in Settings and both sides of a call are captured. Open any finished call\'s detail page and the Recording tab plays it back directly, with a Download button next to the player for a local copy. If you have connected Google Drive, a copy is also saved there automatically, under a folder named for your number, so recordings outlive anything deleted here. A call still in progress has nothing to play yet; one marked "preparing" is usually ready within a few minutes of the call ending.',
-  },
-  {
-    slug: 'numbers',
-    title: 'Connecting your numbers',
-    category: 'Setup',
-    readingMinutes: 2,
-    updatedAt: UPDATED,
-    bodyMd: 'Your numbers come from the accounts you connect in Settings, not from a request made inside this product — a WhatsApp Business number through Meta, and a phone line through your own Infobip account. Once connected, Numbers shows each one\'s status and which calls it has carried. There is no self-serve way to acquire a brand-new number through this screen yet; that happens on the provider\'s own side, then gets connected here the same way.',
+    bodyMd:
+      'Invite colleagues from Team. They join as staff: they can use the Dialer, take over a live call, look up a customer\'s history and ask your documents a question, but they cannot see credentials, change settings or manage the team. There is one owner per company, which keeps "who can remove whom" unambiguous. No email is sent — this deployment has no mail delivery configured — so you are given a link to pass on yourself, however you normally reach them. The invite names the email address it was issued to and only that person can accept it, so a forwarded link does not let a stranger in. Removing someone stops them signing in; it does not change the company\'s API key, so if you need access cut off immediately that is a separate, deliberate step.',
   },
   {
     slug: 'go-live',
-    title: 'Before you switch an agent live',
+    title: 'Before you let real customers call',
     category: 'Setup',
-    readingMinutes: 2,
+    readingMinutes: 4,
     updatedAt: UPDATED,
-    bodyMd: 'Before a number starts taking real calls: upload the documents it should answer from and check what the agent reads with the preview on the Knowledge screen; write and test the opening line and persona; create the call setup that actually routes the number to that agent, since an agent sitting on the Agents screen with no setup pointed at it never answers anything; and decide whether recording should be on, since that is a disclosure obligation in many places, not just a feature toggle. Placing one real test call or sending one real test message to the number yourself is the fastest way to catch anything the checklist missed.',
+    bodyMd:
+      'Check these in order. The number shows Verified on the Numbers page. Its webhook URL is pasted into Infobip, or into Meta with the webhook subscribed to both messages and calls. It has an inbound agent if people will ring it, and an outbound agent if your agent will ring them. That agent has a knowledge base with real documents in it, not an empty one. Then test it properly: ring the number from your own phone and listen as a customer would — does the greeting sound right, does it answer a real question, does it cope with being interrupted, does it say something sensible when you ask about something you have not uploaded. Place one call from the Dialer and confirm the customer sees your company number. Check that the recording plays back in History afterwards. Finally look at the Dashboard: it names anything still wrong, such as a verified number nobody is answering. Only then point your advertising at it.',
   },
 ];

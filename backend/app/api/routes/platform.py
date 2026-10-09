@@ -10,10 +10,15 @@ from __future__ import annotations
 from fastapi import APIRouter, Header, status
 from pydantic import BaseModel, Field
 
-from ...errors import Unauthorized
+from ...errors import NotFound, Unauthorized
 from ...security import superadmin
+from ..deps import AdminOnly
 
+# Two routers: the password forms get the tight rate limit (they are what
+# gets guessed at), while the portal's own read screens get the ordinary one —
+# 20 requests a minute is not enough for somebody clicking through companies.
 router = APIRouter(prefix="/platform", tags=["platform"])
+data_router = APIRouter(prefix="/platform", tags=["platform"])
 
 
 class SetupRequest(BaseModel):
@@ -66,3 +71,115 @@ async def change_password(
     if not x_admin_key or not await superadmin.token_valid(x_admin_key.strip()):
         raise Unauthorized("Sign in as the super admin first.")
     return await superadmin.change_password(payload.currentPassword, payload.newPassword)
+
+
+# ---------------------------------------------------------------------------
+# What the operator's portal shows
+# ---------------------------------------------------------------------------
+
+
+@data_router.get("/overview")
+async def overview(_: AdminOnly) -> dict:
+    """Every company, with enough about each to know who needs help.
+
+    One request rather than one per company: the portal's first screen is a
+    list, and a list that fires N requests is a list that half-loads.
+    """
+    from ...db.supabase import supabase
+    from ...models.call import CallStatus, RecordingState
+    from ...models.number import NumberStatus
+    from ...repositories import agents as agent_repo
+    from ...repositories import calls as call_repo
+    from ...repositories import numbers as number_repo
+    from ...repositories import tenants as tenant_repo
+
+    tenants = await tenant_repo.list_all()
+    all_numbers = await number_repo.list_all()
+    companies = []
+    totals = {"companies": len(tenants), "numbers": 0, "verified": 0, "calls": 0,
+              "minutes": 0, "recordings": 0, "failed": 0}
+
+    for tenant in tenants:
+        mine = [n for n in all_numbers if n.tenant_id == tenant.phone_number_id]
+        verified = [n for n in mine if n.status is NumberStatus.VERIFIED]
+        agents = await agent_repo.list_agents(tenant.phone_number_id)
+        calls = await call_repo.list_calls(tenant.phone_number_id, limit=1000)
+        minutes = int(-(-sum(c.duration_seconds for c in calls) // 60))
+        failed = sum(1 for c in calls if c.status is CallStatus.FAILED)
+        recordings = sum(1 for c in calls if c.recording_state is RecordingState.READY)
+        assigned = [n for n in mine if n.inbound_agent_id or n.outbound_agent_id]
+
+        # Said plainly, because "what is wrong with this account" is the only
+        # question this screen exists to answer.
+        if not mine:
+            stage, blocker = "no numbers", "They have not connected a number yet."
+        elif not verified:
+            stage, blocker = "not verified", "Their credentials were refused by the provider."
+        elif not agents:
+            stage, blocker = "no agent", "Verified number, but no agent has been created."
+        elif not assigned:
+            stage, blocker = "not assigned", "An agent exists but no number points at it."
+        else:
+            stage, blocker = "live", ""
+
+        companies.append({
+            "id": tenant.phone_number_id,
+            "name": tenant.name,
+            "stage": stage,
+            "blocker": blocker or None,
+            "numbers": len(mine),
+            "verifiedNumbers": len(verified),
+            "agents": len(agents),
+            "calls": len(calls),
+            "minutes": minutes,
+            "failedCalls": failed,
+            "recordings": recordings,
+            "lastCallAt": max((c.started_at for c in calls), default=None),
+            "driveConnected": tenant.google_drive.connected,
+            "allowPlatformCredentials": tenant.allow_platform_credentials,
+        })
+        totals["numbers"] += len(mine)
+        totals["verified"] += len(verified)
+        totals["calls"] += len(calls)
+        totals["minutes"] += minutes
+        totals["recordings"] += recordings
+        totals["failed"] += failed
+
+    companies.sort(key=lambda c: (c["stage"] == "live", -(c["lastCallAt"] or 0)))
+    return {
+        "companies": companies,
+        "totals": totals,
+        "store": "supabase" if not getattr(supabase, "is_local", False) else "local file",
+    }
+
+
+@data_router.get("/companies/{company_id}")
+async def company_detail(_: AdminOnly, company_id: str) -> dict:
+    """One company, in full: numbers, agents, recent calls, usage."""
+    from ...models.credentials import channel_readiness, credential_status
+    from ...repositories import agents as agent_repo
+    from ...repositories import calls as call_repo
+    from ...repositories import knowledge as knowledge_repo
+    from ...repositories import numbers as number_repo
+    from ...repositories import tenants as tenant_repo
+    from ...services import lines
+
+    tenant = await tenant_repo.get(company_id)
+    if tenant is None:
+        raise NotFound("Company")
+    numbers = await number_repo.list_for(company_id)
+    agents = await agent_repo.list_agents(company_id)
+    bases = await agent_repo.list_knowledge_bases(company_id)
+    documents = await knowledge_repo.listing(company_id)
+    calls = await call_repo.list_calls(company_id, limit=25)
+    stats = await call_repo.call_stats(company_id)
+    return {
+        "company": {**tenant.public(), "credentials": credential_status(tenant),
+                    "channels": channel_readiness(tenant)},
+        "numbers": [n.public(base_url=lines.webhook_base()) for n in numbers],
+        "agents": [a.public() for a in agents],
+        "knowledgeBases": [k.public() for k in bases],
+        "documentCount": len(documents),
+        "recentCalls": [c.public() for c in calls],
+        "stats": stats,
+    }

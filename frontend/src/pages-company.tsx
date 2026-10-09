@@ -7,7 +7,6 @@ import {useApp} from './app-context';
 import {formatDate,formatDuration} from './lib/format';
 import {api,LIVE} from './lib/api';
 import {ConnectionSetup} from './connection-setup';
-import {SetupChecklist} from './pages-numbers';
 import {presetKindHelp,presetKindLabel,presetsOfKind} from './lib/presets';
 import type {ChannelType,Persona,PresetKind} from './lib/types';
 
@@ -74,7 +73,6 @@ export function Dashboard(){
 
   return <div className="stack dashboard-page">
     <PageHead eyebrow="Overview" title={org.name} description="What needs you right now."/>
-    {LIVE&&<SetupChecklist/>}
 
     <div className="grid cols-3">
       <Link className="card lift attention-card" to="/app/live">

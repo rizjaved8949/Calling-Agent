@@ -183,3 +183,86 @@ async def test_a_call_on_a_number_is_answered_by_its_inbound_agent(fake_db):
     assert resolved.agent_id == support.id and resolved.resolved_by == "number"
     with pytest.raises(RuntimeError):
         await tenant_repo.save(overlay)
+
+
+# ---------------------------------------------------------------------------
+# Before the migration has been applied
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def numbers_table_missing(monkeypatch, fake_db):
+    """`voice_numbers` unreadable, as on a deployment that skipped the migration."""
+    from app.errors import UpstreamError
+    from app.repositories import numbers as number_repo
+
+    original = fake_db.select
+
+    async def refuse(table, *, params=None):
+        if table == number_repo.TABLE:
+            raise UpstreamError(
+                "The table 'voice_numbers' does not exist in this Supabase project."
+            )
+        return await original(table, params=params)
+
+    monkeypatch.setattr(fake_db, "select", refuse)
+    number_repo._by_meta_cache.clear()
+
+
+def test_a_meta_webhook_still_answers_without_the_numbers_table(
+    client, tenant_factory, numbers_table_missing,
+):
+    """Meta retries a non-2xx and eventually disables the subscription, so an
+    unreadable numbers table must degrade rather than fail the webhook."""
+    import hashlib
+    import hmac
+    import json
+
+    tenant_factory("800", appSecret="webhook-secret")
+    body = json.dumps({"entry": [{"changes": [{"field": "messages", "value": {
+        "metadata": {"phone_number_id": "800"},
+        "messages": [{"id": "wamid.1", "from": "923001112222", "type": "text",
+                      "text": {"body": "are you open?"}, "timestamp": "1700000000"}],
+    }}]}]})
+    signature = hmac.new(b"webhook-secret", body.encode(), hashlib.sha256).hexdigest()
+
+    resp = client.post("/api/webhooks/whatsapp", content=body, headers={
+        "Content-Type": "application/json",
+        "X-Hub-Signature-256": f"sha256={signature}",
+    })
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"status": "received"}
+    # The message was still filed against the company.
+    assert client.get("/api/messages", headers={
+        "Authorization": f"Bearer {tenant_factory('801')[1]}",
+    }).status_code == 200
+
+
+def test_webhook_verification_survives_the_missing_table(client, numbers_table_missing, monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "whatsapp_webhook_verify_token", "shared-token")
+    resp = client.get("/api/webhooks/whatsapp", params={
+        "hub.mode": "subscribe", "hub.verify_token": "shared-token", "hub.challenge": "42",
+    })
+    assert resp.status_code == 200 and resp.text == "42"
+
+
+def test_routing_falls_back_when_the_numbers_table_is_unreadable(
+    client, tenant_factory, numbers_table_missing,
+):
+    """A ringing call resolves to the company's own settings instead of raising."""
+    import asyncio
+
+    from app.models.agent import Direction
+    from app.models.call import Channel
+    from app.repositories import tenants as tenant_repo
+    from app.services import routing
+
+    tenant_factory("802", persona="You are the Acme assistant.")
+    tenant = asyncio.run(tenant_repo.get("802"))
+    overlay = tenant.model_copy(update={"line_id": "a-number-we-cannot-read"})
+    resolved = asyncio.run(routing.resolve(
+        overlay, channel=Channel.PHONE, direction=Direction.INBOUND,
+    ))
+    assert resolved.agent is None
+    assert resolved.resolved_by == "company"

@@ -34,6 +34,7 @@ api_router.include_router(
 api_router.include_router(
     platform.router, dependencies=[Depends(check_blanket), Depends(check_expensive)]
 )
+api_router.include_router(platform.data_router, dependencies=_limited)
 api_router.include_router(
     team.router, dependencies=[Depends(check_blanket), Depends(check_expensive)]
 )

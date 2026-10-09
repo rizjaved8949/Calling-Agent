@@ -1,0 +1,250 @@
+/* ==========================================================================
+   Layout and alignment, loaded last.
+
+   This sheet exists because the earlier ones set a few things that only look
+   right at one window width or with one number of fields. Every rule here
+   fixes something that was visibly wrong rather than adding decoration:
+   fields that sat at different heights in the same row, filter grids that
+   went ragged, table columns that silently vanished on a phone, and dialogs
+   that grew taller than the screen with the buttons below the fold.
+   ========================================================================== */
+
+/* --- Forms ---------------------------------------------------------------
+   `.field-grid` was two fixed columns at every width above 760px, so a row
+   of three or nine filters came out ragged and the last one stretched across
+   the page. Auto-fit keeps every box the same size and reflows instead. */
+.field-grid {
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  align-items: start;
+}
+.field-grid.tight { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+
+/* A field and a button on one line. Without this the button centres against
+   the field's *label and* input together, so it floats above the input it
+   belongs to — the single most visible misalignment in the old screens. */
+.row.end { align-items: flex-end; }
+.row.top { align-items: flex-start; }
+.form-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+.form-row > .field { flex: 1 1 220px; min-width: 0; }
+.form-row > .button { flex: none; }
+
+/* Labels are two lines on some fields and one on others, which left inputs in
+   the same row at different heights. The label reserves two lines' worth so
+   every input in a grid row starts at the same y. */
+.field-grid > .field > label,
+.form-row > .field > label {
+  min-height: 1.15rem;
+  display: block;
+}
+
+/* `select` and `input` shared a height but not a font size or line box, so a
+   row of mixed controls looked a pixel or two off. One box model for all. */
+.input, .select, .textarea {
+  min-height: 44px;
+  font: inherit;
+  font-size: .89rem;
+  line-height: 1.4;
+}
+.select { appearance: none; padding-inline-end: 34px;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+                    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 18px) 50%, calc(100% - 13px) 50%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+.button { min-height: 44px; }
+.button.small { min-height: 36px; }
+.input[readonly] { background: var(--surface); color: var(--muted); }
+.input:disabled, .select:disabled, .textarea:disabled {
+  background: var(--surface); color: var(--muted); cursor: not-allowed;
+}
+
+/* A section inside a long form, so a card of twelve inputs reads as parts. */
+.form-section {
+  display: flex; flex-direction: column; gap: 14px;
+  padding: 18px 0;
+  border-top: 1px solid var(--border);
+}
+.form-section:first-child { border-top: 0; padding-top: 0; }
+.form-section > .row > div > h3 { margin: 0; }
+
+/* A read-only value beside its copy button, which must not shrink. */
+.copy-row { display: flex; gap: 8px; align-items: stretch; }
+.copy-row > .input { flex: 1 1 auto; min-width: 0; }
+.copy-row > .button { flex: none; min-width: 46px; }
+
+/* A checkbox and its words, aligned on the first line rather than centred —
+   centring puts the box halfway down a two-line label. */
+.check {
+  display: flex; gap: 10px; align-items: flex-start;
+  font-size: .84rem; line-height: 1.5; cursor: pointer;
+}
+.check input { margin-top: 3px; flex: none; width: 16px; height: 16px; }
+.check.disabled { opacity: .6; cursor: not-allowed; }
+
+/* --- Dialogs -------------------------------------------------------------
+   The old modal was one padded box: a long form grew past the viewport and
+   took its buttons with it. This splits into a fixed head, a scrolling body
+   and a fixed footer. */
+.modal-panel {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: min(88vh, 860px);
+}
+.modal-head {
+  display: flex; justify-content: space-between; align-items: flex-start; gap: 14px;
+  padding: 20px 22px; border-bottom: 1px solid var(--border);
+}
+.modal-head h2 { margin: 0; }
+.modal-body { padding: 22px; overflow: auto; flex: 1; min-height: 0; }
+.modal-foot {
+  display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap;
+  padding: 16px 22px; border-top: 1px solid var(--border); background: var(--surface);
+  border-end-start-radius: 16px; border-end-end-radius: 16px;
+}
+
+/* --- The recording player ------------------------------------------------ */
+.player {
+  display: flex; align-items: center; gap: 14px;
+  padding: 12px 14px; background: var(--surface); border-radius: 12px;
+}
+.player-button {
+  flex: none; width: 42px; height: 42px; border: 0; border-radius: 50%;
+  background: var(--accent); color: var(--primary-foreground);
+  display: grid; place-items: center; cursor: pointer;
+}
+.player-button:disabled { opacity: .6; cursor: default; }
+.player-track { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.player-range { width: 100%; accent-color: var(--accent); height: 18px; }
+
+/* --- Tables --------------------------------------------------------------
+   `style.css` hid every column past the third below 760px. A call row's
+   result and length are not optional detail, so instead the whole table is
+   replaced by stacked rows that keep every value with its own label. */
+@media (max-width: 760px) {
+  .table th:nth-child(n+4), .table td:nth-child(n+4) { display: revert; }
+  .table.stack-on-phone thead { display: none; }
+  .table.stack-on-phone, .table.stack-on-phone tbody,
+  .table.stack-on-phone tr, .table.stack-on-phone td { display: block; width: auto; }
+  .table.stack-on-phone tr {
+    border: 1px solid var(--border); border-radius: 12px;
+    padding: 6px 12px; margin-bottom: 10px;
+  }
+  .table.stack-on-phone td {
+    border: 0; padding: 6px 0; display: flex; justify-content: space-between; gap: 14px;
+  }
+  .table.stack-on-phone td::before {
+    content: attr(data-label);
+    color: var(--muted); font-size: .7rem; font-weight: 800;
+    letter-spacing: .08em; text-transform: uppercase;
+  }
+}
+
+/* --- Page furniture ------------------------------------------------------ */
+.page-heading { flex-wrap: wrap; row-gap: 14px; }
+.page-heading > div:first-child { min-width: min(100%, 34ch); flex: 1; }
+.page-heading p { max-width: 78ch; }
+
+/* A row of numbers that reflows instead of squashing to three columns. */
+.stat-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+
+/* A toolbar of filters and actions above a list. */
+.toolbar { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+.toolbar .field { min-width: 170px; }
+.toolbar .spacer { flex: 1 1 auto; }
+
+/* One row in a list: the text takes the space, the controls keep their size
+   and drop below instead of squeezing the text to nothing. */
+.list-row {
+  display: flex; gap: 14px; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; padding: 14px 0; border-top: 1px solid var(--border);
+}
+.list-row:first-of-type { border-top: 0; }
+.list-row-main { min-width: 0; flex: 1 1 260px; }
+.list-row-main strong { display: block; overflow-wrap: anywhere; }
+.list-row-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+/* Long values — numbers, ids, emails — must wrap rather than widen the card. */
+.mono, .phone { overflow-wrap: anywhere; }
+
+/* `.badge` capitalised every status, which turned "no answer" into odd
+   half-sentences in the middle of a line. Statuses are set deliberately now. */
+.badge.raw { text-transform: none; }
+
+.link-btn { display: inline-flex; align-items: center; gap: 5px; }
+
+/* --- Empty and busy states ---------------------------------------------- */
+.empty { padding: 46px 24px; }
+.empty p { max-width: 56ch; margin-inline: auto; }
+
+/* --- The chat ------------------------------------------------------------
+   The thread used the full window height minus a guess, so on a short window
+   the compose box sat below the fold. Bounded by the viewport instead. */
+.chat-shell { height: clamp(420px, calc(100vh - 230px), 760px); }
+.chat-bubble.out { background: color-mix(in oklch, var(--accent) 16%, var(--card)); margin-inline-start: auto; }
+.chat-bubble.in { background: var(--card); margin-inline-end: auto; }
+.chat-bubble { position: relative; }
+.chat-bubble-tools {
+  position: absolute; inset-block-start: 4px; inset-inline-end: 6px;
+  opacity: 0; transition: opacity .12s ease;
+}
+.chat-bubble:hover .chat-bubble-tools, .chat-bubble:focus-within .chat-bubble-tools { opacity: 1; }
+.chat-contact.active { background: var(--surface); }
+.chat-day {
+  align-self: center; font-size: .7rem; font-weight: 800; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--muted);
+  background: var(--card); padding: 4px 12px; border-radius: 100px;
+}
+
+/* --- Focus --------------------------------------------------------------- */
+.player-button:focus-visible, .chat-contact:focus-visible, .preset-card:focus-visible {
+  outline: 2px solid var(--ring); outline-offset: 2px;
+}
+
+@media (max-width: 760px) {
+  .modal-backdrop { padding: 0; place-items: end stretch; }
+  .modal-panel { max-height: 92vh; border-end-start-radius: 0; border-end-end-radius: 0; }
+  .toolbar .field, .toolbar .button { width: 100%; }
+  .toolbar { gap: 12px; }
+}
+
+/* A transcript keeps its own line breaks and wraps; `pre` alone would scroll
+   sideways and hide half the conversation. */
+.transcript {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0;
+  max-height: 460px;
+  overflow: auto;
+  font: inherit;
+  font-size: .86rem;
+  line-height: 1.75;
+  background: var(--surface);
+  padding: 16px;
+  border-radius: 12px;
+}
+
+/* The save bar on a long form: it stays at the bottom of the viewport, so
+   neither the state of the form nor the button that commits it can scroll
+   out of reach. */
+.save-bar {
+  position: sticky;
+  inset-block-end: 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-lift);
+  z-index: 5;
+}

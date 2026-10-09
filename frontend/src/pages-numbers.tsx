@@ -14,6 +14,7 @@ import {
   PhoneIncoming, PhoneOutgoing, Pencil, CircleDashed,
 } from 'lucide-react';
 import {Badge, Button, Empty, PageHead} from './app';
+import {CopyField, Loading, Modal, Section, TextInput, useConfirm} from './ui';
 import {useApp} from './app-context';
 import {workspace, type Agent} from './lib/api/workspace';
 import {
@@ -32,46 +33,6 @@ function StatusBadge({n}: {n: PhoneNumber}) {
   if (n.status === 'verified') return <Badge tone="success">Verified</Badge>;
   if (n.status === 'failed') return <Badge tone="danger">Not verified</Badge>;
   return <Badge tone="warning">Pending</Badge>;
-}
-
-function Wide({title, onClose, children}: {title: string; onClose: () => void; children: React.ReactNode}) {
-  return <div className="modal-backdrop" onClick={onClose}>
-    <div className="modal" style={{width: 'min(100%, 640px)', maxHeight: '92vh', overflow: 'auto'}}
-      onClick={e => e.stopPropagation()}>
-      <div className="row between" style={{marginBottom: 14}}>
-        <h2 style={{margin: 0}}>{title}</h2>
-        <button className="icon-btn" onClick={onClose} aria-label="Close"><X size={18}/></button>
-      </div>
-      {children}
-    </div>
-  </div>;
-}
-
-/** A plain controlled input; credentials must not be debounced or reformatted. */
-function Input({label, value, onChange, help, placeholder, secret, required}: {
-  label: string; value: string; onChange: (v: string) => void; help?: React.ReactNode;
-  placeholder?: string; secret?: boolean; required?: boolean;
-}) {
-  return <div className="field">
-    <label>{label}{required ? ' *' : ''}</label>
-    <input className="input" value={value} placeholder={placeholder} autoComplete="off"
-      type={secret ? 'password' : 'text'} spellCheck={false}
-      onChange={e => onChange(e.target.value)}/>
-    {help && <div className="help">{help}</div>}
-  </div>;
-}
-
-function CopyLine({label, value}: {label: string; value: string}) {
-  const {toast} = useApp();
-  return <div className="field">
-    <label>{label}</label>
-    <div className="row" style={{gap: 8}}>
-      <input className="input" readOnly value={value} onFocus={e => e.currentTarget.select()}/>
-      <Button small variant="outline" onClick={() => {
-        void navigator.clipboard?.writeText(value).then(() => toast('Copied'));
-      }}><Copy size={14}/></Button>
-    </div>
-  </div>;
 }
 
 // ---------------------------------------------------------------------------
@@ -148,7 +109,7 @@ function ConnectNumber({existing, platformAllowed, onDone, onClose}: {
 
   if (result) {
     const ok = result.status === 'verified';
-    return <Wide title={ok ? 'Number connected' : 'Saved, but not verified'} onClose={onClose}>
+    return <Modal width={660} title={ok ? 'Number connected' : 'Saved, but not verified'} onClose={onClose}>
       <div className="stack">
         <div className="row" style={{gap: 12, alignItems: 'flex-start'}}>
           {ok ? <CheckCircle2 size={28} color="var(--success)"/> : <XCircle size={28} color="var(--destructive)"/>}
@@ -158,7 +119,7 @@ function ConnectNumber({existing, platformAllowed, onDone, onClose}: {
           </div>
         </div>
         {result.webhookUrl && <>
-          <CopyLine label={wa ? 'Callback URL — paste into your Meta app (WhatsApp → Configuration)' : 'Call events URL — paste into your Infobip Calls application'} value={result.webhookUrl}/>
+          <CopyField label={wa ? 'Callback URL — paste into your Meta app (WhatsApp → Configuration)' : 'Call events URL — paste into your Infobip Calls application'} value={result.webhookUrl}/>
           {wa && <p className="help">Subscribe the webhook to <b>messages</b> and <b>calls</b>, and use the same verify token you entered here.</p>}
         </>}
         {ok
@@ -169,7 +130,7 @@ function ConnectNumber({existing, platformAllowed, onDone, onClose}: {
           <Button onClick={onClose}>Done</Button>
         </div>
       </div>
-    </Wide>;
+    </Modal>;
   }
 
   if (step === 'kind') {
@@ -178,7 +139,7 @@ function ConnectNumber({existing, platformAllowed, onDone, onClose}: {
         aria-pressed={d.kind === kind} onClick={() => set({kind})}>
         <Icon size={22}/><strong>{title}</strong><span>{body}</span>
       </button>;
-    return <Wide title="Connect a number" onClose={onClose}>
+    return <Modal width={660} title="Connect a number" onClose={onClose}>
       <div className="stack">
         <p className="muted small" style={{margin: 0}}>Where did you get the number?</p>
         <div className="preset-grid">
@@ -190,20 +151,20 @@ function ConnectNumber({existing, platformAllowed, onDone, onClose}: {
           <Button onClick={() => setStep('form')}>Continue</Button>
         </div>
       </div>
-    </Wide>;
+    </Modal>;
   }
 
-  return <Wide title={editing ? 'Edit number' : wa ? 'WhatsApp number' : 'Phone line'} onClose={onClose}>
+  return <Modal width={660} title={editing ? 'Edit number' : wa ? 'WhatsApp number' : 'Phone line'} onClose={onClose}>
     <div className="stack">
       <div className="field-grid">
-        <Input label="Phone number" required value={d.phoneNumber} onChange={v => set({phoneNumber: v})}
+        <TextInput label="Phone number" required value={d.phoneNumber} onChange={v => set({phoneNumber: v})}
           placeholder="+92 300 1112222" help="With the country code, as callers dial it."/>
-        <Input label="Name" value={d.label} onChange={v => set({label: v})} placeholder="Support line"/>
+        <TextInput label="Name" value={d.label} onChange={v => set({label: v})} placeholder="Support line"/>
       </div>
 
       <div className="field">
         <label>What is this number for?</label>
-        <div className="row wrap" style={{gap: 8}}>
+        <div className="row wrap" style={{gap: 8, minHeight: 44, alignItems: 'center'}}>
           {(['inbound', 'outbound', 'both'] as NumberMode[]).map(m =>
             <button key={m} type="button" className={'button small ' + (d.mode === m ? '' : 'outline')}
               onClick={() => set({mode: m})}>
@@ -214,37 +175,39 @@ function ConnectNumber({existing, platformAllowed, onDone, onClose}: {
         <div className="help">Inbound: the agent answers anyone who calls. Outbound: the agent (or an employee from the dialer) calls people from this number.</div>
       </div>
 
-      {platformAllowed && <label className="row small" style={{gap: 8}}>
+      {platformAllowed && <label className="check">
         <input type="checkbox" checked={d.usePlatformCredentials}
           onChange={e => set({usePlatformCredentials: e.target.checked})}/>
-        Use the platform’s own {wa ? 'Meta' : 'Infobip'} credentials (demo account)
+        <span><b>Use the platform’s own {wa ? 'Meta' : 'Infobip'} credentials</b>
+          <div className="help">Allowed for this account by the platform operator. Leave
+            the credential fields below empty and the server's own are used.</div></span>
       </label>}
 
       {!platform && (wa ? <>
         <div className="notice small">In <b>Meta for Developers → your app → WhatsApp → API Setup</b> you will find the first two values. Use a <b>System User</b> token (Business Settings → System users) so it does not expire in 24 hours.</div>
         <div className="field-grid">
-          <Input label="Phone number ID" required={!editing} value={d.metaPhoneNumberId} onChange={v => set({metaPhoneNumberId: v})}
+          <TextInput label="Phone number ID" required={!editing} value={d.metaPhoneNumberId} onChange={v => set({metaPhoneNumberId: v})}
             placeholder="1234567890" help="API Setup → “Phone number ID” (not the phone number itself)."/>
-          <Input label="WhatsApp Business Account ID" required={!editing} value={d.wabaId} onChange={v => set({wabaId: v})}
+          <TextInput label="WhatsApp Business Account ID" required={!editing} value={d.wabaId} onChange={v => set({wabaId: v})}
             placeholder="1029384756" help="API Setup → “WhatsApp Business Account ID”."/>
         </div>
-        <Input label="Access token" required={!editing} secret value={d.accessToken} onChange={v => set({accessToken: v})}
+        <TextInput label="Access token" required={!editing} type="password" value={d.accessToken} onChange={v => set({accessToken: v})}
           placeholder="EAAG…" help={secretHint(existing?.credentials.accessToken) ?? 'Permanent System User token with whatsapp_business_messaging and whatsapp_business_management.'}/>
         <div className="field-grid">
-          <Input label="App secret" required={!editing} secret value={d.appSecret} onChange={v => set({appSecret: v})}
+          <TextInput label="App secret" required={!editing} type="password" value={d.appSecret} onChange={v => set({appSecret: v})}
             help={secretHint(existing?.credentials.appSecret) ?? 'App settings → Basic → App secret. Used to check every webhook really came from Meta.'}/>
-          <Input label="Webhook verify token" secret value={d.verifyToken} onChange={v => set({verifyToken: v})}
+          <TextInput label="Webhook verify token" type="password" value={d.verifyToken} onChange={v => set({verifyToken: v})}
             help={secretHint(existing?.credentials.verifyToken) ?? 'Any phrase you choose. Type the same one into Meta when you add the callback URL.'}/>
         </div>
       </> : <>
         <div className="notice small">In the <b>Infobip portal</b>, your base URL and API keys are on the home page (Developers → API keys). The key needs the <b>Voice / Calls</b> scope.</div>
         <div className="field-grid">
-          <Input label="Base URL" required={!editing} value={d.infobipBaseUrl} onChange={v => set({infobipBaseUrl: v})}
+          <TextInput label="Base URL" required={!editing} value={d.infobipBaseUrl} onChange={v => set({infobipBaseUrl: v})}
             placeholder="xxxxx.api.infobip.com" help="Shown at the top of the Infobip portal home page."/>
-          <Input label="API key" required={!editing} secret value={d.infobipApiKey} onChange={v => set({infobipApiKey: v})}
+          <TextInput label="API key" required={!editing} type="password" value={d.infobipApiKey} onChange={v => set({infobipApiKey: v})}
             help={secretHint(existing?.credentials.infobipApiKey)}/>
         </div>
-        <Input label="Calls configuration ID" value={d.infobipCallsConfigurationId}
+        <TextInput label="Calls configuration ID" value={d.infobipCallsConfigurationId}
           onChange={v => set({infobipCallsConfigurationId: v})}
           help="Optional. Channels → Voice → Calls configurations. Leave empty to use your account default."/>
       </>)}
@@ -257,16 +220,16 @@ function ConnectNumber({existing, platformAllowed, onDone, onClose}: {
         </Button>
       </div>
     </div>
-  </Wide>;
+  </Modal>;
 }
 
 // ---------------------------------------------------------------------------
 // One number
 // ---------------------------------------------------------------------------
 
-function NumberCard({n, agents, canManage, onChange, onEdit}: {
+function NumberCard({n, agents, canManage, onChange, onEdit, onRemove}: {
   n: PhoneNumber; agents: Agent[]; canManage: boolean;
-  onChange: (n: PhoneNumber | null) => void; onEdit: () => void;
+  onChange: (n: PhoneNumber | null) => void; onEdit: () => void; onRemove: () => void;
 }) {
   const {toast} = useApp();
   const [busy, setBusy] = useState('');
@@ -290,12 +253,7 @@ function NumberCard({n, agents, canManage, onChange, onEdit}: {
     } catch (cause) {toast(errorText(cause, 'Could not verify.'))}
     finally {setBusy('')}
   };
-  const remove = async () => {
-    if (!confirm(`Disconnect ${numberName(n)}? Calls to it will no longer be answered.`)) return;
-    setBusy('remove');
-    try {await api.remove(n.id); onChange(null); toast('Number disconnected')}
-    catch (cause) {toast(errorText(cause, 'Could not remove it.')); setBusy('')}
-  };
+
 
   const agentPicker = (slot: 'inbound' | 'outbound') => {
     const value = (slot === 'inbound' ? n.inboundAgentId : n.outboundAgentId) ?? '';
@@ -327,7 +285,8 @@ function NumberCard({n, agents, canManage, onChange, onEdit}: {
             {busy === 'verify' ? <Loader2 size={14} className="spin"/> : <RefreshCw size={14}/>} Verify again
           </Button>
           <Button small variant="outline" disabled={Boolean(busy)} onClick={onEdit}><Pencil size={14}/> Edit</Button>
-          <Button small variant="outline" disabled={Boolean(busy)} onClick={() => void remove()}><Trash2 size={14}/></Button>
+          <Button small variant="outline" disabled={Boolean(busy)} onClick={onRemove}
+            title="Disconnect this number"><Trash2 size={14}/></Button>
         </>}
       </div>
     </div>
@@ -341,15 +300,17 @@ function NumberCard({n, agents, canManage, onChange, onEdit}: {
           {outbound && agentPicker('outbound')}
         </div>}
 
-    {wa && verified && inbound && <label className="row small" style={{gap: 8}}>
+    {wa && verified && inbound && <label className={'check' + (canManage ? '' : ' disabled')}>
       <input type="checkbox" checked={n.autoReply} disabled={!canManage || Boolean(busy)}
         onChange={e => void patch('auto', {autoReply: e.target.checked})}/>
-      The inbound agent also answers WhatsApp text messages
+      <span><b>Answer WhatsApp messages too</b>
+        <div className="help">The inbound agent replies to text messages on this number,
+          not just calls. Needs a knowledge base, or it has nothing to answer from.</div></span>
     </label>}
 
     {n.webhookUrl && <details>
       <summary className="small muted" style={{cursor: 'pointer'}}>Provider setup ({wa ? 'Meta webhook' : 'Infobip events URL'})</summary>
-      <div style={{marginTop: 10}}><CopyLine label={wa ? 'Callback URL' : 'Call events URL'} value={n.webhookUrl}/></div>
+      <div style={{marginTop: 10}}><CopyField label={wa ? 'Callback URL' : 'Call events URL'} value={n.webhookUrl}/></div>
     </details>}
   </div>;
 }
@@ -365,6 +326,7 @@ export function NumbersScreen() {
   const [platformAllowed, setPlatformAllowed] = useState(false);
   const [error, setError] = useState('');
   const [editing, setEditing] = useState<PhoneNumber | 'new' | null>(null);
+  const [confirm, confirmDialog] = useConfirm();
 
   const load = useCallback(() => {
     api.list().then(b => {setList(b.numbers); setPlatformAllowed(b.platformCredentialsAllowed)})
@@ -406,7 +368,15 @@ export function NumbersScreen() {
             action={canManage ? <Button onClick={() => setEditing('new')}>Connect a number</Button> : undefined}/>
         : <div className="stack">{(list ?? []).map(n =>
             <NumberCard key={n.id} n={n} agents={agents} canManage={canManage}
-              onChange={next => replace(n.id, next)} onEdit={() => setEditing(n)}/>)}</div>}
+              onChange={next => replace(n.id, next)} onEdit={() => setEditing(n)}
+              onRemove={() => confirm({
+                title: 'Disconnect this number?',
+                body: <>Calls to <b>{n.phoneNumber}</b> stop being answered and it can no
+                  longer place calls. Its stored credentials are deleted — you would have to
+                  paste them again. Calls already made keep their records.</>,
+                confirmLabel: 'Disconnect number',
+                onConfirm: async () => {await api.remove(n.id); replace(n.id, null)},
+              })}/>)}</div>}
 
     {editing && <ConnectNumber
       existing={editing === 'new' ? undefined : editing}
@@ -416,6 +386,7 @@ export function NumbersScreen() {
         const rest = (old ?? []).filter(x => x.id !== saved.id);
         return editing === 'new' ? [...rest, saved] : (old ?? []).map(x => x.id === saved.id ? saved : x);
       })}/>}
+    {confirmDialog}
   </div>;
 }
 

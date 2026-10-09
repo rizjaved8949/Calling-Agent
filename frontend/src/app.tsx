@@ -51,19 +51,14 @@ const loadPlatform=()=>import('./pages-platform');
 const lazyPlatform=(pick:(m:Awaited<ReturnType<typeof loadPlatform>>)=>React.ComponentType<Record<string,never>>)=>React.lazy(()=>loadPlatform().then(m=>({default:pick(m)})));
 const PlatformCompanies=lazyPlatform(m=>m.PlatformCompanies);
 const PlatformCompanyDetail=lazyPlatform(m=>m.PlatformCompanyDetail);
-const PlatformProvisioning=lazyPlatform(m=>m.PlatformProvisioning);
-const PlatformTechnical=lazyPlatform(m=>m.PlatformTechnical);
-const PlatformPresets=lazyPlatform(m=>m.PlatformPresets);
 const PlatformHealth=lazyPlatform(m=>m.PlatformHealth);
-const PlatformSearch=lazyPlatform(m=>m.PlatformSearch);
-const PlatformAuditPage=lazyPlatform(m=>m.PlatformAuditPage);
 
 import {HomePage,ProductPage,SolutionsPage,PricingPage,AboutPage,ResourcesPage,ContactPage} from './marketing';
 import {TermsPage,PrivacyPage} from './legal';
 import {HistoryNavigationProvider} from './history-navigation';
 
 import {AppCtx,useApp} from './app-context';
-import {ComingSoon,hasBackendKey} from './connect-backend';
+import {hasBackendKey} from './connect-backend';
 import {AgentsScreen,AgentDetailScreen,KnowledgeBasesScreen,KnowledgeBaseDetailScreen,CallSetupsScreen,TeamScreen,InviteAcceptScreen,StaffQueueScreen,StaffLookupScreen,StaffAskScreen} from './pages-workspace';
 import {OperatorCompanies,PlatformLoginScreen} from './pages-operator';
 import {LiveCalls} from './pages-live';
@@ -71,6 +66,11 @@ import {CampaignsScreen,GapsScreen,UsageScreen} from './pages-growth';
 import {LIVE,hydrate} from './lib/api';
 import {NumbersScreen} from './pages-numbers';
 import {DialerScreen} from './pages-dialer';
+import {CallHistoryScreen,CallDetailScreen} from './pages-history';
+import {MessagesScreen} from './pages-messages';
+import {AdminCompanies,AdminCompanyDetail,AdminHealth} from './pages-admin';
+import {DashboardScreen} from './pages-dashboard';
+import {SettingsScreen} from './pages-settings';
 
 function Provider({children}:{children:React.ReactNode}){
   const [store,setStore]=useState<Store>(()=>api.snapshot());
@@ -216,9 +216,8 @@ const STAFF_NAV:NavGroup=[
   ['Help me',[[Search,'Customer lookup','/app/lookup'],[HelpCircle,'Ask the documents','/app/ask'],[BookOpen,'Guides','/app/guides']]],
 ];
 const PLATFORM_NAV:NavGroup=[
-  ['Customers',[[Building2,'Companies','/platform/companies'],[ServerCog,'Setup queue','/platform/provisioning'],[LifeBuoy,'Health','/platform/health']]],
-  ['Controls',[[ShieldCheck,'Technical','/platform/technical'],[Settings,'Presets','/platform/presets'],[BrainCircuit,'Search console','/platform/search']]],
-  ['Record',[[History,'Platform audit','/platform/audit']]],
+  ['Customers',[[Building2,'Companies','/platform/companies']]],
+  ['This server',[[ServerCog,'Health','/platform/health']]],
 ];
 
 function Shell({children,platform=false}:{children:React.ReactNode;platform?:boolean}){
@@ -288,16 +287,6 @@ function PlatformOnly({children}:{children:React.ReactNode}){
   return <Shell platform>{children}</Shell>;
 }
 
-/**
- * A screen whose data the backend does not serve yet.
- *
- * In a fixture build it renders as before, because there the fixtures are the
- * honest answer. Against a real backend it says so instead of dressing sample
- * records up as the company's own.
- */
-function NotYet({title,detail,children}:{title:string;detail?:string;children:React.ReactNode}){
-  return LIVE?<ComingSoon title={title} detail={detail}/>:<>{children}</>;
-}
 
 /**
  * A screen with two implementations: the fixture one the design was built
@@ -331,7 +320,7 @@ function AppRoutes(){
         stranger out (the admin key itself, not this URL being unlisted). */}
     <Route path="/ops-login" element={<PlatformLoginScreen/>}/>
 
-    <Route path="/app/dashboard" element={<Protected manage><Dashboard/></Protected>}/>
+    <Route path="/app/dashboard" element={<Protected manage><WhenLive real={<DashboardScreen/>}><Dashboard/></WhenLive></Protected>}/>
     <Route path="/app/onboarding" element={<Protected manage><Onboarding/></Protected>}/>
     <Route path="/app/agents" element={<Protected manage><WhenLive real={<AgentsScreen/>}><Agents/></WhenLive></Protected>}/>
     <Route path="/app/agents/:id" element={<Protected manage><WhenLive real={<AgentDetailScreen/>}><AgentDetail/></WhenLive></Protected>}/>
@@ -345,27 +334,30 @@ function AppRoutes(){
     <Route path="/app/dialer" element={<Protected><DialerScreen/></Protected>}/>
     <Route path="/app/channels" element={LIVE?<Navigate to="/app/numbers" replace/>:<Protected manage><Channels/></Protected>}/>
     <Route path="/app/channels/:id" element={<Protected manage><ChannelDetail/></Protected>}/>
-    <Route path="/app/messages" element={<Protected manage><Messages/></Protected>}/>
+    <Route path="/app/messages" element={<Protected manage><WhenLive real={<MessagesScreen/>}><Messages/></WhenLive></Protected>}/>
     <Route path="/app/team" element={<Protected manage><WhenLive real={<TeamScreen/>}><Team/></WhenLive></Protected>}/>
     <Route path="/app/usage" element={<Protected manage><WhenLive real={<UsageScreen/>}><Usage/></WhenLive></Protected>}/>
-    <Route path="/app/settings" element={<Protected manage><SettingsPage/></Protected>}/>
+    <Route path="/app/settings" element={<Protected manage><WhenLive real={<SettingsScreen/>}><SettingsPage/></WhenLive></Protected>}/>
     <Route path="/app/live" element={<Protected><WhenLive real={<LiveCalls/>}><Live/></WhenLive></Protected>}/>
-    <Route path="/app/history" element={<Protected><HistoryPage/></Protected>}/>
-    <Route path="/app/history/:id" element={<Protected><CallDetail/></Protected>}/>
+    <Route path="/app/history" element={<Protected><WhenLive real={<CallHistoryScreen/>}><HistoryPage/></WhenLive></Protected>}/>
+    <Route path="/app/history/:id" element={<Protected><WhenLive real={<CallDetailScreen/>}><CallDetail/></WhenLive></Protected>}/>
     <Route path="/app/guides" element={<Protected><Guides/></Protected>}/>
     <Route path="/app/guides/:slug" element={<Protected><GuideDetail/></Protected>}/>
     <Route path="/app/queue" element={<Protected><WhenLive real={<StaffQueueScreen/>}><StaffQueue/></WhenLive></Protected>}/>
     <Route path="/app/lookup" element={<Protected><WhenLive real={<StaffLookupScreen/>}><StaffLookup/></WhenLive></Protected>}/>
     <Route path="/app/ask" element={<Protected><WhenLive real={<StaffAskScreen/>}><StaffAsk/></WhenLive></Protected>}/>
 
-    <Route path="/platform/companies" element={<PlatformOnly><WhenLive real={<OperatorCompanies/>}><PlatformCompanies/></WhenLive></PlatformOnly>}/>
-    <Route path="/platform/companies/:id" element={<PlatformOnly><PlatformCompanyDetail/></PlatformOnly>}/>
-    <Route path="/platform/provisioning" element={<PlatformOnly><NotYet title="Provisioning" detail="Number provisioning is not connected yet."><PlatformProvisioning/></NotYet></PlatformOnly>}/>
-    <Route path="/platform/technical" element={<PlatformOnly><NotYet title="Technical settings" detail="Platform-wide tuning arrives with the voice engine."><PlatformTechnical/></NotYet></PlatformOnly>}/>
-    <Route path="/platform/presets" element={<PlatformOnly><NotYet title="Presets" detail="Shared agent presets arrive with the voice engine."><PlatformPresets/></NotYet></PlatformOnly>}/>
-    <Route path="/platform/health" element={<PlatformOnly><NotYet title="Platform health"><PlatformHealth/></NotYet></PlatformOnly>}/>
-    <Route path="/platform/search" element={<PlatformOnly><NotYet title="Search"><PlatformSearch/></NotYet></PlatformOnly>}/>
-    <Route path="/platform/audit" element={<PlatformOnly><NotYet title="Audit log" detail="The audit trail arrives with sign-in, so every entry can name a person."><PlatformAuditPage/></NotYet></PlatformOnly>}/>
+    <Route path="/platform/companies" element={<PlatformOnly><WhenLive real={<AdminCompanies/>}><PlatformCompanies/></WhenLive></PlatformOnly>}/>
+    <Route path="/platform/companies/:id" element={<PlatformOnly><WhenLive real={<AdminCompanyDetail/>}><PlatformCompanyDetail/></WhenLive></PlatformOnly>}/>
+    <Route path="/platform/health" element={<PlatformOnly><WhenLive real={<AdminHealth/>}><PlatformHealth/></WhenLive></PlatformOnly>}/>
+    {/* The portal used to list screens for features that do not exist —
+        provisioning, shared presets, a search console, an audit trail. They
+        redirect rather than 404 so an old bookmark still lands somewhere. */}
+    <Route path="/platform/provisioning" element={<Navigate to="/platform/companies" replace/>}/>
+    <Route path="/platform/technical" element={<Navigate to="/platform/health" replace/>}/>
+    <Route path="/platform/presets" element={<Navigate to="/platform/health" replace/>}/>
+    <Route path="/platform/search" element={<Navigate to="/platform/companies" replace/>}/>
+    <Route path="/platform/audit" element={<Navigate to="/platform/companies" replace/>}/>
 
     {/* Routes from the single-workspace layout, kept so old links still work. */}
     <Route path="/dashboard" element={<Navigate to="/app/dashboard" replace/>}/>

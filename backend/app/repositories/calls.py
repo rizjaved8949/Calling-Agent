@@ -358,6 +358,19 @@ async def list_messages(
     return [m for m in (_message_from_row(row) for row in rows) if m is not None]
 
 
+async def get_message(tenant_id: str, message_id: str) -> Message | None:
+    row = await supabase.select_one(
+        MESSAGES_TABLE, params={"id": f"eq.{message_id}", "tenant_id": f"eq.{tenant_id}"}
+    )
+    return _message_from_row(row) if row else None
+
+
+async def delete_message(tenant_id: str, message_id: str) -> None:
+    await supabase.delete(
+        MESSAGES_TABLE, params={"id": f"eq.{message_id}", "tenant_id": f"eq.{tenant_id}"}
+    )
+
+
 async def find_message_by_provider_id(
     tenant_id: str, provider_message_id: str
 ) -> Message | None:

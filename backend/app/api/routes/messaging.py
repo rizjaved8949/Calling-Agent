@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Response, status
 
 from ...errors import AppError, NotFound
 from ...models.call import SendTemplateRequest, SendTextRequest
@@ -50,6 +50,34 @@ async def list_messages(
         tenant.phone_number_id, counterparty=counterparty, limit=limit
     )
     return {"messages": [m.public() for m in messages]}
+
+
+@router.delete("/{message_id}", status_code=status.HTTP_204_NO_CONTENT,
+               response_class=Response, response_model=None)
+async def delete_message(tenant: CurrentTenant, message_id: str) -> None:
+    """Remove a message from this company's log.
+
+    Only our own record: WhatsApp has no API for unsending, and pretending
+    otherwise would be the worst kind of button. The UI says so.
+    """
+    message = await call_repo.get_message(tenant.phone_number_id, message_id)
+    if message is None:
+        raise NotFound("Message")
+    await call_repo.delete_message(tenant.phone_number_id, message_id)
+    log.info("tenant %s deleted message %s from its log", tenant.phone_number_id, message_id)
+
+
+@router.post("/{message_id}/read")
+async def mark_read(tenant: CurrentTenant, message_id: str) -> dict:
+    """Show the sender a read receipt, the way opening a chat does."""
+    message = await call_repo.get_message(tenant.phone_number_id, message_id)
+    if message is None:
+        raise NotFound("Message")
+    if not message.provider_message_id:
+        return {"status": "skipped"}
+    speaking = await _speaking_as(tenant, message.line_id)
+    await WhatsApp(speaking).mark_read(message.provider_message_id)
+    return {"status": "read"}
 
 
 @router.post("/text", status_code=status.HTTP_201_CREATED, dependencies=[Depends(check_expensive)])

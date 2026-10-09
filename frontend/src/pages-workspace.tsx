@@ -23,6 +23,13 @@ import {setAuthToken} from './lib/api';
 import {auth as firebaseAuth} from './lib/firebase';
 import {createUserWithEmailAndPassword} from 'firebase/auth';
 import {LiveCalls} from './pages-live';
+import {ErrorNote, Loading, Section, Select, TextInput, useConfirm} from './ui';
+
+/** The fields the agent form edits as a draft, saved together on Save. */
+const FORM_FIELDS = [
+  'name', 'greeting', 'roleDescription', 'language', 'ttsVoice', 'toneNotes',
+  'escalationRules',
+] as const satisfies readonly (keyof Agent)[];
 
 const CHANNEL_LABEL: Record<Channel, string> = {
   PHONE: 'Phone line', WHATSAPP_CALL: 'WhatsApp calling', WHATSAPP_MESSAGE: 'WhatsApp messaging',
@@ -107,94 +114,180 @@ export function AgentsScreen() {
   </div>;
 }
 
+/**
+ * One agent, edited as a form.
+ *
+ * It used to save on a timer while you typed, which meant a PATCH and a
+ * "Saved." toast every few hundred milliseconds in the middle of a sentence,
+ * and a half-written greeting stored if you walked away. Now the page holds a
+ * draft, says when it differs from what is stored, and saves when asked.
+ * Status and mode are the exception: those are single clicks with no partial
+ * state, so they save immediately.
+ */
 export function AgentDetailScreen() {
   const {id} = useParams();
   const {t, toast, canManage} = useApp();
   const navigate = useNavigate();
   const [agent, setAgent] = useState<Agent | null>(null);
+  const [draft, setDraft] = useState<Agent | null>(null);
   const [bases, setBases] = useState<KnowledgeBase[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [confirm, confirmDialog] = useConfirm();
 
-  useEffect(() => {
+  const load = useCallback(() => {
     if (!id) return;
-    workspace.agent(id).then(setAgent).catch(c => setError(errorText(c, 'Could not load this agent.')));
+    workspace.agent(id)
+      .then(row => {setAgent(row); setDraft(row)})
+      .catch(c => setError(errorText(c, 'Could not load this agent.')));
     workspace.knowledgeBases().then(b => setBases(b.knowledgeBases)).catch(() => {});
   }, [id]);
+  useEffect(() => {load()}, [load]);
 
-  const save = async (patch: Partial<Agent>) => {
-    if (!id) return;
+  // Leaving with unsaved words is the one thing worth interrupting for.
+  const dirty = Boolean(agent && draft && FORM_FIELDS.some(k => agent[k] !== draft[k]));
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (e: BeforeUnloadEvent) => {e.preventDefault(); e.returnValue = ''};
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [dirty]);
+
+  const set = (patch: Partial<Agent>) => setDraft(old => old && {...old, ...patch});
+
+  const save = async (patch?: Partial<Agent>) => {
+    if (!id || !draft) return;
     setSaving(true); setError('');
     try {
-      const updated = await workspace.updateAgent(id, patch);
+      const body = patch ?? Object.fromEntries(FORM_FIELDS.map(k => [k, draft[k]]));
+      const updated = await workspace.updateAgent(id, body as Partial<Agent>);
       setAgent(updated);
+      // A one-field save (status, mode, knowledge base) must not throw away
+      // words still being typed, so only the keys it sent are taken back.
+      setDraft(old => !old ? updated
+        : patch ? {...old, ...Object.fromEntries(Object.keys(patch).map(k => [k, (updated as never)[k]]))}
+        : updated);
       toast(t('Saved.'));
-    } catch (cause) { setError(errorText(cause, 'That could not be saved.')) }
-    finally { setSaving(false) }
+    } catch (cause) {
+      setError(errorText(cause, 'That could not be saved.'));
+    } finally {setSaving(false)}
   };
 
-  const remove = async () => {
-    if (!id || !confirm(t('Delete this agent? Numbers still pointed at it will need a new one.'))) return;
-    try {
+  /** Status and mode: one click, saved at once, and reverted if it is refused. */
+  const setNow = async (patch: Partial<Agent>) => {
+    set(patch);
+    await save(patch);
+  };
+
+  const remove = () => confirm({
+    title: 'Delete this agent?',
+    body: <>Any number this agent answers on stops answering until you choose
+      another one. Calls it has already handled keep their records.</>,
+    confirmLabel: 'Delete agent',
+    onConfirm: async () => {
+      if (!id) return;
       await workspace.deleteAgent(id);
       toast(t('Agent deleted'));
       navigate('/app/agents');
-    } catch (cause) { setError(errorText(cause, 'Could not delete this agent.')) }
-  };
+    },
+  });
 
-  if (!agent) return <div className="stack">
+  if (!agent || !draft) return <div className="stack">
     <PageHead eyebrow="Build" title="Agent"/>
-    {error ? <div className="notice danger">{error}</div> : <div className="small muted">{t('Loading…')}</div>}
+    {error ? <ErrorNote error={error} onRetry={load}/> : <Loading/>}
   </div>;
 
   return <div className="stack">
     <PageHead eyebrow="Build" title={agent.name}
-      description="How this agent introduces itself, what it knows, and when it escalates."
-      action={<div className="row">
-        <select className="select" value={agent.mode ?? 'both'} disabled={!canManage}
-          aria-label={t('What this agent does')}
-          onChange={e => void save({mode: e.target.value as Agent['mode']})}>
-          <option value="inbound">{t('Answers calls (inbound)')}</option>
-          <option value="outbound">{t('Makes calls (outbound)')}</option>
-          <option value="both">{t('Inbound and outbound')}</option>
-        </select>
-        <select className="select" value={agent.status} disabled={!canManage}
-          onChange={e => void save({status: e.target.value as Agent['status']})}>
-          <option value="draft">{t('Draft')}</option>
-          <option value="live">{t('Live')}</option>
-          <option value="paused">{t('Paused')}</option>
-        </select>
-        {canManage && <Button variant="outline" onClick={remove}><Trash2 size={14}/> {t('Delete')}</Button>}
-      </div>}/>
-    {error && <div className="notice danger">{error}</div>}
-    <div className="card stack">
-      <Field label="Name" value={agent.name} disabled={!canManage}
-        onChange={v => void save({name: v})}/>
-      <Field label="Opening line" value={agent.greeting} disabled={!canManage}
-        onChange={v => void save({greeting: v})} placeholder="Thank you for calling. How can I help?"/>
-      <Field label="Who this agent is" rows={5} value={agent.roleDescription} disabled={!canManage}
-        onChange={v => void save({roleDescription: v})}
-        placeholder="You are Sara, the support assistant for this business…"
-        help="Written in plain language. Falls back to the company's own persona if left empty."/>
-      <Field label="Language" value={agent.language} disabled={!canManage}
-        onChange={v => void save({language: v})} placeholder="ur-PK"/>
-      <Field label="Voice" value={agent.ttsVoice} disabled={!canManage}
-        onChange={v => void save({ttsVoice: v})} placeholder="leave empty for the company default"/>
-      <Field label="Tone notes" value={agent.toneNotes} disabled={!canManage}
-        onChange={v => void save({toneNotes: v})}/>
-      <Field label="When to hand off to a person" rows={3} value={agent.escalationRules} disabled={!canManage}
-        onChange={v => void save({escalationRules: v})}/>
-      <div className="field">
-        <label>{t('Knowledge base')}</label>
-        <select className="select" value={agent.knowledgeBaseId} disabled={!canManage}
-          onChange={e => void save({knowledgeBaseId: e.target.value})}>
-          <option value="">{t('Everything the company has uploaded')}</option>
+      description="What this agent says, what it knows, and when it hands over to a person."
+      action={canManage ? <Button variant="outline" onClick={remove}>
+        <Trash2 size={14}/> {t('Delete')}
+      </Button> : undefined}/>
+
+    {error && <ErrorNote error={error}/>}
+
+    <div className="card">
+      <Section title="Where this agent is used"
+        help="A number's inbound slot takes an inbound or both agent; its outbound slot takes an outbound or both.">
+        <div className="field-grid">
+          <Select label="What it does" value={draft.mode ?? 'both'} disabled={!canManage || saving}
+            onChange={v => void setNow({mode: v as Agent['mode']})}
+            help="Change this and the Numbers page offers it in that slot.">
+            <option value="inbound">Answers calls that come in</option>
+            <option value="outbound">Makes calls out</option>
+            <option value="both">Both</option>
+          </Select>
+          <Select label="Status" value={draft.status} disabled={!canManage || saving}
+            onChange={v => void setNow({status: v as Agent['status']})}
+            help="Paused or draft agents can still be assigned, but you will see the status on the number.">
+            <option value="draft">Draft — still being written</option>
+            <option value="live">Live — ready to take calls</option>
+            <option value="paused">Paused</option>
+          </Select>
+        </div>
+        <div className="row wrap">
+          <Link className="button outline small" to="/app/numbers">
+            <RouteIcon size={14}/> Put this agent on a number
+          </Link>
+        </div>
+      </Section>
+
+      <Section title="What it says">
+        <TextInput label="Name" value={draft.name} disabled={!canManage}
+          onChange={v => set({name: v})} help="Only you see this. Callers never hear it."/>
+        <TextInput label="Opening line" value={draft.greeting} disabled={!canManage}
+          onChange={v => set({greeting: v})}
+          placeholder="Thank you for calling Acme. How can I help?"
+          help="The first thing a caller hears. Leave empty to use the company's own greeting."/>
+        <TextInput label="Who this agent is" rows={5} value={draft.roleDescription} disabled={!canManage}
+          onChange={v => set({roleDescription: v})}
+          placeholder="You are Sara, the support assistant for Acme. You are warm, brief and practical…"
+          help="Written in plain language, as if briefing a new colleague."/>
+        <div className="field-grid">
+          <TextInput label="Language" value={draft.language} disabled={!canManage}
+            onChange={v => set({language: v})} placeholder="Urdu, English…"
+            help="It still follows a caller who speaks another language."/>
+          <TextInput label="Voice" value={draft.ttsVoice} disabled={!canManage}
+            onChange={v => set({ttsVoice: v})} placeholder="leave empty for the default"/>
+        </div>
+        <TextInput label="Tone notes" value={draft.toneNotes} disabled={!canManage}
+          onChange={v => set({toneNotes: v})}
+          placeholder="Never promise a refund. Always confirm the spelling of a name."/>
+        <TextInput label="When to hand off to a person" rows={3} value={draft.escalationRules}
+          disabled={!canManage} onChange={v => set({escalationRules: v})}
+          placeholder="If the caller asks for a manager, or sounds upset, offer a callback."/>
+      </Section>
+
+      <Section title="What it knows"
+        help="Answers come only from the material you upload. Without any, it offers to take a message rather than invent an answer.">
+        <Select label="Knowledge base" value={draft.knowledgeBaseId} disabled={!canManage}
+          onChange={v => void setNow({knowledgeBaseId: v})}>
+          <option value="">Everything the company has uploaded</option>
           {bases.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-        </select>
-        <div className="help">{t('What this agent answers from. Upload documents to it on the Knowledge page.')} <Link to="/app/knowledge">{t('Manage knowledge')}</Link></div>
-      </div>
+        </Select>
+        <div className="row wrap">
+          <Link className="button outline small" to="/app/knowledge">
+            <BrainCircuit size={14}/> Manage documents
+          </Link>
+        </div>
+      </Section>
     </div>
-    {saving && <Badge>{t('Saving…')}</Badge>}
+
+    {/* The save bar stays put, so a long form never hides it. */}
+    {canManage && <div className="save-bar">
+      <span className="small muted">
+        {saving ? 'Saving…' : dirty ? 'Unsaved changes' : 'Everything is saved'}
+      </span>
+      <div className="row">
+        <Button variant="outline" disabled={!dirty || saving} onClick={() => setDraft(agent)}>
+          Discard changes
+        </Button>
+        <Button disabled={!dirty || saving} onClick={() => void save()}>
+          {saving ? <><Loader2 size={15} className="spin"/> Saving…</> : 'Save changes'}
+        </Button>
+      </div>
+    </div>}
+    {confirmDialog}
   </div>;
 }
 
@@ -281,6 +374,7 @@ export function KnowledgeBaseDetailScreen() {
   const [docs, setDocs] = useState<KbDocument[]>([]);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
+  const [confirm, confirmDialog] = useConfirm();
   const picker = useRef<HTMLInputElement>(null);
 
   const load = useCallback(() => {
@@ -301,17 +395,27 @@ export function KnowledgeBaseDetailScreen() {
     finally { setBusy(''); if (picker.current) picker.current.value = '' }
   };
 
-  const remove = async (doc: KbDocument) => {
-    setBusy(doc.id);
-    try { await workspace.deleteDocument(doc.id); toast(`${doc.name} removed.`); load() }
-    finally { setBusy('') }
-  };
+  const removeBase = () => confirm({
+    title: 'Delete this knowledge base?',
+    body: <>Its documents are kept but become unfiled, so every agent can read
+      them. Any agent pointed at this base falls back to everything you have
+      uploaded. A number currently answering from it is refused — move it first.</>,
+    confirmLabel: 'Delete knowledge base',
+    onConfirm: async () => {
+      if (!kbId) return;
+      await workspace.deleteKnowledgeBase(kbId);
+      toast(t('Knowledge base deleted'));
+      navigate('/app/knowledge');
+    },
+  });
 
-  const removeBase = async () => {
-    if (!kbId || !confirm(t('Delete this knowledge base? Its documents stay, unfiled.'))) return;
-    try { await workspace.deleteKnowledgeBase(kbId); toast(t('Knowledge base deleted')); navigate('/app/knowledge') }
-    catch (cause) { setError(errorText(cause, 'Could not delete this knowledge base.')) }
-  };
+  const removeDocument = (doc: KbDocument) => confirm({
+    title: 'Remove this document?',
+    body: <>Your agent stops answering from <b>{doc.name}</b> on the next call.
+      Nothing it already said changes.</>,
+    confirmLabel: 'Remove document',
+    onConfirm: async () => {await workspace.deleteDocument(doc.id); toast(`${doc.name} removed.`); load()},
+  });
 
   if (!kb) return <div className="stack">
     <PageHead eyebrow="Build" title="Knowledge base"/>
@@ -349,10 +453,11 @@ export function KnowledgeBaseDetailScreen() {
         ? <Empty icon={FileText} title="No documents yet" body="Without one, agents pointed at this base answer from nothing."/>
         : <div className="stack">{docs.map(doc => <div className="setup-row" key={doc.id}>
             <div className="setup-row-main"><strong>{doc.name}</strong><span className="small muted">{docSize(doc.chars)}</span></div>
-            {canManage && <Button small variant="outline" disabled={busy === doc.id} onClick={() => void remove(doc)}>
+            {canManage && <Button small variant="outline" disabled={busy === doc.id} onClick={() => removeDocument(doc)}>
               <Trash2 size={14}/> {t('Remove')}</Button>}
           </div>)}</div>}
     </div>
+    {confirmDialog}
   </div>;
 }
 
@@ -372,6 +477,7 @@ export function CallSetupsScreen() {
     agentId: '', knowledgeBaseId: '',
   });
   const [busy, setBusy] = useState(false);
+  const [confirm, confirmDialog] = useConfirm();
 
   const load = useCallback(() => {
     workspace.callSetups().then(b => setSetups(b.callSetups)).catch(c => setError(errorText(c, 'Could not load call setups.')));
@@ -424,10 +530,13 @@ export function CallSetupsScreen() {
     finally { setBusy(false) }
   };
 
-  const remove = async (setup: CallSetup) => {
-    if (!confirm(t('Delete this call setup?'))) return;
-    await workspace.deleteCallSetup(setup.id); load();
-  };
+  const remove = (setup: CallSetup) => confirm({
+    title: 'Delete this call setup?',
+    body: <>Calls on this line fall back to whatever the number itself says, or
+      to the company's own settings if it says nothing.</>,
+    confirmLabel: 'Delete setup',
+    onConfirm: async () => {await workspace.deleteCallSetup(setup.id); load()},
+  });
 
   const agentName = (id: string) => agents.find(a => a.id === id)?.name || t('Unknown agent');
   const baseName = (id: string) => id ? (bases.find(b => b.id === id)?.name || t('Unknown')) : t("the agent's own base");
@@ -497,6 +606,7 @@ export function CallSetupsScreen() {
         <Button disabled={busy} onClick={create}>{busy ? <Loader2 size={15} className="spin"/> : t('Create')}</Button>
       </div>
     </Modal>}
+    {confirmDialog}
   </div>;
 }
 
@@ -514,6 +624,7 @@ export function TeamScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [linkFor, setLinkFor] = useState<string>('');
+  const [confirm, confirmDialog] = useConfirm();
 
   const load = useCallback(() => {
     workspace.team().then(b => { setMembers(b.members); setInvites(b.invites) })
@@ -533,12 +644,21 @@ export function TeamScreen() {
     finally { setBusy(false) }
   };
 
-  const revoke = async (token: string) => { await workspace.revokeInvite(token); load() };
-  const remove = async (m: TeamMember) => {
-    if (!confirm(t(`Remove ${m.name} from the team?`))) return;
-    try { await workspace.removeMember(m.userId); toast(t('Removed.')); load() }
-    catch (cause) { setError(errorText(cause, 'Could not remove them.')) }
-  };
+  const remove = (m: TeamMember) => confirm({
+    title: 'Remove them from the team?',
+    body: <><b>{m.name}</b> can no longer sign in to this workspace. Their own
+      calls stay in the history. This does not change the company's API key —
+      do that from Settings if you need access cut off immediately.</>,
+    confirmLabel: 'Remove them',
+    onConfirm: async () => {await workspace.removeMember(m.userId); toast(t('Removed.')); load()},
+  });
+
+  const revokeInvite = (token: string, email: string) => confirm({
+    title: 'Cancel this invitation?',
+    body: <>The link sent to <b>{email}</b> stops working. You can invite them again later.</>,
+    confirmLabel: 'Cancel invitation',
+    onConfirm: async () => {await workspace.revokeInvite(token); load()},
+  });
 
   return <div className="stack">
     <PageHead eyebrow="Manage" title="Team"
@@ -563,7 +683,7 @@ export function TeamScreen() {
       <strong>{t('Pending invitations')}</strong>
       {invites.map(i => <div className="setup-row" key={i.token}>
         <div className="setup-row-main"><strong>{i.email}</strong><span className="small muted">{t(i.role)}</span></div>
-        {isOwner && <Button small variant="outline" onClick={() => void revoke(i.token)}><X size={14}/> {t('Revoke')}</Button>}
+        {isOwner && <Button small variant="outline" onClick={() => revokeInvite(i.token, i.email)}><X size={14}/> {t('Revoke')}</Button>}
       </div>)}
     </div>}
     {inviting && <Modal title={t('Invite someone')} onClose={() => setInviting(false)}>
@@ -584,6 +704,7 @@ export function TeamScreen() {
         <Button small onClick={() => { navigator.clipboard?.writeText(linkFor); toast(t('Copied')) }}><Copy size={14}/></Button>
       </div>
     </Modal>}
+    {confirmDialog}
   </div>;
 }
 
@@ -619,7 +740,7 @@ export function InviteAcceptScreen() {
         email: session.email, name: session.companyName, userId: session.phoneNumberId,
         orgId: session.phoneNumberId, portal: 'company', role: session.role,
       }));
-      window.location.href = '/app/queue';
+      window.location.href = '/app/dialer';
     } catch (cause) {
       setError(friendlyAuthError(cause));
     } finally { setBusy(false) }

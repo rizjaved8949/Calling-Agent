@@ -75,7 +75,7 @@ async def resolve(
     if agent is None and line_id:
         from ..repositories import numbers as number_repo
 
-        number = await number_repo.get(tenant_id, line_id)
+        number = await number_repo.get_safe(tenant_id, line_id)
         if number is not None:
             assigned = (
                 number.inbound_agent_id if direction is Direction.INBOUND
