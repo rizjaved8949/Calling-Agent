@@ -5,10 +5,11 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, Depends, Query, status
 
 from ...models.call import SendTemplateRequest, SendTextRequest
 from ...repositories import calls as call_repo
+from ...security.rate_limit import check_expensive
 from ...services.whatsapp import WhatsApp, mask
 from ..deps import CurrentTenant
 
@@ -29,7 +30,7 @@ async def list_messages(
     return {"messages": [m.public() for m in messages]}
 
 
-@router.post("/text", status_code=status.HTTP_201_CREATED)
+@router.post("/text", status_code=status.HTTP_201_CREATED, dependencies=[Depends(check_expensive)])
 async def send_text(tenant: CurrentTenant, payload: SendTextRequest) -> dict:
     """Send a free-text message.
 
@@ -44,7 +45,9 @@ async def send_text(tenant: CurrentTenant, payload: SendTextRequest) -> dict:
     return message.public()
 
 
-@router.post("/template", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/template", status_code=status.HTTP_201_CREATED, dependencies=[Depends(check_expensive)]
+)
 async def send_template(tenant: CurrentTenant, payload: SendTemplateRequest) -> dict:
     """Send an approved template — the only way to open a conversation."""
     message = await WhatsApp(tenant).send_template(

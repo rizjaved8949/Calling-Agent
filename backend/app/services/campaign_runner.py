@@ -53,6 +53,39 @@ def start(tenant: Tenant, campaign: Campaign) -> None:
     _runners[campaign.id] = asyncio.create_task(_run(tenant, campaign.id))
 
 
+async def resume_all() -> None:
+    """Put every campaign marked RUNNING back to work after a restart.
+
+    The loop lives in this process, so a deploy or a free-tier spin-down stops
+    it — the campaign's row still says RUNNING, but nothing is calling anyone.
+    Without this, that looks fixed (the contact goes back to WAITING on the
+    next pause, per `_run`'s own docstring) but silently is not: nobody acts
+    on WAITING until somebody happens to open the campaign and press start
+    again. Called once at boot, across every tenant, so a restart is a blip
+    rather than a campaign that quietly stopped.
+    """
+    from ..repositories import tenants as tenant_repo
+
+    try:
+        tenants = await tenant_repo.list_all()
+    except Exception:  # noqa: BLE001 — boot must not fail because this listing did
+        log.exception("could not list tenants to resume campaigns")
+        return
+
+    resumed = 0
+    for tenant in tenants:
+        try:
+            for campaign in await campaign_repo.running(tenant.phone_number_id):
+                start(tenant, campaign)
+                resumed += 1
+        except Exception:  # noqa: BLE001 — one tenant's bad row must not stop the rest
+            log.exception(
+                "could not resume campaigns for tenant %s", tenant.phone_number_id
+            )
+    if resumed:
+        log.info("resumed %d campaign(s) after restart", resumed)
+
+
 async def stop(campaign_id: str) -> None:
     task = _runners.pop(campaign_id, None)
     if task is not None:

@@ -61,7 +61,22 @@ async def lifespan(_app: FastAPI):
         )
     if not settings.google_oauth_configured:
         log.info("Google OAuth is not configured; companies cannot connect Drive.")
+    if settings.is_production and any(
+        "localhost" in origin or "127.0.0.1" in origin for origin in settings.cors_origins
+    ):
+        log.warning(
+            "FRONTEND_URL still points at a local dev address in production "
+            "(%s) — the real frontend's origin will be rejected by CORS until "
+            "this is set to its actual URL.",
+            settings.frontend_url,
+        )
     log.info("calling-agent api ready (%s)", settings.app_env)
+
+    # A campaign left RUNNING when this process last stopped is not being
+    # worked by anyone until this restarts it — see campaign_runner.resume_all.
+    from .services import campaign_runner
+
+    await campaign_runner.resume_all()
 
     try:
         yield

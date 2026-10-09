@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import time
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Depends, status
 
 from ...errors import AppError, Conflict, NotFound
 from ...models.call import Channel
@@ -24,6 +24,7 @@ from ...models.campaign import (
     ContactState,
 )
 from ...repositories import campaigns as campaign_repo
+from ...security.rate_limit import check_expensive
 from ...services import campaign_runner
 from ...services.agent import whatsapp_media
 from ...services.telephony import Infobip
@@ -130,7 +131,7 @@ async def update_campaign(
     return campaign.public()
 
 
-@router.post("/{campaign_id}/start")
+@router.post("/{campaign_id}/start", dependencies=[Depends(check_expensive)])
 async def start_campaign(tenant: CurrentTenant, campaign_id: str) -> dict:
     """Begin calling. Everything that could stop it is checked first."""
     campaign = await campaign_repo.get(tenant.phone_number_id, campaign_id)

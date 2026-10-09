@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import time
 
-from fastapi import APIRouter, Query, Response, status
+from fastapi import APIRouter, Depends, Query, Response, status
 
 from ...errors import AppError, NotFound
 from ...models.call import (
@@ -24,6 +24,7 @@ from ...models.call import (
 )
 from ...repositories import calls as call_repo
 from ...security import playback
+from ...security.rate_limit import check_expensive
 from ...services.agent import live
 from ...services import recordings as recording_service
 from ...services import reports
@@ -119,7 +120,7 @@ async def get_call(tenant: CurrentTenant, call_id: str) -> dict:
     return call.public()
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
+@router.post("", status_code=status.HTTP_201_CREATED, dependencies=[Depends(check_expensive)])
 async def start_call(tenant: CurrentTenant, payload: OutboundCallRequest) -> dict:
     """Place an outbound call and record the attempt.
 
@@ -185,7 +186,7 @@ async def start_call(tenant: CurrentTenant, payload: OutboundCallRequest) -> dic
     return call.public()
 
 
-@router.post("/permission")
+@router.post("/permission", dependencies=[Depends(check_expensive)])
 async def ask_call_permission(tenant: CurrentTenant, payload: CallPermissionRequest) -> dict:
     """Ask someone for permission to call them on WhatsApp.
 

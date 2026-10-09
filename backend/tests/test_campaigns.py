@@ -326,12 +326,12 @@ def runner(monkeypatch, fake_db):
     return campaign_runner, carrier
 
 
-async def _campaign(numbers="03001112222"):
+async def _campaign(numbers="03001112222", tenant_id="800"):
     from app.models.campaign import Campaign, CampaignStatus, Contact
     from app.repositories import campaigns as repo
 
     campaign = Campaign(
-        tenantId="800", name="t", status=CampaignStatus.RUNNING, gapSeconds=5,
+        tenantId=tenant_id, name="t", status=CampaignStatus.RUNNING, gapSeconds=5,
         contacts=[Contact(number=n) for n in numbers.split(",")],
     )
     await repo.save(campaign)
@@ -423,3 +423,43 @@ async def test_nobody_is_called_after_a_pause(runner):
     await asyncio.wait_for(task, timeout=5)
 
     assert len(carrier.placed) == 1, f"{len(carrier.placed)} people were called"
+
+
+async def test_resume_all_restarts_a_campaign_left_running(runner):
+    """What a restart used to lose: a RUNNING campaign nobody is working.
+
+    `resume_all` is what the app calls once at boot so a deploy or a
+    free-tier spin-down is a blip rather than a campaign that silently stops
+    until somebody happens to open it and press start again.
+    """
+    import asyncio
+
+    from app.repositories import tenants as tenant_repo
+
+    module, carrier = runner
+    tenant = _another_tenant()
+    await tenant_repo.save(tenant)
+    campaign = await _campaign("+923001112222", tenant_id=tenant.phone_number_id)
+
+    assert not module.is_running(campaign.id)
+    await module.resume_all()
+    try:
+        assert module.is_running(campaign.id), "resume_all did not restart it"
+        # Polled rather than a single sleep: the fixture's own clamping of
+        # `asyncio.sleep` (so the suite does not wait out a real four-minute
+        # call) applies process-wide, so a fixed wait here is racing the same
+        # clamp rather than a clean multiple of it.
+        for _ in range(50):
+            if carrier.placed:
+                break
+            await asyncio.sleep(0.02)
+        assert carrier.placed, "the resumed campaign never called anyone"
+    finally:
+        await module.stop(campaign.id)
+
+
+def _another_tenant():
+    from app.models.tenant import Tenant
+
+    return Tenant(phoneNumberId="801", defaultCountryCode="92",
+                  infobipApiKey="k", infobipBaseUrl="https://x", infobipPhoneNumber="+9251")

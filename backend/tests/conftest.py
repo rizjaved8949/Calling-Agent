@@ -89,6 +89,26 @@ class FakeSupabase:
         return None
 
 
+@pytest.fixture(autouse=True)
+def _reset_rate_limits():
+    """A fresh rate-limit window per test.
+
+    The limiter is in-memory and keyed by API key (see
+    `app/security/rate_limit.py`), so without this a test that happens to run
+    late in a fast suite could inherit hits from a different test's tenant —
+    harmless in practice since keys are per-tenant, but the one shared key is
+    `ADMIN_API_KEY`, which every test shares. Reset keeps the suite's result
+    independent of run order rather than merely usually independent of it.
+    """
+    from app.security import rate_limit
+
+    rate_limit._blanket._hits.clear()
+    rate_limit._expensive._hits.clear()
+    yield
+    rate_limit._blanket._hits.clear()
+    rate_limit._expensive._hits.clear()
+
+
 @pytest.fixture
 def fake_db(monkeypatch) -> FakeSupabase:
     import importlib

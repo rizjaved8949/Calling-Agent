@@ -59,6 +59,7 @@ const PlatformSearch=lazyPlatform(m=>m.PlatformSearch);
 const PlatformAuditPage=lazyPlatform(m=>m.PlatformAuditPage);
 
 import {HomePage,ProductPage,SolutionsPage,PricingPage,AboutPage,ResourcesPage,ContactPage} from './marketing';
+import {TermsPage,PrivacyPage} from './legal';
 import {HistoryNavigationProvider} from './history-navigation';
 
 import {AppCtx,useApp} from './app-context';
@@ -314,6 +315,10 @@ function AppRoutes(){
     <Route path="/about" element={<AboutPage/>}/>
     <Route path="/resources" element={<ResourcesPage/>}/>
     <Route path="/contact" element={<ContactPage/>}/>
+    {/* Reachable without an account, because somebody deciding whether to
+        sign up is exactly who needs to read them. */}
+    <Route path="/terms" element={<TermsPage/>}/>
+    <Route path="/privacy" element={<PrivacyPage/>}/>
     <Route path="/login" element={<AuthScreen mode="login"/>}/>
     <Route path="/signup" element={<AuthScreen mode="signup"/>}/>
     <Route path="/forgot-password" element={<AuthScreen mode="forgot"/>}/>
