@@ -5,7 +5,7 @@ import {Area,AreaChart,CartesianGrid,ResponsiveContainer,Tooltip,XAxis,YAxis} fr
 import {Badge,Button,Empty,Field,PageHead,PresetPicker,Tabs} from './app';
 import {useApp} from './app-context';
 import {formatDate,formatDuration} from './lib/format';
-import {api} from './lib/api';
+import {api,LIVE} from './lib/api';
 import {ConnectionSetup} from './connection-setup';
 import {presetKindHelp,presetKindLabel,presetsOfKind} from './lib/presets';
 import type {ChannelType,Persona,PresetKind} from './lib/types';
@@ -524,9 +524,15 @@ export function SettingsPage(){
   const [confirmName,setConfirmName]=useState('');
   const save=(patch:Record<string,unknown>)=>run(()=>api.updateOrganization(org.id,patch),'Saved');
   const members=store.memberships.filter(m=>m.orgId===org.id).length;
+  const tabs=['Company','How calls are handled','Recording','Danger zone'];
+  // The company's own persona — what a number answers from when nothing
+  // more specific (an agent, a call setup) has been built for it yet. See
+  // services/routing.py's "company" fallback.
+  if(LIVE) tabs.splice(1,0,'Default agent');
   return <div className="stack">
     <PageHead eyebrow="Settings" title="Settings" description="Your company details and how your calls are handled."/>
-    <Tabs items={['Company','How calls are handled','Recording','Danger zone']} active={tab} onChange={setTab}/>
+    <Tabs items={tabs} active={tab} onChange={setTab}/>
+    {tab==='Default agent'&&<DefaultAgentTab/>}
 
     {tab==='Company'&&<div className="card stack">
       <Field label="Company name" value={org.name} onChange={v=>save({name:v})} disabled={!canManage}/>
@@ -610,5 +616,37 @@ export function SettingsPage(){
       <Field label={'Type '+org.name+' to confirm'} value={confirmName} onChange={setConfirmName} disabled={!canManage}/>
       <div className="row"><Button variant="danger" disabled={!canManage||confirmName!==org.name} onClick={()=>run(()=>api.deleteOrganization(org.id),'Account closed.')}>Close the account permanently</Button></div>
     </div>}
+  </div>;
+}
+
+/**
+ * The company's own persona — the bottom of the chain in services/routing.py.
+ * A company with agents and call setups for everything never reaches this;
+ * one that has not built those yet answers from it on every number.
+ */
+function DefaultAgentTab(){
+  const {t,toast,canManage}=useApp();
+  const [settings,setSettings]=useState<Record<string,unknown>|null>(null);
+  const [saving,setSaving]=useState(false);
+  const [error,setError]=useState('');
+  useEffect(()=>{api.getAgentSettings().then(s=>setSettings(s as Record<string,unknown>)).catch(c=>setError(c instanceof Error?c.message:'Could not load this.'))},[]);
+  const save=async(patch:Record<string,unknown>)=>{
+    setSaving(true);setError('');
+    try{await api.updateAgentSettings(patch);setSettings(cur=>({...(cur??{}),...patch}));toast(t('Saved.'))}
+    catch(cause){setError(cause instanceof Error?cause.message:'That could not be saved.')}
+    finally{setSaving(false)}
+  };
+  if(!settings) return <div className="card stack">{error?<div className="notice danger">{error}</div>:<div className="small muted">{t('Loading…')}</div>}</div>;
+  const value=(k:string)=>String(settings[k]??'');
+  return <div className="card stack">
+    <p className="small muted">{t('Used by any number with no agent of its own assigned to it. Build agents under Build → Agents for more than one voice.')}</p>
+    {error&&<div className="notice danger">{error}</div>}
+    <Field label="Who this answers as" rows={5} value={value('persona')} disabled={!canManage}
+      onChange={v=>void save({persona:v})} placeholder="You are the assistant for…"/>
+    <Field label="Opening line" value={value('greeting')} disabled={!canManage}
+      onChange={v=>void save({agentGreeting:v})} placeholder="Thank you for calling. How can I help?"/>
+    <Field label="Voice" value={value('voice')} disabled={!canManage}
+      onChange={v=>void save({ttsVoice:v})} placeholder="leave empty for the default"/>
+    {saving&&<Badge>{t('Saving…')}</Badge>}
   </div>;
 }

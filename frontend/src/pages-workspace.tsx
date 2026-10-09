@@ -1,0 +1,616 @@
+/**
+ * Agents, knowledge bases, call setups, and the team.
+ *
+ * Only reachable in a LIVE build — see the routing in app.tsx — because a
+ * fixture store has no honest way to model "this number answers from this
+ * base", which is the entire point of these screens. They talk straight to
+ * `lib/api/workspace.ts` rather than through the big mock/live facade.
+ */
+import React, {useCallback, useEffect, useRef, useState} from 'react';
+import {Link, useNavigate, useParams, useLocation} from 'react-router-dom';
+import {
+  Mic2, BrainCircuit, Route as RouteIcon, Users, Plus, Trash2, Upload, FileText,
+  PhoneIncoming, PhoneOutgoing, Loader2, Copy, CheckCircle2, X, Star,
+} from 'lucide-react';
+import {Badge, Button, Empty, Field, PageHead} from './app';
+import {useApp} from './app-context';
+import {
+  workspace, type Agent, type KnowledgeBase, type KbDocument, type CallSetup,
+  type Channel, type TeamMember, type TeamInvite,
+} from './lib/api/workspace';
+import {friendlyAuthError, loginWithEmail, acceptInvite, peekInvite} from './lib/api/auth';
+import {setAuthToken} from './lib/api';
+import {auth as firebaseAuth} from './lib/firebase';
+import {createUserWithEmailAndPassword} from 'firebase/auth';
+
+const CHANNEL_LABEL: Record<Channel, string> = {
+  PHONE: 'Phone line', WHATSAPP_CALL: 'WhatsApp calling', WHATSAPP_MESSAGE: 'WhatsApp messaging',
+};
+
+function errorText(cause: unknown, fallback: string): string {
+  return cause instanceof Error && cause.message ? cause.message : fallback;
+}
+
+function Modal({title, onClose, children}: {title: string; onClose: () => void; children: React.ReactNode}) {
+  return <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal" onClick={e => e.stopPropagation()}>
+      <div className="row between"><h2>{title}</h2>
+        <button className="button outline small" onClick={onClose}><X size={14}/></button></div>
+      {children}
+    </div>
+  </div>;
+}
+
+// ---------------------------------------------------------------------------
+// Agents
+// ---------------------------------------------------------------------------
+
+export function AgentsScreen() {
+  const {t, toast, canManage} = useApp();
+  const navigate = useNavigate();
+  const [agents, setAgents] = useState<Agent[] | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const load = useCallback(() => {
+    workspace.agents().then(b => setAgents(b.agents)).catch(c => setError(errorText(c, 'Could not load agents.')));
+  }, []);
+  useEffect(() => { load() }, [load]);
+
+  const create = async () => {
+    setBusy(true);
+    try {
+      const agent = await workspace.createAgent({name: name.trim()});
+      toast(t('Agent created'));
+      setCreating(false); setName('');
+      navigate('/app/agents/' + agent.id);
+    } catch (cause) {
+      setError(errorText(cause, 'Could not create that agent.'));
+    } finally { setBusy(false) }
+  };
+
+  return <div className="stack">
+    <PageHead eyebrow="Build" title="Agents"
+      description="Each agent has its own voice, persona and knowledge. Point a number at one from Call setups."
+      action={canManage ? <Button onClick={() => setCreating(true)}><Plus size={16}/>{t('New agent')}</Button> : undefined}/>
+    {error && <div className="notice danger">{error}</div>}
+    {agents === null ? <div className="small muted">{t('Loading…')}</div>
+      : agents.length === 0
+        ? <Empty icon={Mic2} title="No agents yet" body="Create an agent to start shaping its voice and what it knows."
+            action={canManage ? <Button onClick={() => setCreating(true)}>{t('New agent')}</Button> : undefined}/>
+        : <div className="grid cols-3">
+            {agents.map(agent => <Link to={'/app/agents/' + agent.id} className="card lift" key={agent.id}>
+              <div className="row between">
+                <div className="brand-mark" style={{width: 45, height: 45, fontSize: '1rem'}}>{agent.name.slice(0, 1) || '?'}</div>
+                <Badge tone={agent.status === 'live' ? 'success' : agent.status === 'paused' ? 'warning' : ''}>{t(agent.status)}</Badge>
+              </div>
+              <h2 style={{marginTop: 18, marginBottom: 5}}>{agent.name}</h2>
+              <p className="small muted">{agent.greeting || t('No opening line yet')}</p>
+            </Link>)}
+          </div>}
+    {creating && <Modal title={t('Create an agent')} onClose={() => setCreating(false)}>
+      <Field label="Agent name" value={name} onChange={setName} placeholder="Support, Sales, Admissions…"/>
+      {error && <div className="notice danger">{error}</div>}
+      <div className="row" style={{justifyContent: 'flex-end', marginTop: 20}}>
+        <Button variant="secondary" onClick={() => setCreating(false)}>{t('Cancel')}</Button>
+        <Button disabled={!name.trim() || busy} onClick={create}>
+          {busy ? <Loader2 size={15} className="spin"/> : t('Create agent')}
+        </Button>
+      </div>
+    </Modal>}
+  </div>;
+}
+
+export function AgentDetailScreen() {
+  const {id} = useParams();
+  const {t, toast, canManage} = useApp();
+  const navigate = useNavigate();
+  const [agent, setAgent] = useState<Agent | null>(null);
+  const [bases, setBases] = useState<KnowledgeBase[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!id) return;
+    workspace.agent(id).then(setAgent).catch(c => setError(errorText(c, 'Could not load this agent.')));
+    workspace.knowledgeBases().then(b => setBases(b.knowledgeBases)).catch(() => {});
+  }, [id]);
+
+  const save = async (patch: Partial<Agent>) => {
+    if (!id) return;
+    setSaving(true); setError('');
+    try {
+      const updated = await workspace.updateAgent(id, patch);
+      setAgent(updated);
+      toast(t('Saved.'));
+    } catch (cause) { setError(errorText(cause, 'That could not be saved.')) }
+    finally { setSaving(false) }
+  };
+
+  const remove = async () => {
+    if (!id || !confirm(t('Delete this agent? Numbers still pointed at it will need a new one.'))) return;
+    try {
+      await workspace.deleteAgent(id);
+      toast(t('Agent deleted'));
+      navigate('/app/agents');
+    } catch (cause) { setError(errorText(cause, 'Could not delete this agent.')) }
+  };
+
+  if (!agent) return <div className="stack">
+    <PageHead eyebrow="Build" title="Agent"/>
+    {error ? <div className="notice danger">{error}</div> : <div className="small muted">{t('Loading…')}</div>}
+  </div>;
+
+  return <div className="stack">
+    <PageHead eyebrow="Build" title={agent.name}
+      description="How this agent introduces itself, what it knows, and when it escalates."
+      action={<div className="row">
+        <select className="select" value={agent.status} disabled={!canManage}
+          onChange={e => void save({status: e.target.value as Agent['status']})}>
+          <option value="draft">{t('Draft')}</option>
+          <option value="live">{t('Live')}</option>
+          <option value="paused">{t('Paused')}</option>
+        </select>
+        {canManage && <Button variant="outline" onClick={remove}><Trash2 size={14}/> {t('Delete')}</Button>}
+      </div>}/>
+    {error && <div className="notice danger">{error}</div>}
+    <div className="card stack">
+      <Field label="Name" value={agent.name} disabled={!canManage}
+        onChange={v => void save({name: v})}/>
+      <Field label="Opening line" value={agent.greeting} disabled={!canManage}
+        onChange={v => void save({greeting: v})} placeholder="Thank you for calling. How can I help?"/>
+      <Field label="Who this agent is" rows={5} value={agent.roleDescription} disabled={!canManage}
+        onChange={v => void save({roleDescription: v})}
+        placeholder="You are Ayesha, the admissions assistant…"
+        help="Written in plain language. Falls back to the company's own persona if left empty."/>
+      <Field label="Language" value={agent.language} disabled={!canManage}
+        onChange={v => void save({language: v})} placeholder="ur-PK"/>
+      <Field label="Voice" value={agent.ttsVoice} disabled={!canManage}
+        onChange={v => void save({ttsVoice: v})} placeholder="leave empty for the company default"/>
+      <Field label="Tone notes" value={agent.toneNotes} disabled={!canManage}
+        onChange={v => void save({toneNotes: v})}/>
+      <Field label="When to hand off to a person" rows={3} value={agent.escalationRules} disabled={!canManage}
+        onChange={v => void save({escalationRules: v})}/>
+      <div className="field">
+        <label>{t('Knowledge base')}</label>
+        <select className="select" value={agent.knowledgeBaseId} disabled={!canManage}
+          onChange={e => void save({knowledgeBaseId: e.target.value})}>
+          <option value="">{t('Everything the company has uploaded')}</option>
+          {bases.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+        </select>
+        <div className="help">{t('What this agent answers from, unless a call setup overrides it.')}</div>
+      </div>
+    </div>
+    {saving && <Badge>{t('Saving…')}</Badge>}
+  </div>;
+}
+
+// ---------------------------------------------------------------------------
+// Knowledge bases
+// ---------------------------------------------------------------------------
+
+export function KnowledgeBasesScreen() {
+  const {t, toast, canManage} = useApp();
+  const navigate = useNavigate();
+  const [bases, setBases] = useState<KnowledgeBase[] | null>(null);
+  const [unfiled, setUnfiled] = useState(0);
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState('');
+  const [purpose, setPurpose] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(() => {
+    workspace.knowledgeBases().then(b => { setBases(b.knowledgeBases); setUnfiled(b.unfiledCount) })
+      .catch(c => setError(errorText(c, 'Could not load your knowledge bases.')));
+  }, []);
+  useEffect(() => { load() }, [load]);
+
+  const create = async () => {
+    setBusy(true); setError('');
+    try {
+      const kb = await workspace.createKnowledgeBase(name.trim(), purpose.trim(), bases?.length === 0);
+      toast(t('Knowledge base created'));
+      setCreating(false); setName(''); setPurpose('');
+      navigate('/app/knowledge/' + kb.id);
+    } catch (cause) { setError(errorText(cause, 'Could not create that knowledge base.')) }
+    finally { setBusy(false) }
+  };
+
+  return <div className="stack">
+    <PageHead eyebrow="Build" title="Knowledge bases"
+      description="Separate documents for different numbers or campaigns — a price list for sales, a handbook for support."
+      action={canManage ? <Button onClick={() => setCreating(true)}><Plus size={16}/>{t('New knowledge base')}</Button> : undefined}/>
+    {error && <div className="notice danger">{error}</div>}
+    {bases === null ? <div className="small muted">{t('Loading…')}</div>
+      : bases.length === 0
+        ? <Empty icon={BrainCircuit} title="No knowledge bases yet"
+            body="Without one, every agent answers from everything your company has uploaded. Create one to split that up."
+            action={canManage ? <Button onClick={() => setCreating(true)}>{t('New knowledge base')}</Button> : undefined}/>
+        : <div className="grid cols-3">
+            {bases.map(kb => <Link to={'/app/knowledge/' + kb.id} className="card lift" key={kb.id}>
+              <div className="row between">
+                <div className="brand-mark" style={{width: 45, height: 45, fontSize: '1rem'}}><BrainCircuit size={20}/></div>
+                {kb.isDefault && <Badge tone="success"><Star size={11}/> {t('Default')}</Badge>}
+              </div>
+              <h2 style={{marginTop: 18, marginBottom: 5}}>{kb.name}</h2>
+              <p className="small muted">{kb.purpose || t('No description')}</p>
+              <div className="small muted" style={{marginTop: 12}}>{kb.documentCount} {t('documents')}</div>
+            </Link>)}
+          </div>}
+    {unfiled > 0 && <div className="notice">
+      {unfiled} {t('document(s) are not filed under any knowledge base and are read by every agent with no base of its own.')}
+    </div>}
+    {creating && <Modal title={t('Create a knowledge base')} onClose={() => setCreating(false)}>
+      <Field label="Name" value={name} onChange={setName} placeholder="Price list, Support handbook…"/>
+      <Field label="What it's for" value={purpose} onChange={setPurpose} placeholder="Optional"/>
+      {error && <div className="notice danger">{error}</div>}
+      <div className="row" style={{justifyContent: 'flex-end', marginTop: 20}}>
+        <Button variant="secondary" onClick={() => setCreating(false)}>{t('Cancel')}</Button>
+        <Button disabled={!name.trim() || busy} onClick={create}>
+          {busy ? <Loader2 size={15} className="spin"/> : t('Create')}
+        </Button>
+      </div>
+    </Modal>}
+  </div>;
+}
+
+function docSize(chars: number): string {
+  if (chars >= 1000) return `${Math.round(chars / 1000).toLocaleString()}k characters`;
+  return `${chars} characters`;
+}
+
+export function KnowledgeBaseDetailScreen() {
+  const {kbId} = useParams();
+  const {t, toast, canManage} = useApp();
+  const navigate = useNavigate();
+  const [kb, setKb] = useState<KnowledgeBase | null>(null);
+  const [docs, setDocs] = useState<KbDocument[]>([]);
+  const [busy, setBusy] = useState('');
+  const [error, setError] = useState('');
+  const picker = useRef<HTMLInputElement>(null);
+
+  const load = useCallback(() => {
+    if (!kbId) return;
+    workspace.knowledgeBases().then(b => setKb(b.knowledgeBases.find(x => x.id === kbId) || null));
+    workspace.documents(kbId).then(b => setDocs(b.documents)).catch(c => setError(errorText(c, 'Could not load documents.')));
+  }, [kbId]);
+  useEffect(() => { load() }, [load]);
+
+  const upload = async (file: File) => {
+    if (!kbId) return;
+    setBusy(file.name); setError('');
+    try {
+      await workspace.uploadDocument(file, kbId);
+      toast(`${file.name} added.`);
+      load();
+    } catch (cause) { setError(errorText(cause, 'That file could not be read.')) }
+    finally { setBusy(''); if (picker.current) picker.current.value = '' }
+  };
+
+  const remove = async (doc: KbDocument) => {
+    setBusy(doc.id);
+    try { await workspace.deleteDocument(doc.id); toast(`${doc.name} removed.`); load() }
+    finally { setBusy('') }
+  };
+
+  const removeBase = async () => {
+    if (!kbId || !confirm(t('Delete this knowledge base? Its documents stay, unfiled.'))) return;
+    try { await workspace.deleteKnowledgeBase(kbId); toast(t('Knowledge base deleted')); navigate('/app/knowledge') }
+    catch (cause) { setError(errorText(cause, 'Could not delete this knowledge base.')) }
+  };
+
+  if (!kb) return <div className="stack">
+    <PageHead eyebrow="Build" title="Knowledge base"/>
+    {error ? <div className="notice danger">{error}</div> : <div className="small muted">{t('Loading…')}</div>}
+  </div>;
+
+  return <div className="stack">
+    <PageHead eyebrow="Build" title={kb.name}
+      action={canManage ? <div className="row">
+        {!kb.isDefault && <Button variant="outline" small
+          onClick={() => workspace.updateKnowledgeBase(kb.id, {isDefault: true}).then(load)}>
+          <Star size={14}/> {t('Make default')}
+        </Button>}
+        <Button variant="outline" onClick={removeBase}><Trash2 size={14}/> {t('Delete')}</Button>
+      </div> : undefined}/>
+    {error && <div className="notice danger">{error}</div>}
+    <div className="card stack">
+      <Field label="Name" value={kb.name} disabled={!canManage}
+        onChange={v => workspace.updateKnowledgeBase(kb.id, {name: v}).then(load)}/>
+      <Field label="What it's for" value={kb.purpose} disabled={!canManage}
+        onChange={v => workspace.updateKnowledgeBase(kb.id, {purpose: v}).then(load)}/>
+    </div>
+    <div className="card stack">
+      <div className="row between">
+        <strong>{t('Documents')}</strong>
+        {canManage && <>
+          <input ref={picker} type="file" hidden accept=".pdf,.txt,.md,.csv,text/*,application/pdf"
+            onChange={e => { const f = e.target.files?.[0]; if (f) void upload(f) }}/>
+          <Button small onClick={() => picker.current?.click()} disabled={Boolean(busy)}>
+            {busy ? <><Loader2 size={15} className="spin"/> {t('Reading…')}</> : <><Upload size={15}/> {t('Add a document')}</>}
+          </Button>
+        </>}
+      </div>
+      {docs.length === 0
+        ? <Empty icon={FileText} title="No documents yet" body="Without one, agents pointed at this base answer from nothing."/>
+        : <div className="stack">{docs.map(doc => <div className="setup-row" key={doc.id}>
+            <div className="setup-row-main"><strong>{doc.name}</strong><span className="small muted">{docSize(doc.chars)}</span></div>
+            {canManage && <Button small variant="outline" disabled={busy === doc.id} onClick={() => void remove(doc)}>
+              <Trash2 size={14}/> {t('Remove')}</Button>}
+          </div>)}</div>}
+    </div>
+  </div>;
+}
+
+// ---------------------------------------------------------------------------
+// Call setups
+// ---------------------------------------------------------------------------
+
+export function CallSetupsScreen() {
+  const {t, toast, canManage} = useApp();
+  const [setups, setSetups] = useState<CallSetup[] | null>(null);
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [bases, setBases] = useState<KnowledgeBase[]>([]);
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState('');
+  const [form, setForm] = useState({
+    name: '', channel: 'PHONE' as Channel, direction: 'INBOUND' as 'INBOUND' | 'OUTBOUND',
+    agentId: '', knowledgeBaseId: '',
+  });
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(() => {
+    workspace.callSetups().then(b => setSetups(b.callSetups)).catch(c => setError(errorText(c, 'Could not load call setups.')));
+    workspace.agents().then(b => setAgents(b.agents)).catch(() => {});
+    workspace.knowledgeBases().then(b => setBases(b.knowledgeBases)).catch(() => {});
+  }, []);
+  useEffect(() => { load() }, [load]);
+
+  const create = async () => {
+    if (!form.agentId) { setError(t('Choose which agent answers.')); return }
+    setBusy(true); setError('');
+    try {
+      await workspace.createCallSetup({
+        name: form.name.trim() || (form.direction === 'INBOUND' ? 'Incoming calls' : 'Outbound'),
+        channel: form.channel, direction: form.direction,
+        agentId: form.agentId, knowledgeBaseId: form.knowledgeBaseId, enabled: true,
+      });
+      toast(t('Call setup created'));
+      setCreating(false);
+      setForm({name: '', channel: 'PHONE', direction: 'INBOUND', agentId: '', knowledgeBaseId: ''});
+      load();
+    } catch (cause) { setError(errorText(cause, 'Could not create that call setup.')) }
+    finally { setBusy(false) }
+  };
+
+  const toggle = async (setup: CallSetup) => {
+    try { await workspace.updateCallSetup(setup.id, {enabled: !setup.enabled}); load() }
+    catch (cause) { setError(errorText(cause, 'Could not change that.')) }
+  };
+
+  const remove = async (setup: CallSetup) => {
+    if (!confirm(t('Delete this call setup?'))) return;
+    await workspace.deleteCallSetup(setup.id); load();
+  };
+
+  const agentName = (id: string) => agents.find(a => a.id === id)?.name || t('Unknown agent');
+  const baseName = (id: string) => id ? (bases.find(b => b.id === id)?.name || t('Unknown')) : t("the agent's own base");
+
+  return <div className="stack">
+    <PageHead eyebrow="Build" title="Call setups"
+      description="Which agent answers each number, incoming or outgoing. One incoming setup per number; as many outgoing as you like."
+      action={canManage ? <Button onClick={() => setCreating(true)} disabled={agents.length === 0}>
+        <Plus size={16}/>{t('New call setup')}</Button> : undefined}/>
+    {agents.length === 0 && <div className="notice">{t('Create an agent first — a call setup needs one to answer with.')}</div>}
+    {error && <div className="notice danger">{error}</div>}
+    {setups === null ? <div className="small muted">{t('Loading…')}</div>
+      : setups.length === 0
+        ? <Empty icon={RouteIcon} title="No call setups yet"
+            body="Without one, every number falls back to the company's own agent and everything it has uploaded."/>
+        : <div className="stack">{setups.map(s => <div className="setup-row" key={s.id}>
+            <div className="setup-row-main">
+              {s.direction === 'INBOUND' ? <PhoneIncoming size={16}/> : <PhoneOutgoing size={16}/>}
+              <div>
+                <strong>{s.name}</strong>
+                <div className="small muted">
+                  {t(CHANNEL_LABEL[s.channel])} · {t(s.direction === 'INBOUND' ? 'Incoming' : 'Outgoing')} ·{' '}
+                  {agentName(s.agentId)} · {baseName(s.knowledgeBaseId)}
+                </div>
+              </div>
+            </div>
+            {canManage && <div className="row">
+              <input className="switch" type="checkbox" checked={s.enabled} onChange={() => void toggle(s)}/>
+              <Button small variant="outline" onClick={() => void remove(s)}><Trash2 size={14}/></Button>
+            </div>}
+          </div>)}</div>}
+    {creating && <Modal title={t('Create a call setup')} onClose={() => setCreating(false)}>
+      <Field label="Name" value={form.name} onChange={v => setForm({...form, name: v})} placeholder="Incoming calls"/>
+      <div className="field"><label>{t('Number')}</label>
+        <select className="select" value={form.channel} onChange={e => setForm({...form, channel: e.target.value as Channel})}>
+          {(Object.keys(CHANNEL_LABEL) as Channel[]).map(c => <option key={c} value={c}>{t(CHANNEL_LABEL[c])}</option>)}
+        </select></div>
+      <div className="field"><label>{t('Direction')}</label>
+        <select className="select" value={form.direction} onChange={e => setForm({...form, direction: e.target.value as 'INBOUND' | 'OUTBOUND'})}>
+          <option value="INBOUND">{t('Incoming')}</option>
+          <option value="OUTBOUND">{t('Outgoing')}</option>
+        </select></div>
+      <div className="field"><label>{t('Agent')}</label>
+        <select className="select" value={form.agentId} onChange={e => setForm({...form, agentId: e.target.value})}>
+          <option value="">{t('Choose an agent')}</option>
+          {agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+        </select></div>
+      <div className="field"><label>{t('Knowledge base')}</label>
+        <select className="select" value={form.knowledgeBaseId} onChange={e => setForm({...form, knowledgeBaseId: e.target.value})}>
+          <option value="">{t("Use the agent's own")}</option>
+          {bases.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+        </select></div>
+      {error && <div className="notice danger">{error}</div>}
+      <div className="row" style={{justifyContent: 'flex-end', marginTop: 20}}>
+        <Button variant="secondary" onClick={() => setCreating(false)}>{t('Cancel')}</Button>
+        <Button disabled={busy} onClick={create}>{busy ? <Loader2 size={15} className="spin"/> : t('Create')}</Button>
+      </div>
+    </Modal>}
+  </div>;
+}
+
+// ---------------------------------------------------------------------------
+// Team
+// ---------------------------------------------------------------------------
+
+export function TeamScreen() {
+  const {t, toast, role} = useApp();
+  const isOwner = role === 'owner';
+  const [members, setMembers] = useState<TeamMember[] | null>(null);
+  const [invites, setInvites] = useState<TeamInvite[]>([]);
+  const [inviting, setInviting] = useState(false);
+  const [email, setEmail] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [linkFor, setLinkFor] = useState<string>('');
+
+  const load = useCallback(() => {
+    workspace.team().then(b => { setMembers(b.members); setInvites(b.invites) })
+      .catch(c => setError(errorText(c, 'Could not load your team.')));
+  }, []);
+  useEffect(() => { load() }, [load]);
+
+  const invite = async () => {
+    setBusy(true); setError('');
+    try {
+      const result = await workspace.invite(email.trim().toLowerCase(), 'staff');
+      const link = `${window.location.origin}/invite?token=${result.token}`;
+      setLinkFor(link);
+      setInviting(false); setEmail('');
+      load();
+    } catch (cause) { setError(errorText(cause, 'Could not create that invitation.')) }
+    finally { setBusy(false) }
+  };
+
+  const revoke = async (token: string) => { await workspace.revokeInvite(token); load() };
+  const remove = async (m: TeamMember) => {
+    if (!confirm(t(`Remove ${m.name} from the team?`))) return;
+    try { await workspace.removeMember(m.userId); toast(t('Removed.')); load() }
+    catch (cause) { setError(errorText(cause, 'Could not remove them.')) }
+  };
+
+  return <div className="stack">
+    <PageHead eyebrow="Manage" title="Team"
+      description="Everyone who can sign in to this workspace."
+      action={isOwner ? <Button onClick={() => setInviting(true)}><Plus size={16}/>{t('Invite someone')}</Button> : undefined}/>
+    {error && <div className="notice danger">{error}</div>}
+    {!isOwner && <div className="notice">{t('Only the owner can invite or remove people.')}</div>}
+    {members === null ? <div className="small muted">{t('Loading…')}</div> : <div className="card stack">
+      {members.map(m => <div className="setup-row" key={m.userId}>
+        <div className="setup-row-main">
+          <strong>{m.name}{m.isYou && <span className="small muted"> ({t('you')})</span>}</strong>
+          <span className="small muted">{m.email}</span>
+        </div>
+        <div className="row">
+          <Badge tone={m.role === 'owner' ? 'success' : ''}>{t(m.role === 'owner' ? 'Owner' : 'Staff')}</Badge>
+          {isOwner && !m.isYou && <Button small variant="outline" onClick={() => void remove(m)}>
+            <Trash2 size={14}/></Button>}
+        </div>
+      </div>)}
+    </div>}
+    {invites.length > 0 && <div className="card stack">
+      <strong>{t('Pending invitations')}</strong>
+      {invites.map(i => <div className="setup-row" key={i.token}>
+        <div className="setup-row-main"><strong>{i.email}</strong><span className="small muted">{t(i.role)}</span></div>
+        {isOwner && <Button small variant="outline" onClick={() => void revoke(i.token)}><X size={14}/> {t('Revoke')}</Button>}
+      </div>)}
+    </div>}
+    {inviting && <Modal title={t('Invite someone')} onClose={() => setInviting(false)}>
+      <Field label="Email" type="email" value={email} onChange={setEmail} placeholder="colleague@yourcompany.com"/>
+      <p className="small muted">{t('They join as staff: they can place and receive calls and messages, but cannot change settings, credentials or the team.')}</p>
+      {error && <div className="notice danger">{error}</div>}
+      <div className="row" style={{justifyContent: 'flex-end', marginTop: 20}}>
+        <Button variant="secondary" onClick={() => setInviting(false)}>{t('Cancel')}</Button>
+        <Button disabled={!email.includes('@') || busy} onClick={invite}>
+          {busy ? <Loader2 size={15} className="spin"/> : t('Create invitation')}
+        </Button>
+      </div>
+    </Modal>}
+    {linkFor && <Modal title={t('Share this link')} onClose={() => setLinkFor('')}>
+      <p className="small muted">{t('There is no email delivery set up yet, so send this to them yourself — WhatsApp, Slack, however you usually reach them.')}</p>
+      <div className="row" style={{gap: 8}}>
+        <code className="small" style={{flex: 1, overflowWrap: 'anywhere', padding: '10px 12px', background: 'var(--surface-2, #f3f3f3)', borderRadius: 8}}>{linkFor}</code>
+        <Button small onClick={() => { navigator.clipboard?.writeText(linkFor); toast(t('Copied')) }}><Copy size={14}/></Button>
+      </div>
+    </Modal>}
+  </div>;
+}
+
+// ---------------------------------------------------------------------------
+// Accepting an invite
+// ---------------------------------------------------------------------------
+
+export function InviteAcceptScreen() {
+  const {t} = useApp();
+  const location = useLocation();
+  const token = new URLSearchParams(location.search).get('token') || '';
+  const [info, setInfo] = useState<{email: string; role: string; companyName: string} | null>(null);
+  const [error, setError] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [mode, setMode] = useState<'new' | 'existing'>('new');
+
+  useEffect(() => {
+    if (!token) { setError('This invitation link is missing its token.'); return }
+    peekInvite(token).then(setInfo).catch(() => setError('This invitation link is no longer valid.'));
+  }, [token]);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!info) return;
+    setBusy(true); setError('');
+    try {
+      if (mode === 'new') await registerWithEmailForInvite(info.email, password);
+      else await loginWithEmail(info.email, password);
+      const session = await acceptInvite(token);
+      setAuthToken(session.apiKey);
+      localStorage.setItem('ca-session', JSON.stringify({
+        email: session.email, name: session.companyName, userId: session.phoneNumberId,
+        orgId: session.phoneNumberId, portal: 'company', role: session.role,
+      }));
+      window.location.href = '/app/queue';
+    } catch (cause) {
+      setError(friendlyAuthError(cause));
+    } finally { setBusy(false) }
+  };
+
+  if (error && !info) return <div className="auth-page"><div className="card auth-card">
+    <h1>{t('Invitation not found')}</h1>
+    <p className="muted">{t(error)}</p>
+    <Link to="/login">{t('Back to sign in')}</Link>
+  </div></div>;
+
+  if (!info) return <div className="auth-page"><div className="card auth-card"><p className="muted">{t('Loading…')}</p></div></div>;
+
+  return <div className="auth-page"><div className="card auth-card">
+    <h1 style={{fontSize: '1.8rem'}}>{t('Join')} {info.companyName}</h1>
+    <p className="muted">{t('You were invited as staff, using')} {info.email}.</p>
+    <form className="stack" onSubmit={submit}>
+      <div className="row" style={{gap: 8}}>
+        <Button small variant={mode === 'new' ? '' : 'outline'} type="button" onClick={() => setMode('new')}>{t('I am new here')}</Button>
+        <Button small variant={mode === 'existing' ? '' : 'outline'} type="button" onClick={() => setMode('existing')}>{t('I already have a password')}</Button>
+      </div>
+      <Field label="Password" type="password" value={password} onChange={setPassword}
+        help={mode === 'new' ? t('Use at least six characters — this creates your sign-in.') : t('Your existing password for this email.')} required/>
+      {error && <div className="notice danger">{t(error)}</div>}
+      <Button type="submit" disabled={busy || password.length < 6}>
+        {busy ? <Loader2 size={15} className="spin"/> : t('Join the team')}
+      </Button>
+    </form>
+  </div></div>;
+}
+
+async function registerWithEmailForInvite(email: string, password: string) {
+  // Reuses the Firebase account-creation half of registerWithEmail without
+  // its backend signup call — accept-invite is this flow's equivalent of
+  // that step, and calling both would create a company nobody asked for.
+  if (!firebaseAuth) throw new Error('Sign-in is not configured in this build.');
+  await createUserWithEmailAndPassword(firebaseAuth, email, password);
+}

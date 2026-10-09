@@ -23,6 +23,7 @@ export type AuthSession = {
   phoneNumberId: string;
   companyName: string;
   email: string;
+  role: 'owner' | 'staff';
 };
 
 /** Thrown by `login` specifically when the credential was fine but no
@@ -98,6 +99,26 @@ export async function completeGoogleSignup(companyName: string): Promise<AuthSes
     method: 'POST',
     bearer: idToken,
     body: { companyName },
+  });
+}
+
+/** What an invite link is for, before signing in — shown on the
+ * invite-accept page so somebody knows what they're agreeing to join. */
+export async function peekInvite(
+  token: string,
+): Promise<{ email: string; role: string; companyName: string }> {
+  return request(`/api/team/invite/${encodeURIComponent(token)}`, { anonymous: true });
+}
+
+/** Joining a company somebody already runs, from an invite link. The
+ * Firebase account is created or signed into first (by the caller), then
+ * this links it to the company the invite names. */
+export async function acceptInvite(token: string): Promise<AuthSession> {
+  const user = requireAuth().currentUser;
+  if (!user) throw new Error('Sign in before accepting an invitation.');
+  const idToken = await user.getIdToken();
+  return request<AuthSession>('/api/auth/accept-invite', {
+    method: 'POST', bearer: idToken, body: { token },
   });
 }
 

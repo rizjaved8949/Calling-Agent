@@ -47,6 +47,28 @@ async def _require_owner(person) -> str:
     return phone_number_id
 
 
+@router.get("/invite/{token}")
+async def peek_invite(token: str) -> dict:
+    """What an invite link is for, before the invitee has an account to sign
+    in with. No `CurrentPerson` on purpose — this is what the invite-accept
+    page shows someone who has not signed in yet.
+
+    Says only the company name, the role, and the email it was sent to —
+    never the token back, never anything about the company beyond its name.
+    An invite token is itself the secret (24 random bytes); this route does
+    not widen what holding one reveals.
+    """
+    invite = await user_repo.get_invite(token)
+    if invite is None or invite.get("status") != "pending":
+        raise NotFound("Invitation")
+    tenant = await tenant_repo.get(invite["phoneNumberId"])
+    return {
+        "email": invite.get("email", ""),
+        "role": invite.get("role", "staff"),
+        "companyName": tenant.name if tenant else "",
+    }
+
+
 @router.get("")
 async def list_team(person: CurrentPerson) -> dict:
     """Everyone linked to my company, and who is still only invited."""

@@ -154,3 +154,24 @@ def test_one_companys_team_is_invisible_to_another(client, fake_db, firebase):
     body = client.get("/api/team", headers=_auth("owner-2", "owner@northstar.test")).json()
     emails = [m["email"] for m in body["members"]]
     assert "owner@acme.test" not in emails
+
+
+def test_an_invite_can_be_peeked_at_before_signing_in(client, fake_db, firebase):
+    """What the invite-accept page shows before the invitee has an account."""
+    _signup(client, "Acme")
+    invite = client.post(
+        "/api/team/invite", json={"email": "staff@acme.test", "role": "staff"},
+        headers=_auth("owner-1", "owner@acme.test"),
+    ).json()
+
+    peek = client.get(f"/api/team/invite/{invite['token']}")
+    assert peek.status_code == 200
+    body = peek.json()
+    assert body["companyName"] == "Acme"
+    assert body["email"] == "staff@acme.test"
+    assert body["role"] == "staff"
+
+
+def test_peeking_at_a_bogus_token_is_a_plain_404(client, fake_db, firebase):
+    resp = client.get("/api/team/invite/not-a-real-token")
+    assert resp.status_code == 404

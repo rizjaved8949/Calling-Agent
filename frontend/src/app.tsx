@@ -64,7 +64,7 @@ import {HistoryNavigationProvider} from './history-navigation';
 
 import {AppCtx,useApp} from './app-context';
 import {ComingSoon,hasBackendKey} from './connect-backend';
-import {AgentScreen,KnowledgeScreen} from './pages-agent';
+import {AgentsScreen,AgentDetailScreen,KnowledgeBasesScreen,KnowledgeBaseDetailScreen,CallSetupsScreen,TeamScreen,InviteAcceptScreen} from './pages-workspace';
 import {OperatorCompanies} from './pages-operator';
 import {LiveCalls} from './pages-live';
 import {CampaignsScreen,GapsScreen,UsageScreen} from './pages-growth';
@@ -119,12 +119,12 @@ function Provider({children}:{children:React.ReactNode}){
   const isPlatform=sessionState?.portal==='platform';
   const role:Role=useMemo(()=>{
     if(isPlatform)return 'owner';
-    // Live builds have no membership rows yet — roles arrive with sign-in.
-    // Whoever holds the company API key can already change everything through
-    // the API, so pretending they are read-only in the UI would be theatre.
-    if(LIVE)return 'owner';
+    // The role sign-in returned (see lib/api/auth.ts's AuthSession and
+    // pages.tsx's `finish`). The backend enforces owner-only actions itself
+    // (see api/routes/team.py) — this is what hides the buttons for them.
+    if(LIVE)return sessionState?.role||'staff';
     return store.memberships.find(m=>m.orgId===org.id&&m.userId===sessionState?.userId)?.role||'staff';
-  },[store.memberships,org.id,sessionState?.userId,isPlatform]);
+  },[store.memberships,org.id,sessionState?.userId,isPlatform,sessionState?.role]);
   const readOnly=!!sessionState?.impersonating;
   const canManage=!readOnly&&(role==='owner'||role==='admin');
   useEffect(()=>{
@@ -316,22 +316,22 @@ function AppRoutes(){
     <Route path="/signup" element={<AuthScreen mode="signup"/>}/>
     <Route path="/forgot-password" element={<AuthScreen mode="forgot"/>}/>
     <Route path="/verify" element={<AuthScreen mode="verify"/>}/>
-    <Route path="/invite" element={<AuthScreen mode="invite"/>}/>
+    <Route path="/invite" element={LIVE?<InviteAcceptScreen/>:<AuthScreen mode="invite"/>}/>
 
     <Route path="/app/dashboard" element={<Protected manage><Dashboard/></Protected>}/>
     <Route path="/app/onboarding" element={<Protected manage><Onboarding/></Protected>}/>
-    <Route path="/app/agents" element={<Protected manage><WhenLive real={<AgentScreen/>}><Agents/></WhenLive></Protected>}/>
-    <Route path="/app/agents/:id" element={<Protected manage><WhenLive real={<AgentScreen/>}><AgentDetail/></WhenLive></Protected>}/>
-    <Route path="/app/knowledge" element={<Protected manage><WhenLive real={<KnowledgeScreen/>}><Knowledge/></WhenLive></Protected>}/>
-    <Route path="/app/knowledge/:kbId" element={<Protected manage><WhenLive real={<KnowledgeScreen/>}><KnowledgeDetail/></WhenLive></Protected>}/>
-    <Route path="/app/setups" element={<Protected><NotYet title="Call setups" detail={"Routing rules per number arrive with the voice engine."}><CallSetups/></NotYet></Protected>}/>
+    <Route path="/app/agents" element={<Protected manage><WhenLive real={<AgentsScreen/>}><Agents/></WhenLive></Protected>}/>
+    <Route path="/app/agents/:id" element={<Protected manage><WhenLive real={<AgentDetailScreen/>}><AgentDetail/></WhenLive></Protected>}/>
+    <Route path="/app/knowledge" element={<Protected manage><WhenLive real={<KnowledgeBasesScreen/>}><Knowledge/></WhenLive></Protected>}/>
+    <Route path="/app/knowledge/:kbId" element={<Protected manage><WhenLive real={<KnowledgeBaseDetailScreen/>}><KnowledgeDetail/></WhenLive></Protected>}/>
+    <Route path="/app/setups" element={<Protected><WhenLive real={<CallSetupsScreen/>}><CallSetups/></WhenLive></Protected>}/>
     <Route path="/app/campaigns" element={<Protected manage><WhenLive real={<CampaignsScreen/>}><Campaigns/></WhenLive></Protected>}/>
     <Route path="/app/campaigns/:id" element={<Protected manage><WhenLive real={<CampaignsScreen/>}><CampaignDetail/></WhenLive></Protected>}/>
     <Route path="/app/unanswered" element={<Protected manage><WhenLive real={<GapsScreen/>}><Unanswered/></WhenLive></Protected>}/>
     <Route path="/app/channels" element={<Protected manage><Channels/></Protected>}/>
     <Route path="/app/channels/:id" element={<Protected manage><ChannelDetail/></Protected>}/>
     <Route path="/app/messages" element={<Protected manage><Messages/></Protected>}/>
-    <Route path="/app/team" element={<Protected manage><NotYet title="Team" detail={"Invitations and roles arrive with sign-in."}><Team/></NotYet></Protected>}/>
+    <Route path="/app/team" element={<Protected manage><WhenLive real={<TeamScreen/>}><Team/></WhenLive></Protected>}/>
     <Route path="/app/usage" element={<Protected manage><WhenLive real={<UsageScreen/>}><Usage/></WhenLive></Protected>}/>
     <Route path="/app/settings" element={<Protected manage><SettingsPage/></Protected>}/>
     <Route path="/app/live" element={<Protected><WhenLive real={<LiveCalls/>}><Live/></WhenLive></Protected>}/>

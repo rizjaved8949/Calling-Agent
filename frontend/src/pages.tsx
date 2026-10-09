@@ -38,10 +38,10 @@ function CallTable({calls,limit}:{calls:Call[];limit?:number}){
  * client-side routing — `hydrate()` on the next mount is what actually loads
  * this company's data, and that only runs once, on mount (see `app.tsx`).
  */
-function finish(session:{apiKey:string;phoneNumberId:string;companyName:string;email:string}){
+function finish(session:{apiKey:string;phoneNumberId:string;companyName:string;email:string;role:'owner'|'staff'}){
   setAuthToken(session.apiKey);
-  localStorage.setItem('ca-session',JSON.stringify({email:session.email,name:session.companyName,userId:session.phoneNumberId,orgId:session.phoneNumberId,portal:'company'}));
-  window.location.href='/app/dashboard';
+  localStorage.setItem('ca-session',JSON.stringify({email:session.email,name:session.companyName,userId:session.phoneNumberId,orgId:session.phoneNumberId,portal:'company',role:session.role}));
+  window.location.href=session.role==='staff'?'/app/queue':'/app/dashboard';
 }
 export function AuthScreen({mode}:{mode:'login'|'signup'|'forgot'|'verify'|'invite'}){
   const {t,setSession,store,toast}=useApp();const navigate=useNavigate();
