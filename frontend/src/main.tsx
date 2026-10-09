@@ -8,4 +8,5 @@ import './ai-theme.css';
 import './polish.css';
 import './motion.css';
 import './layout.css';
+import './chat.css';
 createRoot(document.getElementById('root')!).render(<React.StrictMode><App/></React.StrictMode>);

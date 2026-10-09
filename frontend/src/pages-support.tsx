@@ -1,23 +1,27 @@
 /**
- * Live chat between a company and the platform operator.
+ * Live chat between a company and the platform operator, as a messenger.
  *
- * One conversation component serves both sides. The company's screen is that
- * component with no company id — meaning "my own thread" — and the operator's
- * is a list of companies beside the same component with one chosen. Writing it
- * twice would mean two places to fix whenever a message grows a field.
+ * Laid out the way a desktop messenger is, because that layout is not a style
+ * choice: the shell owns its height, the history scrolls inside it, and the
+ * composer is pinned. Written as a page of cards instead, the compose box ends
+ * up below the fold and the page scrolls underneath you while you are reading.
  *
- * Attachments are the point as much as the text: "the number says Not
- * verified" is a screenshot, and "the agent sounds wrong" is a recording of
- * it. A photo, a video and a voice note each render as the thing they are,
- * playable in place, rather than as a filename you have to download to see.
+ * One conversation component serves both sides. The operator gets it beside a
+ * list of companies; the company gets it alone, because a company only ever
+ * talks to one party and a list of one is furniture. Writing it twice would
+ * mean two places to fix whenever a message grows a field.
+ *
+ * Attachments are as much the point as the text. "The number says Not
+ * verified" is a screenshot and "the agent sounds wrong" is a recording of it,
+ * so each renders as the thing it is, playable in the bubble.
  */
-import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
-import {Link, useNavigate, useParams} from 'react-router-dom';
+import {Fragment, useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import {useNavigate, useParams} from 'react-router-dom';
 import {
-  ArrowLeft, Building2, Check, CheckCheck, Circle, Download, FileText, Loader2, Mic,
-  Paperclip, Play, Send, Square, Trash2, X,
+  ArrowLeft, Building2, Check, CheckCheck, Download, FileText, Image as ImageIcon,
+  Loader2, Mic, MicOff, Paperclip, Search, Send, Trash2, Video, X,
 } from 'lucide-react';
-import {Badge, Button, Empty, PageHead} from './app';
+import {Badge, Button, PageHead} from './app';
 import {useApp} from './app-context';
 import {ErrorNote, Loading, useConfirm} from './ui';
 import {
@@ -31,6 +35,71 @@ function errorText(cause: unknown, fallback: string): string {
   return cause instanceof Error && cause.message ? cause.message : fallback;
 }
 
+/** Up to two initials, so a list of names reads as a list of people. */
+function initials(name: string): string {
+  const words = (name || '?').trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return '?';
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return (words[0][0] + words[words.length - 1][0]).toUpperCase();
+}
+
+function Avatar({name, online, small}: {name: string; online?: boolean; small?: boolean}) {
+  return <span className={'sc-avatar' + (small ? ' small' : '') + (online ? ' online' : '')}
+    aria-hidden="true">
+    {initials(name)}
+    {online !== undefined && <span className="sc-dot"/>}
+  </span>;
+}
+
+/**
+ * Make an element fill whatever is left below it.
+ *
+ * This was `height: calc(100vh - 250px)` in CSS, which has to assume how tall
+ * everything above it is — and the page heading wraps to three lines on a
+ * narrow window, which pushed the compose box off the bottom of the screen.
+ * Measuring the element's own top is exact at every width.
+ *
+ * `visualViewport` rather than `innerHeight` where it exists, so an on-screen
+ * keyboard shrinks the conversation instead of shoving the composer out of
+ * sight behind it.
+ */
+function useFillsRemainingHeight(minimum = 420) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const fit = () => {
+      const node = ref.current;
+      if (!node) return;
+      const viewport = window.visualViewport?.height ?? window.innerHeight;
+      const top = node.getBoundingClientRect().top;
+      // The gap below matches the page padding, so the shell does not sit
+      // flush against the bottom edge of the window.
+      const gap = window.innerWidth <= 760 ? 22 : 34;
+      node.style.height = Math.max(minimum, viewport - top - gap) + 'px';
+    };
+
+    fit();
+    // Twice more on the next frames: web fonts and the lazily-loaded page
+    // above can both still be settling when this first runs, and either moves
+    // our top edge.
+    const soon = requestAnimationFrame(fit);
+    const later = window.setTimeout(fit, 250);
+
+    window.addEventListener('resize', fit);
+    window.visualViewport?.addEventListener('resize', fit);
+    window.visualViewport?.addEventListener('scroll', fit);
+    return () => {
+      cancelAnimationFrame(soon);
+      window.clearTimeout(later);
+      window.removeEventListener('resize', fit);
+      window.visualViewport?.removeEventListener('resize', fit);
+      window.visualViewport?.removeEventListener('scroll', fit);
+    };
+  }, [minimum]);
+
+  return ref;
+}
+
 // ---------------------------------------------------------------------------
 // One attachment
 // ---------------------------------------------------------------------------
@@ -39,10 +108,12 @@ function errorText(cause: unknown, fallback: string): string {
  * The file, as the thing it is.
  *
  * The URL is fetched when the bubble renders rather than stored on the
- * message: it is signed and short-lived, so one minted at page load would
- * have expired by the time somebody scrolled back to it.
+ * message: it is signed and short-lived, so one minted at page load would have
+ * expired by the time somebody scrolled back to it.
  */
-function AttachmentView({message, tenantId}: {message: SupportMessage; tenantId: string}) {
+function Attachment({message, tenantId, onGrew}: {
+  message: SupportMessage; tenantId: string; onGrew?: () => void;
+}) {
   const attachment = message.attachment!;
   const [url, setUrl] = useState('');
   const [failed, setFailed] = useState(false);
@@ -56,34 +127,42 @@ function AttachmentView({message, tenantId}: {message: SupportMessage; tenantId:
     return () => {alive = false};
   }, [tenantId, message.id]);
 
-  if (failed) return <div className="small muted">
+  useEffect(() => {
+    if (!full) return;
+    const onKey = (e: KeyboardEvent) => {if (e.key === 'Escape') setFull(false)};
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [full]);
+
+  if (failed) return <div className="sc-file-wait">
     {KIND_LABEL[attachment.kind]} unavailable — it may have been removed.
   </div>;
-  if (!url) return <div className="attachment-loading">
-    <Loader2 size={14} className="spin"/> Loading the {KIND_LABEL[attachment.kind].toLowerCase()}…
+  if (!url) return <div className="sc-file-wait">
+    <Loader2 size={13} className="spin"/> Loading the {KIND_LABEL[attachment.kind].toLowerCase()}…
   </div>;
 
   if (attachment.kind === 'image') return <>
-    <button type="button" className="attachment-image" onClick={() => setFull(true)}
+    <button type="button" className="sc-photo" onClick={() => setFull(true)}
       title="See it full size">
-      <img src={url} alt={attachment.name} loading="lazy"/>
+      <img src={url} alt={attachment.name} loading="lazy" onLoad={() => onGrew?.()}/>
     </button>
-    {full && <div className="lightbox" onClick={() => setFull(false)} role="dialog" aria-modal="true">
-      <button className="icon-btn lightbox-close" aria-label="Close"><X size={22}/></button>
+    {full && <div className="sc-lightbox" role="dialog" aria-modal="true"
+      onClick={() => setFull(false)}>
+      <button className="icon-btn sc-lightbox-x" aria-label="Close"><X size={22}/></button>
       <img src={url} alt={attachment.name} onClick={e => e.stopPropagation()}/>
     </div>}
   </>;
 
-  if (attachment.kind === 'video') return <video className="attachment-video" src={url}
-    controls preload="metadata" playsInline/>;
+  if (attachment.kind === 'video') return <video className="sc-video" src={url}
+    controls preload="metadata" playsInline onLoadedMetadata={() => onGrew?.()}/>;
 
-  if (attachment.kind === 'voice') return <div className="attachment-voice">
+  if (attachment.kind === 'voice') return <div className="sc-voice">
     <audio src={url} controls preload="metadata"/>
     {attachment.durationSeconds > 0
       && <span className="small muted">{formatClock(attachment.durationSeconds)}</span>}
   </div>;
 
-  return <a className="attachment-file" href={url} target="_blank" rel="noreferrer">
+  return <a className="sc-doc" href={url} target="_blank" rel="noreferrer">
     <FileText size={18}/>
     <span>
       <strong>{attachment.name}</strong>
@@ -97,31 +176,34 @@ function AttachmentView({message, tenantId}: {message: SupportMessage; tenantId:
 // One message
 // ---------------------------------------------------------------------------
 
-function Bubble({message, tenantId, me, onDelete}: {
+function Message({message, tenantId, me, tail, showAuthor, onDelete, onGrew}: {
   message: SupportMessage; tenantId: string; me: Author;
+  tail: boolean; showAuthor: boolean;
   onDelete: (message: SupportMessage) => void;
+  /** Called when an attachment finishes loading and the bubble changes size. */
+  onGrew: () => void;
 }) {
   const mine = message.author === me;
-  // Either side may remove their own; the operator may remove anything,
+  // Either side may withdraw their own; the operator may remove anything,
   // because the operator is who has to deal with what was uploaded.
   const canDelete = mine || me === 'operator';
 
-  return <div className={'chat-line ' + (mine ? 'mine' : 'theirs')}>
-    <div className="chat-bubble">
-      {!mine && message.authorName
-        && <div className="chat-who">{message.authorName}</div>}
-      {message.attachment && <AttachmentView message={message} tenantId={tenantId}/>}
-      {message.body && <p className="chat-text">{message.body}</p>}
-      <div className="chat-meta">
-        <span>{formatWhen(message.createdAt)}</span>
+  return <div className={'sc-turn ' + (mine ? 'out' : 'in') + (tail ? ' tail' : '')}>
+    <div className="sc-msg">
+      {canDelete && <span className="sc-tools">
+        <button type="button" onClick={() => onDelete(message)}
+          aria-label="Delete this message"><Trash2 size={12}/></button>
+      </span>}
+      {!mine && showAuthor && message.authorName
+        && <span className="sc-author">{message.authorName}</span>}
+      {message.attachment && <Attachment message={message} tenantId={tenantId} onGrew={onGrew}/>}
+      {message.body && <p className="sc-text">{message.body}</p>}
+      <span className="sc-stamp">
+        {formatWhen(message.createdAt)}
         {mine && (message.readAt
-          ? <CheckCheck size={13} className="tick read" aria-label="Read"/>
-          : <Check size={13} className="tick" aria-label="Sent"/>)}
-        {canDelete && <button type="button" className="chat-delete"
-          onClick={() => onDelete(message)} aria-label="Delete this message">
-          <Trash2 size={12}/>
-        </button>}
-      </div>
+          ? <CheckCheck size={13} className="sc-tick seen" aria-label="Read"/>
+          : <Check size={13} className="sc-tick" aria-label="Sent"/>)}
+      </span>
     </div>
   </div>;
 }
@@ -133,11 +215,11 @@ function Bubble({message, tenantId, me, onDelete}: {
 /**
  * A voice note, recorded in the browser.
  *
- * `audio/webm` is what Chrome and Firefox produce and Safari now accepts; the
- * server takes ogg, mp4 and wav too, so whatever the platform hands back is
+ * `audio/webm` is what Chrome and Firefox produce and Safari accepts; the
+ * server also takes ogg, mp4 and wav, so whatever the platform hands back is
  * sendable. The length is measured here because a webm from MediaRecorder
- * carries no duration in its header, and an audio element reports `Infinity`
- * for it — so without this the player shows no length at all.
+ * carries no duration in its header and an audio element reports `Infinity`
+ * for it — without this the player would show no length at all.
  */
 function useVoiceRecorder(onReady: (file: File, seconds: number) => void) {
   const [recording, setRecording] = useState(false);
@@ -210,41 +292,46 @@ function useVoiceRecorder(onReady: (file: File, seconds: number) => void) {
     }
   };
 
-  return {recording, seconds, error, start, stop: () => finish(true), cancel: () => finish(false)};
+  return {
+    recording, seconds, error,
+    start, stop: () => finish(true), cancel: () => finish(false),
+  };
 }
 
 // ---------------------------------------------------------------------------
-// The conversation
+// The conversation pane
 // ---------------------------------------------------------------------------
 
-type ConversationProps = {
+type PaneProps = {
   /** The company, for the operator. Empty means "my own thread". */
   tenantId: string;
   me: Author;
-  heading: string;
-  subheading?: string;
-  action?: React.ReactNode;
+  /** Who is on the other end, named. */
+  them: string;
+  /** Shown to the left of the name in the pane header. */
+  back?: React.ReactNode;
 };
 
-export function SupportConversation({tenantId, me, heading, subheading, action}: ConversationProps) {
+export function SupportPane({tenantId, me, them, back}: PaneProps) {
   const {toast} = useApp();
   const [confirm, confirmDialog] = useConfirm();
   const [messages, setMessages] = useState<SupportMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [connected, setConnected] = useState(false);
-  const [otherOnline, setOtherOnline] = useState(false);
-  const [otherTyping, setOtherTyping] = useState(false);
+  const [theyAreHere, setTheyAreHere] = useState(false);
+  const [theyAreTyping, setTheyAreTyping] = useState(false);
   const [draft, setDraft] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [voiceLength, setVoiceLength] = useState(0);
   const [sending, setSending] = useState(false);
   const picker = useRef<HTMLInputElement>(null);
   const foot = useRef<HTMLDivElement>(null);
+  const box = useRef<HTMLTextAreaElement>(null);
   const socket = useRef<SupportSocket | null>(null);
   const typingSentAt = useRef(0);
 
-  const them: Author = me === 'company' ? 'operator' : 'company';
+  const other: Author = me === 'company' ? 'operator' : 'company';
 
   /** Upsert by id: a message arrives from the POST and again on the socket. */
   const absorb = useCallback((incoming: SupportMessage) => {
@@ -263,19 +350,19 @@ export function SupportConversation({tenantId, me, heading, subheading, action}:
     try {
       const body = await supportApi.conversation(tenantId);
       setMessages(body.messages);
-      setOtherOnline(Boolean(me === 'company' ? body.operatorOnline : body.companyOnline));
+      setTheyAreHere(Boolean(me === 'company' ? body.operatorOnline : body.companyOnline));
       setError('');
-      // Opening the thread is reading it. Done here rather than on every
-      // incoming message so a long backlog is one request, not fifty.
+      // Opening the thread is reading it. Done here rather than per message so
+      // a long backlog is one request, not fifty.
       await supportApi.markRead(tenantId);
       setMessages(old => old.map(m =>
-        m.author === them && m.readAt === null ? {...m, readAt: Date.now() / 1000} : m));
+        m.author === other && m.readAt === null ? {...m, readAt: Date.now() / 1000} : m));
     } catch (cause) {
       setError(errorText(cause, 'Could not load the conversation.'));
     } finally {
       setLoading(false);
     }
-  }, [tenantId, me, them]);
+  }, [tenantId, me, other]);
 
   useEffect(() => {
     setLoading(true);
@@ -294,28 +381,28 @@ export function SupportConversation({tenantId, me, heading, subheading, action}:
       (event: SocketEvent) => {
         switch (event.type) {
           case 'hello':
-            setOtherOnline(me === 'company' ? event.operatorOnline : event.companyOnline);
+            setTheyAreHere(me === 'company' ? event.operatorOnline : event.companyOnline);
             break;
           case 'message':
             absorb(event.message);
-            if (event.message.author === them) {
-              setOtherTyping(false);
+            if (event.message.author === other) {
+              setTheyAreTyping(false);
               // They are being read right now, so say so — the sender's second
               // tick is the only thing that makes "seen" mean anything.
               void supportApi.markRead(tenantId).catch(() => undefined);
             }
             break;
           case 'read':
-            if (event.by === them) {
+            if (event.by === other) {
               setMessages(old => old.map(m =>
                 m.author === me && m.readAt === null ? {...m, readAt: Date.now() / 1000} : m));
             }
             break;
           case 'typing':
-            if (event.side === them) setOtherTyping(event.on);
+            if (event.side === other) setTheyAreTyping(event.on);
             break;
           case 'presence':
-            if (event.side === them) setOtherOnline(event.online);
+            if (event.side === other) setTheyAreHere(event.online);
             break;
           case 'deleted':
             setMessages(old => old.filter(m => m.id !== event.messageId));
@@ -333,12 +420,24 @@ export function SupportConversation({tenantId, me, heading, subheading, action}:
       live.close();
       socket.current = null;
     };
-  }, [tenantId, me, them, absorb, load]);
+  }, [tenantId, me, other, absorb, load]);
 
-  // Stay at the newest message, the way every chat does.
+  // Stay at the newest message, the way every messenger does.
+  const keepAtBottom = useCallback((smooth = true) => {
+    foot.current?.scrollIntoView({block: 'end', behavior: smooth ? 'smooth' : 'auto'});
+  }, []);
+
   useEffect(() => {
-    foot.current?.scrollIntoView({block: 'end', behavior: messages.length > 40 ? 'auto' : 'smooth'});
-  }, [messages.length, otherTyping]);
+    keepAtBottom(messages.length <= 40);
+  }, [messages.length, theyAreTyping, keepAtBottom]);
+
+  // The compose box grows with what is typed and stops at the CSS ceiling.
+  useEffect(() => {
+    const node = box.current;
+    if (!node) return;
+    node.style.height = 'auto';
+    node.style.height = Math.min(node.scrollHeight, 150) + 'px';
+  }, [draft]);
 
   const choose = (chosen: File | null) => {
     if (!chosen) return;
@@ -401,145 +500,207 @@ export function SupportConversation({tenantId, me, heading, subheading, action}:
     });
   };
 
-  // Day headings, so a thread read a week later has somewhere to anchor.
-  const withDays = useMemo(() => {
-    let last = '';
-    return messages.map(message => {
+  /**
+   * Day pills, and which bubble in a run gets the tail.
+   *
+   * A messenger groups a run from one person and puts the tail on the last of
+   * them; giving every bubble a tail is what makes a long reply look like a
+   * stack of unrelated notes.
+   */
+  const laidOut = useMemo(() => {
+    let lastDay = '';
+    return messages.map((message, index) => {
       const day = dayLabel(message.createdAt);
-      const first = day !== last;
-      last = day;
-      return {message, day: first ? day : ''};
+      const newDay = day !== lastDay;
+      lastDay = day;
+      const next = messages[index + 1];
+      const previous = messages[index - 1];
+      return {
+        message,
+        day: newDay ? day : '',
+        tail: !next || next.author !== message.author
+          || dayLabel(next.createdAt) !== day,
+        showAuthor: newDay || !previous || previous.author !== message.author,
+      };
     });
   }, [messages]);
 
-  const theirName = me === 'company' ? 'Support' : heading;
+  return <div className="sc-pane">
+    <div className="sc-pane-head">
+      {back}
+      <Avatar name={them} online={theyAreHere}/>
+      <div className="sc-who">
+        <strong>{them}</strong>
+        <div className={'sc-presence' + (theyAreHere ? ' on' : '')}>
+          {theyAreTyping ? 'typing…' : theyAreHere ? 'online' : me === 'company'
+            ? 'not online — leave a message, it will be answered here'
+            : 'not online — they will see this when they next sign in'}
+        </div>
+      </div>
+      {!connected && <Badge tone="warning">Reconnecting</Badge>}
+    </div>
 
-  return <div className="stack">
-    <PageHead eyebrow={me === 'company' ? 'Help' : 'Support'} title={heading}
-      description={subheading} action={action}/>
-
-    {error && <ErrorNote error={error} onRetry={() => void load()}/>}
-
-    <div className="card chat-card">
-      <div className="chat-head">
-        <div className="row" style={{gap: 10}}>
-          <Circle size={9} className={otherOnline ? 'presence on' : 'presence'}/>
-          <div>
-            <strong>{theirName}</strong>
-            <div className="small muted">
-              {otherOnline ? 'Online now' : me === 'company'
-                ? 'Not online — leave a message and it will be answered here'
-                : 'Not online — they will see this when they next sign in'}
+    <div className="sc-history">
+      {error && <ErrorNote error={error} onRetry={() => void load()}/>}
+      {loading ? <Loading label="Loading the conversation…"/>
+        : messages.length === 0
+          ? <div className="sc-empty">
+              <strong>{me === 'company' ? 'Nothing here yet' : 'No messages yet'}</strong>
+              <p className="small muted">
+                {me === 'company'
+                  ? 'Ask anything about your account, your numbers or a call that went '
+                    + 'wrong. Send a screenshot, a screen recording or a voice note if '
+                    + 'that is easier than describing it.'
+                  : 'You can start this conversation — they will see it next time they '
+                    + 'open their workspace, and get a badge on it.'}
+              </p>
             </div>
-          </div>
-        </div>
-        <Badge tone={connected ? 'live' : 'warning'}>
-          {connected ? 'Live' : 'Reconnecting'}
-        </Badge>
-      </div>
-
-      <div className="chat-scroll">
-        {loading ? <Loading label="Loading the conversation…"/>
-          : messages.length === 0
-            ? <div className="chat-empty">
-                <strong>{me === 'company' ? 'Nothing here yet' : 'No messages from them yet'}</strong>
-                <p className="small muted">
-                  {me === 'company'
-                    ? 'Ask anything about your account, your numbers or a call that went '
-                      + 'wrong. Send a screenshot, a screen recording or a voice note if it '
-                      + 'is easier than describing it.'
-                    : 'You can start the conversation — they will see it next time they '
-                      + 'open their workspace, and get a badge on it.'}
-                </p>
-              </div>
-            : withDays.map(({message, day}) => <div key={message.id}>
-                {day && <div className="chat-day"><span>{day}</span></div>}
-                <Bubble message={message} tenantId={tenantId} me={me} onDelete={remove}/>
-              </div>)}
-        {otherTyping && <div className="chat-line theirs">
-          <div className="chat-bubble typing">
-            <span className="dot-typing"/><span className="dot-typing"/><span className="dot-typing"/>
-          </div>
-        </div>}
-        <div ref={foot}/>
-      </div>
-
-      {recorder.error && <div className="notice danger small">{recorder.error}</div>}
-
-      {recorder.recording && <div className="chat-recording">
-        <span className="recording-dot"/>
-        <strong>Recording {formatClock(recorder.seconds)}</strong>
-        <div className="row" style={{gap: 8, marginInlineStart: 'auto'}}>
-          <Button variant="outline" small onClick={recorder.cancel}>Discard</Button>
-          <Button small onClick={recorder.stop}><Square size={13}/> Stop</Button>
+          : laidOut.map(({message, day, tail, showAuthor}) => <Fragment key={message.id}>
+              {day && <div className="sc-daypill">{day}</div>}
+              <Message message={message} tenantId={tenantId} me={me} tail={tail}
+                showAuthor={showAuthor} onDelete={remove} onGrew={keepAtBottom}/>
+            </Fragment>)}
+      {theyAreTyping && <div className="sc-turn in tail">
+        <div className="sc-msg">
+          <span className="sc-typing"><i/><i/><i/></span>
         </div>
       </div>}
+      <div ref={foot}/>
+    </div>
 
-      {file && !recorder.recording && <div className="chat-pending">
-        {kindOf(file.type) === 'image'
-          ? <img src={URL.createObjectURL(file)} alt=""/>
-          : kindOf(file.type) === 'voice' ? <Play size={16}/> : <FileText size={16}/>}
-        <span>
-          <strong>{file.name}</strong>
-          <div className="small muted">
-            {KIND_LABEL[kindOf(file.type)]} · {formatBytes(file.size)}
-            {voiceLength > 0 && ` · ${formatClock(voiceLength)}`}
-          </div>
-        </span>
-        <button className="icon-btn" onClick={clearAttachment} aria-label="Remove the attachment">
-          <X size={16}/>
-        </button>
-      </div>}
+    {recorder.error && <div className="sc-tray">
+      <MicOff size={16}/><span className="small">{recorder.error}</span>
+    </div>}
 
-      <div className="chat-composer">
-        <textarea className="textarea" rows={1} value={draft}
-          placeholder={`Write to ${me === 'company' ? 'support' : heading}…`}
-          onChange={e => noteTyping(e.target.value)}
-          onBlur={() => socket.current?.send({type: 'typing', on: false})}
-          onKeyDown={e => {
-            if (e.key === 'Enter' && !e.shiftKey) {e.preventDefault(); void send()}
-          }}/>
-        <input ref={picker} type="file" hidden accept={ACCEPT}
-          onChange={e => choose(e.target.files?.[0] ?? null)}/>
-        <button className="icon-btn" title="Attach a photo, video or file"
-          onClick={() => picker.current?.click()} disabled={sending || recorder.recording}>
-          <Paperclip size={18}/>
-        </button>
-        <button className={'icon-btn' + (recorder.recording ? ' recording' : '')}
-          title="Record a voice note" disabled={sending}
-          onClick={() => recorder.recording ? recorder.stop() : void recorder.start()}>
-          <Mic size={18}/>
-        </button>
-        <Button onClick={() => void send()}
-          disabled={sending || recorder.recording || (!draft.trim() && !file)}>
-          {sending ? <Loader2 size={15} className="spin"/> : <Send size={15}/>}
-        </Button>
-      </div>
-      <div className="help chat-hint">
-        Enter sends, Shift+Enter starts a line. Photos up to 10 MB, video up to
-        40 MB.
-      </div>
+    {recorder.recording && <div className="sc-tray">
+      <span className="sc-rec-dot"/>
+      <span><strong>Recording {formatClock(recorder.seconds)}</strong></span>
+      <Button variant="outline" small onClick={recorder.cancel}>Discard</Button>
+      <Button small onClick={recorder.stop}>Use it</Button>
+    </div>}
+
+    {file && !recorder.recording && <div className="sc-tray">
+      {kindOf(file.type) === 'image'
+        ? <img src={URL.createObjectURL(file)} alt=""/>
+        : kindOf(file.type) === 'video' ? <Video size={18}/>
+          : kindOf(file.type) === 'voice' ? <Mic size={18}/> : <FileText size={18}/>}
+      <span>
+        <strong>{file.name}</strong>
+        <div className="small muted">
+          {KIND_LABEL[kindOf(file.type)]} · {formatBytes(file.size)}
+          {voiceLength > 0 && ` · ${formatClock(voiceLength)}`}
+        </div>
+      </span>
+      <button className="icon-btn" onClick={clearAttachment}
+        aria-label="Remove the attachment"><X size={16}/></button>
+    </div>}
+
+    <div className="sc-compose">
+      <input ref={picker} type="file" hidden accept={ACCEPT}
+        onChange={e => choose(e.target.files?.[0] ?? null)}/>
+      <button className="sc-icon" title="Attach a photo, video or file"
+        onClick={() => picker.current?.click()} disabled={sending || recorder.recording}>
+        <Paperclip size={19}/>
+      </button>
+      <button className={'sc-icon' + (recorder.recording ? ' rec' : '')} disabled={sending}
+        title={recorder.recording ? 'Stop recording' : 'Record a voice note'}
+        onClick={() => recorder.recording ? recorder.stop() : void recorder.start()}>
+        <Mic size={19}/>
+      </button>
+      <textarea ref={box} className="textarea" rows={1} value={draft}
+        placeholder={`Message ${them}`}
+        onChange={e => noteTyping(e.target.value)}
+        onBlur={() => socket.current?.send({type: 'typing', on: false})}
+        onKeyDown={e => {
+          if (e.key === 'Enter' && !e.shiftKey) {e.preventDefault(); void send()}
+        }}/>
+      <button className="sc-send" onClick={() => void send()} aria-label="Send"
+        disabled={sending || recorder.recording || (!draft.trim() && !file)}>
+        {sending ? <Loader2 size={17} className="spin"/> : <Send size={17}/>}
+      </button>
     </div>
     {confirmDialog}
   </div>;
 }
 
 // ---------------------------------------------------------------------------
-// The company's screen
+// The company's screen: the conversation, and nothing beside it
 // ---------------------------------------------------------------------------
 
 export function SupportScreen() {
-  return <SupportConversation
-    tenantId="" me="company" heading="Contact support"
-    subheading="A direct line to the people who run the platform. Send a screenshot, a screen recording or a voice note."
-  />;
+  const shell = useFillsRemainingHeight();
+  return <div className="stack">
+    <PageHead eyebrow="Help" title="Contact support"
+      description="A direct line to the people who run the platform. Send a screenshot, a screen recording or a voice note."/>
+    <div className="sc-shell solo" ref={shell}>
+      <SupportPane tenantId="" me="company" them="Support"/>
+    </div>
+  </div>;
 }
 
 // ---------------------------------------------------------------------------
-// The operator's screens
+// The operator's screen: the list beside the conversation
 // ---------------------------------------------------------------------------
 
+function ThreadList({rows, openId, onOpen, loading}: {
+  rows: ThreadRow[]; openId: string; loading: boolean;
+  onOpen: (tenantId: string) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const found = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return rows;
+    return rows.filter(row =>
+      row.name.toLowerCase().includes(needle)
+      || row.tenantId.toLowerCase().includes(needle));
+  }, [rows, query]);
+
+  const waiting = rows.reduce((total, row) => total + (row.unreadForOperator > 0 ? 1 : 0), 0);
+
+  return <div className="sc-list">
+    <div className="sc-list-head">
+      <div className="row between">
+        <strong>Conversations</strong>
+        {waiting > 0 && <Badge tone="live">{waiting} waiting</Badge>}
+      </div>
+      <div className="sc-search">
+        <Search size={15}/>
+        <input className="input" value={query} placeholder="Search companies"
+          onChange={e => setQuery(e.target.value)}/>
+      </div>
+    </div>
+    <div className="sc-list-scroll">
+      {loading && <Loading label="Loading…"/>}
+      {!loading && found.length === 0 && <div className="sc-empty">
+        <strong>Nothing matches</strong>
+        <p className="small muted">No company here by that name.</p>
+      </div>}
+      {found.map(row => <button type="button" key={row.tenantId}
+        className={'sc-row' + (row.tenantId === openId ? ' active' : '')
+          + (row.unreadForOperator > 0 ? ' unread' : '')}
+        onClick={() => onOpen(row.tenantId)}>
+        <Avatar name={row.name} online={row.online}/>
+        <span className="sc-row-main">
+          <span className="sc-row-top">
+            <strong>{row.name}</strong>
+            <span className="sc-row-when">{formatWhen(row.lastMessageAt)}</span>
+          </span>
+          <span className="sc-row-preview">
+            {row.lastAuthor === 'operator' && <Check size={12}/>}
+            <span>{row.lastPreview || 'No messages yet'}</span>
+            {row.suspended && <Badge tone="danger">Off</Badge>}
+          </span>
+        </span>
+        {row.unreadForOperator > 0
+          && <span className="sc-count">{row.unreadForOperator}</span>}
+      </button>)}
+    </div>
+  </div>;
+}
+
 export function PlatformSupport() {
+  const {tenantId = ''} = useParams();
+  const navigate = useNavigate();
   const [rows, setRows] = useState<ThreadRow[] | null>(null);
   const [error, setError] = useState('');
 
@@ -569,72 +730,41 @@ export function PlatformSupport() {
     return () => live.close();
   }, [load]);
 
-  const waiting = (rows ?? []).filter(row => row.unreadForOperator > 0);
+  const open = (rows ?? []).find(row => row.tenantId === tenantId);
+  const shell = useFillsRemainingHeight();
 
   return <div className="stack">
     <PageHead eyebrow="Platform" title="Support"
-      description="Every company that can write to you, and whatever they are waiting on."/>
+      description="Every company that can write to you, and whatever they are waiting on."
+      action={open && <Button variant="outline"
+        to={'/platform/companies/' + encodeURIComponent(open.tenantId)}>
+        <Building2 size={15}/> Their account
+      </Button>}/>
 
     {error && <ErrorNote error={error} onRetry={() => void load()}/>}
 
-    {waiting.length > 0 && <div className="notice">
-      <strong>{waiting.length} {waiting.length === 1 ? 'company is' : 'companies are'} waiting
-      </strong> — {waiting.map(row => row.name).join(', ')}.
-    </div>}
-
-    {rows === null && !error ? <Loading label="Loading conversations…"/>
-      : (rows ?? []).length === 0
-        ? <Empty icon={Building2} title="No companies yet"
-            body="A conversation appears here as soon as there is a company to have one with."/>
-        : <div className="card">
-            {(rows ?? []).map(row => <Link className="list-row thread-row"
-              key={row.tenantId} to={'/platform/support/' + encodeURIComponent(row.tenantId)}>
-              <div className="list-row-main">
-                <div className="row" style={{gap: 9}}>
-                  <Circle size={8} className={row.online ? 'presence on' : 'presence'}/>
-                  <strong>{row.name}</strong>
-                  {row.suspended && <Badge tone="danger">Switched off</Badge>}
-                  {row.unreadForOperator > 0
-                    && <Badge tone="live">{row.unreadForOperator} new</Badge>}
-                </div>
-                <div className="small muted thread-preview">
-                  {row.lastPreview
-                    ? <>{row.lastAuthor === 'operator' && <span className="muted">You: </span>}
-                        {row.lastPreview}</>
-                    : 'No messages yet'}
-                </div>
+    <div className={'sc-shell' + (tenantId ? ' has-open' : '')} ref={shell}>
+      <ThreadList rows={rows ?? []} openId={tenantId} loading={rows === null && !error}
+        onOpen={id => navigate('/platform/support/' + encodeURIComponent(id))}/>
+      {tenantId
+        ? <SupportPane
+            key={tenantId} tenantId={tenantId} me="operator"
+            them={open?.name || tenantId}
+            back={<button className="sc-icon" aria-label="Back to the list"
+              onClick={() => navigate('/platform/support')}><ArrowLeft size={18}/></button>}
+          />
+        : <div className="sc-pane">
+            <div className="sc-history">
+              <div className="sc-empty">
+                <ImageIcon size={30} style={{color: 'var(--accent)', marginBottom: 10}}/>
+                <strong>Pick a company</strong>
+                <p className="small muted">
+                  Choose a conversation on the left to read it and reply. Anyone
+                  waiting on you is at the top, with a count.
+                </p>
               </div>
-              <div className="small muted">{formatWhen(row.lastMessageAt)}</div>
-            </Link>)}
+            </div>
           </div>}
+    </div>
   </div>;
-}
-
-export function PlatformSupportThread() {
-  const {tenantId} = useParams();
-  const navigate = useNavigate();
-  const [name, setName] = useState('');
-
-  useEffect(() => {
-    if (!tenantId) return;
-    supportApi.conversation(tenantId, 1)
-      .then(body => setName(body.company?.name || tenantId))
-      .catch(() => setName(tenantId));
-  }, [tenantId]);
-
-  if (!tenantId) {
-    navigate('/platform/support');
-    return null;
-  }
-
-  return <SupportConversation
-    tenantId={tenantId} me="operator" heading={name || tenantId}
-    subheading="They see your replies the moment you send them, and get a badge if they are away."
-    action={<div className="row wrap">
-      <Button variant="outline" to="/platform/support"><ArrowLeft size={15}/> All conversations</Button>
-      <Button variant="outline" to={'/platform/companies/' + encodeURIComponent(tenantId)}>
-        <Building2 size={15}/> Their account
-      </Button>
-    </div>}
-  />;
 }

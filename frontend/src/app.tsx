@@ -70,7 +70,8 @@ import {DialerScreen} from './pages-dialer';
 import {CallHistoryScreen,CallDetailScreen} from './pages-history';
 import {MessagesScreen} from './pages-messages';
 import {AdminCompanies,AdminCompanyDetail,AdminHealth,AdminEngine} from './pages-admin';
-import {SupportScreen,PlatformSupport,PlatformSupportThread} from './pages-support';
+import {SupportScreen,PlatformSupport} from './pages-support';
+import {HelpBubble} from './help-bubble';
 import * as supportUnread from './lib/support-unread';
 import {DashboardScreen} from './pages-dashboard';
 import {SettingsScreen} from './pages-settings';
@@ -285,6 +286,11 @@ function Shell({children,platform=false}:{children:React.ReactNode;platform?:boo
         </div>
       </header>
       <main className="content">{children}</main>
+      {/* Not in the platform portal: /api/help answers a company, and the
+          operator is not one. Not on the support thread either — the launcher
+          lands on top of that page's own send button, and somebody already
+          talking to a person does not need the robot offered. */}
+      {!platform&&LIVE&&!location.pathname.startsWith('/app/support')&&<HelpBubble/>}
     </div>
     {palette&&<div className="modal-backdrop" onClick={()=>setPalette(false)}><div className="modal" onClick={e=>e.stopPropagation()}><div className="row between"><h2>{t('Go to')}</h2><button className="icon-btn" onClick={()=>setPalette(false)}><X size={18}/></button></div><input autoFocus className="input" value={query} onChange={e=>setQuery(e.target.value)} placeholder={t('Search pages and actions')}/><div className="command-list">{nav.flatMap(x=>x[1]).filter(x=>x[1].toLowerCase().includes(query.toLowerCase())).map(([Icon,label,path])=><button key={path} className="nav-link" style={{width:'100%',border:0,background:'transparent'}} onClick={()=>{navigate(path);setPalette(false);setQuery('')}}><Icon size={18}/>{t(label)}</button>)}</div></div></div>}
   </div>;
@@ -395,8 +401,10 @@ function AppRoutes(){
     <Route path="/platform/companies/:id" element={<PlatformOnly><WhenLive real={<AdminCompanyDetail/>}><PlatformCompanyDetail/></WhenLive></PlatformOnly>}/>
     <Route path="/platform/health" element={<PlatformOnly><WhenLive real={<AdminHealth/>}><PlatformHealth/></WhenLive></PlatformOnly>}/>
     <Route path="/platform/engine" element={<PlatformOnly><AdminEngine/></PlatformOnly>}/>
+    {/* One screen for both: the list is always there, and a chosen company
+        fills the pane beside it. */}
     <Route path="/platform/support" element={<PlatformOnly><PlatformSupport/></PlatformOnly>}/>
-    <Route path="/platform/support/:tenantId" element={<PlatformOnly><PlatformSupportThread/></PlatformOnly>}/>
+    <Route path="/platform/support/:tenantId" element={<PlatformOnly><PlatformSupport/></PlatformOnly>}/>
     {/* The portal used to list screens for features that do not exist —
         provisioning, shared presets, a search console, an audit trail. They
         redirect rather than 404 so an old bookmark still lands somewhere. */}
