@@ -63,7 +63,7 @@ import {TermsPage,PrivacyPage} from './legal';
 import {HistoryNavigationProvider} from './history-navigation';
 
 import {AppCtx,useApp} from './app-context';
-import {ApiKeyGate,ComingSoon,hasBackendKey} from './connect-backend';
+import {ComingSoon,hasBackendKey} from './connect-backend';
 import {AgentScreen,KnowledgeScreen} from './pages-agent';
 import {OperatorCompanies} from './pages-operator';
 import {LiveCalls} from './pages-live';
@@ -251,22 +251,17 @@ function Shell({children,platform=false}:{children:React.ReactNode;platform?:boo
 function NotFound(){return <div className="route-loading"><h2>Page not found</h2><p className="muted">That page does not exist. <Link to="/">Go back</Link>.</p></div>}
 
 /**
- * Live builds need the company API key before any workspace route can load,
- * because every request to the backend is made with it. Returns the gate to
- * render, or null to carry on. Marketing pages never reach here.
+ * Signing in is what produces the company API key now, so a workspace route
+ * with no key means nobody has signed in — send them to do that.
+ *
+ * This used to render `ApiKeyGate`, which asked for the key to be pasted in
+ * by hand. That was the stand-in for sign-in not existing; leaving it in
+ * front of `Protected` meant a real visitor met a box asking for a key only
+ * the backend had ever seen, and never reached the sign-in screen at all.
  */
-function useBackendGate(){
-  const [key,setKey]=useState(()=>hasBackendKey());
-  if(!LIVE||key)return null;
-  return <ApiKeyGate onReady={()=>{setKey(true);window.location.reload()}}/>;
-}
-
-/** Company workspace. Staff-only accounts are pushed back to their queue. */
 function Protected({children,manage=false}:{children:React.ReactNode;manage?:boolean}){
   const {session,role,hydrated}=useApp();
-  const gate=useBackendGate();
-  if(gate)return gate;
-  if(!session)return <Navigate to="/login" replace/>;
+  if(!session||(LIVE&&!hasBackendKey()))return <Navigate to="/login" replace/>;
   if(!hydrated)return <div className="route-loading">Loading your workspace…</div>;
   if(session.portal==='platform'&&!session.impersonating)return <Navigate to="/platform/companies" replace/>;
   if(manage&&role==='staff')return <Navigate to="/app/queue" replace/>;
@@ -278,8 +273,6 @@ function Protected({children,manage=false}:{children:React.ReactNode;manage?:boo
  */
 function PlatformOnly({children}:{children:React.ReactNode}){
   const {session,hydrated}=useApp();
-  const gate=useBackendGate();
-  if(gate)return gate;
   if(!session)return <Navigate to="/login" replace/>;
   if(!hydrated)return <div className="route-loading">Loading…</div>;
   if(session.portal!=='platform')return <NotFound/>;
