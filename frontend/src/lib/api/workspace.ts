@@ -122,4 +122,27 @@ export const workspace = {
     request<TeamInvite>('/api/team/invite', { method: 'POST', body: { email, role } }),
   revokeInvite: (token: string) => request<void>(`/api/team/invite/${token}`, { method: 'DELETE' }),
   removeMember: (userId: string) => request<void>(`/api/team/${userId}`, { method: 'DELETE' }),
+
+  // ---- Lookup and ask -------------------------------------------------------
+
+  lookupCalls: (counterparty: string) =>
+    request<{ calls: WireLookupCall[] }>('/api/calls', { query: { counterparty, limit: 30 } }),
+  recentCalls: (limit = 12) =>
+    request<{ calls: WireLookupCall[] }>('/api/calls', { query: { limit } }),
+  ask: (question: string, knowledgeBaseId: string) =>
+    request<{ answered: boolean; text: string }>('/api/ask', {
+      method: 'POST', body: { question, knowledgeBaseId },
+    }),
+};
+
+export type WireLookupCall = {
+  id: string;
+  channel: Channel;
+  direction: Direction;
+  counterparty: string;
+  startedAt: number;
+  durationSeconds: number;
+  knowledgeBaseName: string | null;
+  resolvedBy: string | null;
+  error: string | null;
 };

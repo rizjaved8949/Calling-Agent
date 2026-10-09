@@ -44,6 +44,7 @@ async def list_calls(
     offset: int = Query(0, ge=0),
     status_filter: CallStatus | None = Query(None, alias="status"),
     channel: Channel | None = None,
+    counterparty: str | None = Query(None, min_length=3),
 ) -> dict:
     calls = await call_repo.list_calls(
         tenant.phone_number_id,
@@ -51,6 +52,7 @@ async def list_calls(
         offset=offset,
         status=status_filter,
         channel=channel.value if channel else None,
+        counterparty=counterparty,
     )
     return {"calls": [c.public() for c in calls], "limit": limit, "offset": offset}
 

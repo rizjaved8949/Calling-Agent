@@ -133,3 +133,62 @@ async def compose(
         cut = text.rfind(". ", 0, MAX_REPLY_CHARS)
         text = text[: cut + 1] if cut > MAX_REPLY_CHARS // 2 else text[:MAX_REPLY_CHARS]
     return text
+
+
+_UNKNOWN_MARK = "NOT-IN-MATERIAL"
+
+
+async def ask(tenant: Tenant, question: str, knowledge: str) -> dict:
+    """What a staff member looking something up mid-call gets.
+
+    The same discipline as a WhatsApp reply — answer only from the material,
+    say plainly when it isn't there — but asked for directly rather than
+    folded into a conversational reply, and without the "write like a text
+    message" instructions that belong to that other job, not this one.
+
+    Returns `{"answered": bool, "text": str}` rather than just a string: a
+    person reading this mid-call needs to know instantly whether what
+    follows is grounded or an admission, and that is an easy thing to miss
+    in a sentence but not in a flag the UI can colour differently.
+    """
+    if not available() or not question.strip():
+        return {"answered": False, "text": ""}
+    if not knowledge.strip():
+        return {
+            "answered": False,
+            "text": "There is no material to check yet for this knowledge base.",
+        }
+
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client(api_key=settings.gemini_api_key.strip())
+    instructions = (
+        "You help a staff member look up facts from the material below, mid-call "
+        "or mid-conversation with a customer. Answer in one or two short, plain "
+        f"sentences — no markdown. If the material does not contain the answer, "
+        f"reply with exactly the single word {_UNKNOWN_MARK} and nothing else; do "
+        "not guess, approximate or invent a figure, date or policy.\n\n"
+        + knowledge
+    )
+    try:
+        response = await client.aio.models.generate_content(
+            model=settings.gemini_text_model,
+            contents=[types.Content(role="user", parts=[types.Part(text=question)])],
+            config=types.GenerateContentConfig(
+                system_instruction=instructions, max_output_tokens=300, temperature=0.1,
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001 — one failed lookup must not break the page
+        log.warning("tenant %s: ask failed (%s: %s)",
+                    tenant.phone_number_id, type(exc).__name__, str(exc)[:160])
+        return {"answered": False, "text": "Could not check that right now. Try again."}
+
+    text = (getattr(response, "text", "") or "").strip()
+    if not text or _UNKNOWN_MARK in text:
+        return {
+            "answered": False,
+            "text": "That isn't in this knowledge base. Tell the caller you will "
+                    "check and have someone follow up.",
+        }
+    return {"answered": True, "text": text}

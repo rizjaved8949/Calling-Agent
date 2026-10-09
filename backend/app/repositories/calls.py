@@ -239,6 +239,7 @@ async def list_calls(
     status: CallStatus | None = None,
     channel: str | None = None,
     since: float | None = None,
+    counterparty: str | None = None,
 ) -> list[Call]:
     params: dict[str, Any] = {
         "tenant_id": f"eq.{tenant_id}",
@@ -250,6 +251,13 @@ async def list_calls(
         params["data->>status"] = f"eq.{status.value}"
     if channel:
         params["data->>channel"] = f"eq.{channel}"
+    if counterparty:
+        # A substring, not an exact match — looking someone up during a call
+        # from a partial number is the whole point of this filter, and a
+        # customer's own formatting (spaces, a leading +) should not matter.
+        digits = "".join(ch for ch in counterparty if ch.isdigit())
+        if digits:
+            params["data->>counterparty"] = f"ilike.*{digits}*"
     if since is not None:
         # jsonb numbers compare as text unless cast, which would sort "9" after
         # "10". Comparing the timestamp column instead is both correct and

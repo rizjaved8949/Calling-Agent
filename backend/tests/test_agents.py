@@ -436,3 +436,40 @@ async def test_a_campaign_carries_its_agent_onto_every_call(fake_db):
     )
     assert campaign.public()["agentId"] == "agent-sales"
     assert campaign.public()["knowledgeBaseId"] == "kb-prices"
+
+
+# ---------------------------------------------------------------------------
+# Looking a caller up by number
+# ---------------------------------------------------------------------------
+
+def test_calls_can_be_found_by_a_partial_number(client, tenant_factory, auth):
+    import asyncio
+    from app.models.call import Call
+    from app.repositories import calls as call_repo
+
+    _, key = tenant_factory("360")
+    asyncio.run(call_repo.save_call(Call(tenantId="360", counterparty="+923001112222")))
+    asyncio.run(call_repo.save_call(Call(tenantId="360", counterparty="+923334445555")))
+
+    body = client.get("/api/calls?counterparty=3001112", headers=auth(key)).json()
+    assert len(body["calls"]) == 1
+    assert body["calls"][0]["counterparty"] == "+923001112222"
+
+
+def test_a_lookup_with_no_matches_is_an_empty_list_not_an_error(client, tenant_factory, auth):
+    _, key = tenant_factory("361")
+    body = client.get("/api/calls?counterparty=0000000", headers=auth(key)).json()
+    assert body["calls"] == []
+
+
+def test_a_lookup_never_crosses_tenants(client, tenant_factory, auth):
+    import asyncio
+    from app.models.call import Call
+    from app.repositories import calls as call_repo
+
+    _, key_a = tenant_factory("362")
+    _, key_b = tenant_factory("363")
+    asyncio.run(call_repo.save_call(Call(tenantId="362", counterparty="+923001112222")))
+
+    body = client.get("/api/calls?counterparty=3001112", headers=auth(key_b)).json()
+    assert body["calls"] == []

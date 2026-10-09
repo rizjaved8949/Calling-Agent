@@ -54,6 +54,10 @@ class FakeSupabase:
             elif condition.startswith("gte."):
                 if str(self._value(row, field) or "") < condition[4:]:
                     return False
+            elif condition.startswith("ilike."):
+                needle = condition[6:].strip("*").lower()
+                if needle not in str(self._value(row, field) or "").lower():
+                    return False
         return True
 
     async def select(self, table: str, *, params: dict[str, Any] | None = None) -> list[dict]:

@@ -16,12 +16,13 @@ import {Badge, Button, Empty, Field, PageHead} from './app';
 import {useApp} from './app-context';
 import {
   workspace, type Agent, type KnowledgeBase, type KbDocument, type CallSetup,
-  type Channel, type TeamMember, type TeamInvite,
+  type Channel, type TeamMember, type TeamInvite, type WireLookupCall,
 } from './lib/api/workspace';
 import {friendlyAuthError, loginWithEmail, acceptInvite, peekInvite} from './lib/api/auth';
 import {setAuthToken} from './lib/api';
 import {auth as firebaseAuth} from './lib/firebase';
 import {createUserWithEmailAndPassword} from 'firebase/auth';
+import {LiveCalls} from './pages-live';
 
 const CHANNEL_LABEL: Record<Channel, string> = {
   PHONE: 'Phone line', WHATSAPP_CALL: 'WhatsApp calling', WHATSAPP_MESSAGE: 'WhatsApp messaging',
@@ -613,4 +614,132 @@ async function registerWithEmailForInvite(email: string, password: string) {
   // that step, and calling both would create a company nobody asked for.
   if (!firebaseAuth) throw new Error('Sign-in is not configured in this build.');
   await createUserWithEmailAndPassword(firebaseAuth, email, password);
+}
+
+// ---------------------------------------------------------------------------
+// Staff console: the live queue, looking someone up, and asking the docs
+// ---------------------------------------------------------------------------
+
+function when(epochSeconds: number): string {
+  return new Date(epochSeconds * 1000).toLocaleString(undefined, {
+    month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+  });
+}
+function length(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  return `${m}:${String(Math.max(0, Math.round(seconds) - m * 60)).padStart(2, '0')}`;
+}
+
+/** The live-calls screen is already the real thing a staff member needs —
+ * see calls happening now, take one over, place one. "My queue" adds recent
+ * history below it, since there is no per-person call routing to filter by
+ * (every signed-in person at a company shares the same line). */
+export function StaffQueueScreen() {
+  const {t} = useApp();
+  const [recent, setRecent] = useState<WireLookupCall[] | null>(null);
+  useEffect(() => {
+    workspace.recentCalls(12).then(b => setRecent(b.calls)).catch(() => setRecent([]));
+  }, []);
+  return <div className="stack">
+    <LiveCalls/>
+    <div className="card stack">
+      <h2>{t('Recent calls')}</h2>
+      {recent === null ? <div className="small muted">{t('Loading…')}</div>
+        : recent.length === 0 ? <Empty icon={Users} title="No calls yet" body="Calls will be listed here once there are some."/>
+        : <div className="table-wrap"><table className="table">
+            <thead><tr><th>{t('When')}</th><th>{t('Number')}</th><th>{t('Length')}</th><th>{t('Knowledge used')}</th></tr></thead>
+            <tbody>{recent.map(c => <tr key={c.id}>
+              <td><Link to={'/app/history/' + c.id}>{when(c.startedAt)}</Link></td>
+              <td className="mono">{c.counterparty}</td>
+              <td className="mono">{length(c.durationSeconds)}</td>
+              <td className="small">{c.knowledgeBaseName || t('Everything uploaded')}</td>
+            </tr>)}</tbody>
+          </table></div>}
+    </div>
+  </div>;
+}
+
+export function StaffLookupScreen() {
+  const {t} = useApp();
+  const [query, setQuery] = useState('');
+  const [matches, setMatches] = useState<WireLookupCall[] | null>(null);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    const digits = query.replace(/\D/g, '');
+    if (digits.length < 3) { setMatches(null); return }
+    const handle = setTimeout(() => {
+      workspace.lookupCalls(digits).then(b => setMatches(b.calls))
+        .catch(c => setError(errorText(c, 'Could not search right now.')));
+    }, 300);
+    return () => clearTimeout(handle);
+  }, [query]);
+
+  return <div className="stack">
+    <PageHead eyebrow="Help me" title="Customer lookup"
+      description="Search a number to see everything that has happened with that person."/>
+    <div className="card">
+      <input className="input" value={query} onChange={e => setQuery(e.target.value)}
+        placeholder={t('Type at least three digits of a number')} autoFocus/>
+    </div>
+    {error && <div className="notice danger">{error}</div>}
+    {matches !== null && (matches.length === 0
+      ? <Empty icon={Users} title="No calls with that number" body="Check the digits, or try fewer of them."/>
+      : <div className="card stack">
+          <div className="small muted">{matches.length} {t('calls with')} <span className="mono">{matches[0].counterparty}</span></div>
+          <div className="table-wrap"><table className="table">
+            <thead><tr><th>{t('When')}</th><th>{t('Direction')}</th><th>{t('Length')}</th><th>{t('Knowledge used')}</th></tr></thead>
+            <tbody>{matches.map(c => <tr key={c.id}>
+              <td><Link to={'/app/history/' + c.id}>{when(c.startedAt)}</Link></td>
+              <td>{c.direction === 'INBOUND' ? t('They called') : t('We called')}</td>
+              <td className="mono">{length(c.durationSeconds)}</td>
+              <td className="small">{c.knowledgeBaseName || t('Everything uploaded')}</td>
+            </tr>)}</tbody>
+          </table></div>
+        </div>)}
+  </div>;
+}
+
+export function StaffAskScreen() {
+  const {t} = useApp();
+  const [bases, setBases] = useState<KnowledgeBase[]>([]);
+  const [kbId, setKbId] = useState('');
+  const [question, setQuestion] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [answer, setAnswer] = useState<{answered: boolean; text: string} | null>(null);
+  const [error, setError] = useState('');
+
+  useEffect(() => { workspace.knowledgeBases().then(b => setBases(b.knowledgeBases)).catch(() => {}) }, []);
+
+  const ask = async () => {
+    if (!question.trim()) return;
+    setBusy(true); setError(''); setAnswer(null);
+    try { setAnswer(await workspace.ask(question.trim(), kbId)) }
+    catch (cause) { setError(errorText(cause, 'Could not check that right now.')) }
+    finally { setBusy(false) }
+  };
+
+  return <div className="stack">
+    <PageHead eyebrow="Help me" title="Ask the documents"
+      description="Check an answer mid-call without putting the caller on hold."/>
+    <div className="card stack">
+      <div className="field"><label>{t('Look in')}</label>
+        <select className="select" value={kbId} onChange={e => setKbId(e.target.value)}>
+          <option value="">{t('Everything uploaded')}</option>
+          {bases.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+        </select></div>
+      <div className="row">
+        <input className="input" autoFocus value={question} onChange={e => setQuestion(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') void ask() }}
+          placeholder={t('What is the fee for BS Computer Science?')}/>
+        <Button onClick={() => void ask()} disabled={busy || !question.trim()}>
+          {busy ? t('Checking…') : t('Ask')}
+        </Button>
+      </div>
+      {error && <div className="notice danger">{error}</div>}
+      {answer && <div className={'result-card big' + (answer.answered ? '' : ' discarded')}>
+        <p>{answer.text}</p>
+      </div>}
+    </div>
+  </div>;
 }

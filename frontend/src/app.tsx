@@ -64,7 +64,7 @@ import {HistoryNavigationProvider} from './history-navigation';
 
 import {AppCtx,useApp} from './app-context';
 import {ComingSoon,hasBackendKey} from './connect-backend';
-import {AgentsScreen,AgentDetailScreen,KnowledgeBasesScreen,KnowledgeBaseDetailScreen,CallSetupsScreen,TeamScreen,InviteAcceptScreen} from './pages-workspace';
+import {AgentsScreen,AgentDetailScreen,KnowledgeBasesScreen,KnowledgeBaseDetailScreen,CallSetupsScreen,TeamScreen,InviteAcceptScreen,StaffQueueScreen,StaffLookupScreen,StaffAskScreen} from './pages-workspace';
 import {OperatorCompanies} from './pages-operator';
 import {LiveCalls} from './pages-live';
 import {CampaignsScreen,GapsScreen,UsageScreen} from './pages-growth';
@@ -339,9 +339,9 @@ function AppRoutes(){
     <Route path="/app/history/:id" element={<Protected><CallDetail/></Protected>}/>
     <Route path="/app/guides" element={<Protected><NotYet title="Guides"><Guides/></NotYet></Protected>}/>
     <Route path="/app/guides/:slug" element={<Protected><NotYet title="Guide"><GuideDetail/></NotYet></Protected>}/>
-    <Route path="/app/queue" element={<Protected><NotYet title="Staff queue" detail="Live call handling arrives with the voice engine."><StaffQueue/></NotYet></Protected>}/>
-    <Route path="/app/lookup" element={<Protected><NotYet title="Caller lookup" detail="Live call handling arrives with the voice engine."><StaffLookup/></NotYet></Protected>}/>
-    <Route path="/app/ask" element={<Protected><NotYet title="Ask the knowledge base" detail="This answers from the agent knowledge base, which is not connected yet."><StaffAsk/></NotYet></Protected>}/>
+    <Route path="/app/queue" element={<Protected><WhenLive real={<StaffQueueScreen/>}><StaffQueue/></WhenLive></Protected>}/>
+    <Route path="/app/lookup" element={<Protected><WhenLive real={<StaffLookupScreen/>}><StaffLookup/></WhenLive></Protected>}/>
+    <Route path="/app/ask" element={<Protected><WhenLive real={<StaffAskScreen/>}><StaffAsk/></WhenLive></Protected>}/>
 
     <Route path="/platform/companies" element={<PlatformOnly><WhenLive real={<OperatorCompanies/>}><PlatformCompanies/></WhenLive></PlatformOnly>}/>
     <Route path="/platform/companies/:id" element={<PlatformOnly><PlatformCompanyDetail/></PlatformOnly>}/>
