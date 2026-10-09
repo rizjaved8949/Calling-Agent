@@ -153,6 +153,12 @@ type RequestOptions = {
   query?: Record<string, string | number | boolean | undefined>;
   /** Some endpoints are reachable without a company key. */
   anonymous?: boolean;
+  /**
+   * Authenticate with this instead of the stored company key — a Firebase ID
+   * token, for the one moment (signing in) before there is a company key to
+   * send. Implies `anonymous`'s effect on the stored key and admin header.
+   */
+  bearer?: string;
 };
 
 function buildUrl(path: string, query?: RequestOptions['query']): string {
@@ -182,7 +188,9 @@ async function readError(response: Response): Promise<ApiError> {
 
 async function send(path: string, options: RequestOptions = {}): Promise<Response> {
   const headers: Record<string, string> = {};
-  if (!options.anonymous) {
+  if (options.bearer) {
+    headers.Authorization = `Bearer ${options.bearer}`;
+  } else if (!options.anonymous) {
     const key = getAuthToken();
     if (key) headers.Authorization = `Bearer ${key}`;
     const admin = getAdminKey();

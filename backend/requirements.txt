@@ -32,3 +32,8 @@ pypdf==5.1.0
 # endpoint on the other end. aiortc is that endpoint, and `av` is the Opus
 # codec it decodes and encodes with.
 aiortc==1.14.0
+
+# Who a human is, as opposed to which company is calling: verifies the ID
+# token a signed-in browser presents, and holds the Firestore link from a
+# person to the company (tenant) they belong to.
+firebase-admin==7.3.0

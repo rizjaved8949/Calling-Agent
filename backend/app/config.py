@@ -92,6 +92,16 @@ class Settings(BaseSettings):
     google_sheet_sync: bool = True
     google_sheet_sync_delay_seconds: float = 20.0
 
+    # ---- Firebase (sign-in) -----------------------------------------------
+    # Who a human is, as opposed to which company is calling — see
+    # `app/services/firebase.py`. The service account JSON is the whole
+    # credential; either paste its contents here directly (Render's env
+    # editor accepts multi-line values) or point at a file on disk. A file is
+    # the natural choice locally; an env var is the natural choice on a host
+    # where nothing survives a redeploy except what is configured.
+    firebase_service_account_json: str = ""
+    firebase_service_account_path: str = ""
+
     # ---- Reports ---------------------------------------------------------
     excel_filename: str = "Call_Records.xlsx"
 
@@ -158,6 +168,27 @@ class Settings(BaseSettings):
     @property
     def google_oauth_configured(self) -> bool:
         return bool(self.google_client_id.strip() and self.google_client_secret.strip())
+
+    @property
+    def firebase_service_account_file(self) -> Path | None:
+        """Where to read the service account from, if anywhere.
+
+        An explicit path wins. Otherwise, a path a step outside this repo's
+        `backend/` folder is tried — where the console-downloaded key lands
+        in local development — so a developer does not have to set anything
+        to run this locally once they have followed the setup instructions.
+        """
+        if self.firebase_service_account_path.strip():
+            candidate = Path(self.firebase_service_account_path.strip())
+            return candidate if candidate.is_absolute() else BASE_DIR / candidate
+        fallback = BASE_DIR.parent / "google" / "calling-agent" / "firebase-service-account.json"
+        return fallback if fallback.exists() else None
+
+    @property
+    def firebase_configured(self) -> bool:
+        return bool(
+            self.firebase_service_account_json.strip() or self.firebase_service_account_file
+        )
 
     @property
     def recordings_path(self) -> Path:

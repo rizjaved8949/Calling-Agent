@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from ..security.rate_limit import check_blanket
+from ..security.rate_limit import check_blanket, check_expensive
 from .routes import (
-    calls, campaigns, companies, exports, gaps, google, health, knowledge, media,
+    auth, calls, campaigns, companies, exports, gaps, google, health, knowledge, media,
     messaging, recordings, usage, webhooks,
 )
 
@@ -25,6 +25,12 @@ api_router.include_router(health.router)
 # stricter limit an individual route adds for itself. See
 # `security/rate_limit.py` for why this is in-memory and what it is for.
 _limited = [Depends(check_blanket)]
+# Signup and login get the tighter limit too: Firebase itself guards against
+# password guessing, but nothing stops a script from hammering the
+# token-verification step itself once it has a valid token.
+api_router.include_router(
+    auth.router, dependencies=[Depends(check_blanket), Depends(check_expensive)]
+)
 api_router.include_router(companies.router, dependencies=_limited)
 api_router.include_router(calls.router, dependencies=_limited)
 # Mounted after calls so that /calls/{id}/recording is matched by the

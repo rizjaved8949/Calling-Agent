@@ -25,6 +25,7 @@ from ..config import settings
 from ..errors import Forbidden, NotFound, Unauthorized
 from ..models.tenant import Tenant
 from ..repositories import tenants as tenant_repo
+from ..services import firebase
 
 
 def _bearer(value: str | None) -> str:
@@ -89,3 +90,40 @@ async def current_tenant(
 
 CurrentTenant = Annotated[Tenant, Depends(current_tenant)]
 AdminOnly = Annotated[None, Depends(require_admin)]
+
+
+class FirebaseIdentity:
+    """A person, proven by Firebase, before anything is known about which
+    company — if any — they belong to."""
+
+    __slots__ = ("uid", "email", "display_name")
+
+    def __init__(self, uid: str, email: str, display_name: str):
+        self.uid = uid
+        self.email = email
+        self.display_name = display_name
+
+
+async def current_person(
+    authorization: Annotated[str | None, Header()] = None,
+) -> FirebaseIdentity:
+    """Who is signed in — a human, not a company.
+
+    This is `/api/auth/*`'s own front door and nowhere else: every other
+    route still identifies its caller by the company API key `current_tenant`
+    resolves, so a browser that has signed in still needs the key `/auth/
+    login` hands back before anything about calls, messages, or campaigns
+    becomes reachable.
+    """
+    token = _bearer(authorization)
+    if not token:
+        raise Unauthorized("Present a Firebase ID token as a bearer token.")
+    claims = firebase.verify_id_token(token)
+    return FirebaseIdentity(
+        uid=claims["uid"],
+        email=claims.get("email", ""),
+        display_name=claims.get("name", ""),
+    )
+
+
+CurrentPerson = Annotated[FirebaseIdentity, Depends(current_person)]

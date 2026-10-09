@@ -2,7 +2,8 @@ import React,{useEffect,useMemo,useRef,useState} from 'react';
 import {Link,useNavigate,useParams} from 'react-router-dom';
 import {Activity,ArrowDownLeft,ArrowRight,ArrowUpRight,AudioLines,BookOpen,BrainCircuit,Check,CheckCircle2,ChevronRight,CircleHelp,Clock,Copy,Download,FileText,Headphones,MessageSquare,Mic2,MoreHorizontal,Pause,Phone,Play,Plus,Radio,Search,Send,ShieldCheck,SlidersHorizontal,Sparkles,Trash2,Upload,Users,Volume2,WifiOff,X} from 'lucide-react';
 import {Area,AreaChart,Bar,BarChart,CartesianGrid,Legend,ResponsiveContainer,Tooltip,XAxis,YAxis} from 'recharts';
-import {api} from './lib/api';
+import {api,LIVE,setAuthToken} from './lib/api';
+import {friendlyAuthError,loginWithEmail,loginWithGoogle,completeGoogleSignup,registerWithEmail,sendPasswordReset,NeedsSignup} from './lib/api/auth';
 import {exportCallsXlsx} from './lib/exportXlsx';
 import type {Call,ChannelType,Persona,Role} from './lib/types';
 import {Badge,Button,Empty,Field,PageHead,Tabs} from './app';
@@ -27,7 +28,110 @@ function CallTable({calls,limit}:{calls:Call[];limit?:number}){
   return <><div className="table-wrap desktop-calls"><table className="table"><thead><tr>{['Time','Direction','Number','Channel','Handled by','Duration','Outcome','Recording'].map(x=><th key={x}>{t(x)}</th>)}</tr></thead><tbody>{shown.map(c=><tr key={c.id}><td><Link to={'/app/history/'+c.id}>{formatDate(c.startedAt)}</Link></td><td>{c.direction==='INBOUND'?<ArrowDownLeft size={16}/>:<ArrowUpRight size={16}/>}</td><td className="phone"><Link to={'/app/history/'+c.id}>{c.phoneNumber}</Link></td><td>{t(channelNames[c.channelType])}</td><td>{c.mode==='operator'?t('A person'):store.agents.find(x=>x.id===c.agentId)?.name}</td><td className="mono">{formatDuration(c.durationSeconds)}</td><td><Badge tone={statusTone(c.outcome)}>{t(c.outcome)}</Badge></td><td><Badge tone={c.recordingState==='READY'?'success':c.recordingState==='NONE'?'':'warning'}>{c.recordingState}</Badge></td></tr>)}</tbody></table></div>
   <div className="mobile-calls">{shown.map(c=><Link className="result-card" to={'/app/history/'+c.id} key={c.id}><div className="row between"><strong className="phone">{c.phoneNumber}</strong><Badge tone={statusTone(c.outcome)}>{t(c.outcome)}</Badge></div><div className="small muted">{formatDate(c.startedAt)} · {t(channelNames[c.channelType])}</div><div className="row between small" style={{marginTop:9}}><span>{t(c.mode==='operator'?'A person':'The agent')} · {formatDuration(c.durationSeconds)}</span><span>{c.recordingState}</span></div></Link>)}</div></>
 }
-export function AuthScreen({mode}:{mode:'login'|'signup'|'forgot'|'verify'|'invite'}){const {t,setSession,store,toast}=useApp();const navigate=useNavigate();const [email,setEmail]=useState(''),[password,setPassword]=useState(''),[name,setName]=useState(''),[error,setError]=useState('');const title={login:'Sign in',signup:'Create an account',forgot:'Reset your password',verify:'Check your inbox',invite:'Accept invitation'}[mode];function submit(e:React.FormEvent){e.preventDefault();if(mode==='forgot'){navigate('/verify');return}if(mode==='verify'){navigate('/login');return}if(!email.includes('@')){setError('Enter a valid email address.');return}if(password.length<6){setError('Password must be at least six characters.');return}setSession({email,name:name||email.split('@')[0],userId:'user-1',orgId:store.organizations[0].id,portal:'company'});toast(t('Signed in'));navigate('/app/dashboard')}return <div className="auth-page"><div className="card auth-card"><div className="auth-history-row"><HistoryControls/></div><Link to="/" className="brand"><span className="brand-mark"><Activity size={21}/></span>calling agent</Link><h1 style={{fontSize:'1.8rem'}}>{t(title)}</h1><p className="muted">{t('One place to build, run and understand your voice agents.')}</p>{mode==='verify'?<div className="stack"><div className="notice">{t('We simulated a verification email. Your account is ready to use.')}</div><Button to="/login">{t('Back to sign in')}</Button></div>:<form className="stack" onSubmit={submit}>{mode==='signup'&&<Field label="Full name" value={name} onChange={setName} required/>}<Field label="Email" value={email} onChange={setEmail} type="email" required/>{mode!=='forgot'&&<Field label="Password" value={password} onChange={setPassword} type="password" help="Use at least six characters." required/>}{error&&<div className="notice danger">{t(error)}</div>}<Button type="submit">{t(mode==='forgot'?'Send reset link':mode==='invite'?'Accept invitation':mode==='signup'?'Create account':'Sign in')}</Button>{mode==='login'&&<button className="button outline" type="button" onClick={()=>{setSession({email:'demo@example.com',name:'Demo User',userId:'user-1',orgId:store.organizations[0].id,portal:'company'});navigate('/app/dashboard')}}>{t('Sign in with Google')}</button>}{mode==='login'&&<div className="demo-logins"><div className="small muted">{t('Or open one of the three portals')}</div><div className="demo-row"><button className="button outline small" type="button" onClick={()=>{setSession({email:'samira@northstar.edu',name:'Samira Khan',userId:'user-1',orgId:'org-northstar',portal:'company'});navigate('/app/dashboard')}}>{t('Company admin')}</button><button className="button outline small" type="button" onClick={()=>{setSession({email:'omar@northstar.edu',name:'Omar Farooq',userId:'user-2',orgId:'org-northstar',portal:'company'});navigate('/app/queue')}}>{t('Company staff')}</button><button className="button outline small" type="button" onClick={()=>{api.setProfile('user-platform');setSession({email:'ops@platform.internal',name:'Platform Operations',userId:'user-platform',orgId:'org-northstar',portal:'platform',platformRole:'superadmin'});navigate('/platform/companies')}}>{t('Platform (us)')}</button></div></div>}</form>}<div className="row between small" style={{marginTop:24}}><Link to={mode==='login'?'/signup':'/login'}>{t(mode==='login'?'Create an account':'Sign in')}</Link><Link to="/forgot-password">{t('Forgot password?')}</Link></div></div></div>}
+/**
+ * Real sign-in when this build talks to a backend (`LIVE`); the original
+ * fixture-only flow otherwise, unchanged, so the offline demo keeps working
+ * exactly as it always has.
+ *
+ * `finish` is the one seam both paths funnel through: store the company API
+ * key `setAuthToken` already exists for, then a full navigation rather than
+ * client-side routing — `hydrate()` on the next mount is what actually loads
+ * this company's data, and that only runs once, on mount (see `app.tsx`).
+ */
+function finish(session:{apiKey:string;phoneNumberId:string;companyName:string;email:string}){
+  setAuthToken(session.apiKey);
+  localStorage.setItem('ca-session',JSON.stringify({email:session.email,name:session.companyName,userId:session.phoneNumberId,orgId:session.phoneNumberId,portal:'company'}));
+  window.location.href='/app/dashboard';
+}
+export function AuthScreen({mode}:{mode:'login'|'signup'|'forgot'|'verify'|'invite'}){
+  const {t,setSession,store,toast}=useApp();const navigate=useNavigate();
+  const [email,setEmail]=useState(''),[password,setPassword]=useState(''),[name,setName]=useState('');
+  const [companyName,setCompanyName]=useState('');
+  const [needsCompanyName,setNeedsCompanyName]=useState(false); // set after a first-time Google sign-in
+  const [error,setError]=useState('');
+  const [busy,setBusy]=useState(false);
+  const title={login:'Sign in',signup:'Create an account',forgot:'Reset your password',verify:'Check your inbox',invite:'Accept invitation'}[mode];
+
+  async function submitLive(e:React.FormEvent){
+    e.preventDefault();setError('');
+    if(needsCompanyName){
+      if(!companyName.trim()){setError('Give your company a name.');return}
+      setBusy(true);
+      try{finish(await completeGoogleSignup(companyName.trim()))}
+      catch(cause){setError(friendlyAuthError(cause));setBusy(false)}
+      return;
+    }
+    if(mode==='forgot'){
+      if(!email.includes('@')){setError('Enter a valid email address.');return}
+      setBusy(true);
+      try{await sendPasswordReset(email);navigate('/verify')}
+      catch(cause){setError(friendlyAuthError(cause))}
+      setBusy(false);return;
+    }
+    if(!email.includes('@')){setError('Enter a valid email address.');return}
+    if(password.length<6){setError('Password must be at least six characters.');return}
+    if(mode==='signup'&&!companyName.trim()){setError('Give your company a name.');return}
+    setBusy(true);
+    try{
+      const session=mode==='signup'
+        ?await registerWithEmail(email,password,companyName.trim())
+        :await loginWithEmail(email,password);
+      finish(session);
+    }catch(cause){
+      if(cause instanceof NeedsSignup){
+        setError('No company is linked to this account yet. Create one below.');
+        navigate('/signup');
+      }else{
+        setError(friendlyAuthError(cause));
+      }
+      setBusy(false);
+    }
+  }
+  async function submitGoogle(){
+    setError('');setBusy(true);
+    try{finish(await loginWithGoogle())}
+    catch(cause){
+      if(cause instanceof NeedsSignup){setNeedsCompanyName(true);setBusy(false)}
+      else{setError(friendlyAuthError(cause));setBusy(false)}
+    }
+  }
+  function submitMock(e:React.FormEvent){
+    e.preventDefault();
+    if(mode==='forgot'){navigate('/verify');return}
+    if(mode==='verify'){navigate('/login');return}
+    if(!email.includes('@')){setError('Enter a valid email address.');return}
+    if(password.length<6){setError('Password must be at least six characters.');return}
+    setSession({email,name:name||email.split('@')[0],userId:'user-1',orgId:store.organizations[0].id,portal:'company'});
+    toast(t('Signed in'));navigate('/app/dashboard');
+  }
+
+  return <div className="auth-page"><div className="card auth-card">
+    <div className="auth-history-row"><HistoryControls/></div>
+    <Link to="/" className="brand"><span className="brand-mark"><Activity size={21}/></span>calling agent</Link>
+    <h1 style={{fontSize:'1.8rem'}}>{t(needsCompanyName?'Name your company':title)}</h1>
+    <p className="muted">{t(LIVE?'Sign in to run your calling agent.':'One place to build, run and understand your voice agents.')}</p>
+    {mode==='verify'?<div className="stack">
+      <div className="notice">{t(LIVE?'Check your inbox for the reset link. It can take a minute to arrive.':'We simulated a verification email. Your account is ready to use.')}</div>
+      <Button to="/login">{t('Back to sign in')}</Button>
+    </div>:<form className="stack" onSubmit={LIVE?submitLive:submitMock}>
+      {needsCompanyName
+        ?<Field label="Company name" value={companyName} onChange={setCompanyName} help="What your customers call you." required/>
+        :<>
+          {mode==='signup'&&!LIVE&&<Field label="Full name" value={name} onChange={setName} required/>}
+          {mode==='signup'&&LIVE&&<Field label="Company name" value={companyName} onChange={setCompanyName} help="What your customers call you." required/>}
+          <Field label="Email" value={email} onChange={setEmail} type="email" required/>
+          {mode!=='forgot'&&<Field label="Password" value={password} onChange={setPassword} type="password" help="Use at least six characters." required/>}
+        </>}
+      {error&&<div className="notice danger">{t(error)}</div>}
+      <Button type="submit" disabled={busy}>{t(busy?'Please wait…':needsCompanyName?'Create company':mode==='forgot'?'Send reset link':mode==='invite'?'Accept invitation':mode==='signup'?'Create account':'Sign in')}</Button>
+      {mode==='login'&&!needsCompanyName&&(LIVE
+        ?<button className="button outline" type="button" disabled={busy} onClick={submitGoogle}>{t('Sign in with Google')}</button>
+        :<button className="button outline" type="button" onClick={()=>{setSession({email:'demo@example.com',name:'Demo User',userId:'user-1',orgId:store.organizations[0].id,portal:'company'});navigate('/app/dashboard')}}>{t('Sign in with Google')}</button>)}
+      {mode==='login'&&!LIVE&&<div className="demo-logins"><div className="small muted">{t('Or open one of the three portals')}</div><div className="demo-row"><button className="button outline small" type="button" onClick={()=>{setSession({email:'samira@northstar.edu',name:'Samira Khan',userId:'user-1',orgId:'org-northstar',portal:'company'});navigate('/app/dashboard')}}>{t('Company admin')}</button><button className="button outline small" type="button" onClick={()=>{setSession({email:'omar@northstar.edu',name:'Omar Farooq',userId:'user-2',orgId:'org-northstar',portal:'company'});navigate('/app/queue')}}>{t('Company staff')}</button><button className="button outline small" type="button" onClick={()=>{api.setProfile('user-platform');setSession({email:'ops@platform.internal',name:'Platform Operations',userId:'user-platform',orgId:'org-northstar',portal:'platform',platformRole:'superadmin'});navigate('/platform/companies')}}>{t('Platform (us)')}</button></div></div>}
+    </form>}
+    {!needsCompanyName&&<div className="row between small" style={{marginTop:24}}><Link to={mode==='login'?'/signup':'/login'}>{t(mode==='login'?'Create an account':'Sign in')}</Link><Link to="/forgot-password">{t('Forgot password?')}</Link></div>}
+  </div></div>;
+}
 function UploadZone({kbId}:{kbId:string}){const {t,run}=useApp();const ref=useRef<HTMLInputElement>(null);const upload=(files:FileList|null)=>{if(!files||!kbId)return;const valid=Array.from(files).filter(f=>/\.(pdf|docx|txt|md)$/i.test(f.name)&&f.size<=20*1024*1024);if(valid.length)run(()=>api.uploadDocuments(kbId,valid.map(f=>({name:f.name,size:f.size,type:f.type}))),'Documents added for indexing')};return <div className="dropzone" onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();upload(e.dataTransfer.files)}} onClick={()=>ref.current?.click()}><Upload size={27} color="var(--accent)"/><strong style={{display:'block',marginTop:10}}>{t('Upload documents')}</strong><div className="small muted">{t('Drop PDF, DOCX, TXT or MD files here · 20 MB maximum')}</div><input ref={ref} type="file" multiple accept=".pdf,.docx,.txt,.md" style={{display:'none'}} onChange={e=>upload(e.target.files)}/></div>}
 function SettingField({setting,label,initial='',type='text',help,placeholder}:{setting:string;label:string;initial?:string|number;type?:string;help?:string;placeholder?:string}){const {store,org,run}=useApp();const value=store.settings[org.id]?.[setting]??initial;return <Field label={label} value={String(value)} type={type} help={help} placeholder={placeholder} onChange={x=>run(()=>api.updateSetting(org.id,setting,type==='number'?Number(x):x),'Settings saved')}/>}
 
