@@ -52,6 +52,7 @@ class CallSession:
         on_transcript: Callable[[str, str], None] | None = None,
         on_tool: Callable[[str, dict[str, Any]], Awaitable[str]] | None = None,
         on_ended: Callable[[str], Awaitable[None]] | None = None,
+        human: bool = False,
     ) -> None:
         self.call_id = call_id
         self.live_settings = live_settings
@@ -60,7 +61,11 @@ class CallSession:
         self.on_tool = on_tool
         self.on_ended = on_ended
 
-        self.handler = Handler.AGENT
+        # A call an employee placed from the dialer: a person from the start,
+        # no model, and when they leave the call ends rather than an agent
+        # appearing mid-conversation.
+        self.human = human
+        self.handler = Handler.OPERATOR if human else Handler.AGENT
         self.started_at = time.time()
         self.transcript: list[tuple[str, str]] = []
         self.ended_reason = ""
@@ -84,7 +89,8 @@ class CallSession:
     async def start(self) -> None:
         """Bring up the agent and begin releasing audio at line rate."""
         self._pacer_task = asyncio.create_task(self._run_pacer())
-        await self._start_agent()
+        if not self.human:
+            await self._start_agent()
 
     async def _start_agent(self) -> None:
         self._agent = GeminiLiveSession(
@@ -185,7 +191,11 @@ class CallSession:
         The model is closed rather than muted: left running it keeps listening,
         keeps spending tokens, and will answer the moment the operator pauses.
         """
-        if self._closed or self.handler is Handler.OPERATOR:
+        if self._closed:
+            return
+        if self.handler is Handler.OPERATOR:
+            # Already a person's call (a dialer call): just connect the browser.
+            self._operator_out = send_to_operator
             return
         dropped = self._pacer.flush()
         self.handler = Handler.OPERATOR
@@ -200,7 +210,7 @@ class CallSession:
 
     async def hand_back(self) -> None:
         """The person leaves and the agent resumes."""
-        if self._closed or self.handler is Handler.AGENT:
+        if self._closed or self.handler is Handler.AGENT or self.human:
             return
         self._pacer.flush()
         self._operator_out = None

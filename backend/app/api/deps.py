@@ -37,6 +37,19 @@ def _bearer(value: str | None) -> str:
     return value.strip()
 
 
+async def is_admin(x_admin_key: str | None) -> bool:
+    """The server's ADMIN_API_KEY, or a signed-in super admin's session."""
+    from ..security import superadmin
+
+    presented = (x_admin_key or "").strip()
+    if not presented:
+        return False
+    expected = settings.admin_api_key.strip()
+    if expected and secrets.compare_digest(presented, expected):
+        return True
+    return await superadmin.token_valid(presented)
+
+
 async def require_admin(x_admin_key: Annotated[str | None, Header()] = None) -> None:
     """The platform surface: creating and editing companies.
 
@@ -44,13 +57,8 @@ async def require_admin(x_admin_key: Annotated[str | None, Header()] = None) -> 
     An admin surface that is unauthenticated because nobody set a variable is
     the kind of default that ends up on the internet.
     """
-    expected = settings.admin_api_key.strip()
-    if not expected:
-        raise Forbidden(
-            "The admin API is disabled because ADMIN_API_KEY is not set on the server."
-        )
-    if not x_admin_key or not secrets.compare_digest(x_admin_key.strip(), expected):
-        raise Unauthorized("A valid X-Admin-Key is required.")
+    if not await is_admin(x_admin_key):
+        raise Unauthorized("Sign in as the super admin, or present a valid X-Admin-Key.")
 
 
 async def current_tenant(
@@ -64,12 +72,7 @@ async def current_tenant(
     platform dashboard looks at a customer's calls without holding that
     customer's API key. Nothing else can.
     """
-    admin_expected = settings.admin_api_key.strip()
-    if (
-        admin_expected
-        and x_admin_key
-        and secrets.compare_digest(x_admin_key.strip(), admin_expected)
-    ):
+    if await is_admin(x_admin_key):
         impersonated = request.headers.get("x-company-id", "").strip()
         if impersonated:
             tenant = await tenant_repo.get(impersonated)

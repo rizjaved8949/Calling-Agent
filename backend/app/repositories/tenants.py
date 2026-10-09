@@ -221,7 +221,13 @@ async def by_api_key(api_key: str) -> Tenant | None:
 
 async def save(tenant: Tenant) -> Tenant:
     """Write the tenant, sealing its credentials on the way."""
-    data = tenant.model_dump(by_alias=True, exclude={"phone_number_id"})
+    if tenant.line_id:
+        # An overlay carries one number's credentials in the company's own
+        # fields. Saving it would copy them onto the company row.
+        raise RuntimeError("refusing to save a per-number tenant overlay")
+    data = tenant.model_dump(
+        by_alias=True, exclude={"phone_number_id", "line_id", "meta_phone_number_id"}
+    )
     row = {
         "id": tenant.phone_number_id,
         "organization_id": tenant.organization_id or None,

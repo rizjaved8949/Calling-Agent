@@ -83,6 +83,7 @@ async def persona_for(tenant: Tenant, call: Call | None = None) -> AgentPersona:
             ),
             knowledge_base_id=call.knowledge_base_id,
             agent_id=call.agent_id,
+            line_id=call.line_id,
         )
         context = await routing.context_for(tenant, resolved)
         voice = routing.persona_for(tenant, resolved)
@@ -144,14 +145,18 @@ async def start(
     if existing is not None:
         return existing
 
+    human = call.mode == "human"
     session = CallSession(
         call.id,
         send_to_caller=send_to_caller,
         live_settings=live_settings(),
-        persona=await persona_for(tenant, call),
+        # A human call never starts the model, so it needs no persona.
+        persona=AgentPersona(instructions="", greeting="") if human
+        else await persona_for(tenant, call),
         record=tenant.record_calls,
         keepalive=keepalive,
         on_transcript=lambda who, text: None,
+        human=human,
     )
     _sessions[call.id] = session
     await session.start()

@@ -114,6 +114,29 @@ async def hand_back(tenant: CurrentTenant, call_id: str) -> dict:
     return {"handledBy": session.handler.value}
 
 
+@router.get("/{call_id}/session")
+async def call_session(tenant: CurrentTenant, call_id: str) -> dict:
+    """Where a dialer call is, and the token to join its audio once it is up.
+
+    The dialer polls this after placing a call: the session only exists once
+    the person answers, and joining before then would have nothing to join.
+    """
+    call = await call_repo.get_call(tenant.phone_number_id, call_id)
+    if call is None:
+        raise NotFound("Call")
+    session = live.get(call_id)
+    return {
+        "callId": call.id,
+        "status": call.status.value,
+        "live": session is not None,
+        "error": call.error or None,
+        "operatorToken": (
+            playback.mint(tenant.phone_number_id, call.id, ttl=3600) if session else None
+        ),
+        "transcript": session.transcript_text() if session else None,
+    }
+
+
 @router.get("/{call_id}")
 async def get_call(tenant: CurrentTenant, call_id: str) -> dict:
     call = await call_repo.get_call(tenant.phone_number_id, call_id)
@@ -130,14 +153,38 @@ async def start_call(tenant: CurrentTenant, payload: OutboundCallRequest) -> dic
     carrier accepts and then fails to report still exists to be reconciled. A
     row created only on success is a call that silently never happened.
     """
+    from .numbers import pick_line
+    from ...repositories import numbers as number_repo
+
+    if payload.channel not in {Channel.PHONE, Channel.WHATSAPP_CALL}:
+        raise AppError(
+            400, f"{payload.channel.value} is not a channel you can place a call on.",
+            code="bad_channel",
+        )
+    line = await pick_line(
+        tenant, payload.line_id, whatsapp=payload.channel == Channel.WHATSAPP_CALL
+    )
+    company = tenant
+    if line is not None:
+        tenant = number_repo.as_tenant(tenant, line)
+    if not payload.human and line is not None and not payload.agent_id and not line.outbound_agent_id:
+        raise AppError(
+            409, f"{line.label} has no outbound agent. Assign one on the Numbers page, "
+            "or call from the dialer to talk yourself.",
+            code="no_outbound_agent",
+        )
     destination = to_e164(payload.to, tenant)
     call = Call(
-        tenantId=tenant.phone_number_id,
+        tenantId=company.phone_number_id,
         channel=payload.channel,
         direction=Direction.OUTBOUND,
         status=CallStatus.QUEUED,
         counterparty=destination,
-        fromNumber=tenant.infobip_phone_number or tenant.display_phone_number,
+        lineId=line.id if line else "",
+        mode="human" if payload.human else "ai",
+        placedBy=str(payload.metadata.get("placedBy") or "")[:200],
+        fromNumber=(line.phone_number if line else "")
+        or tenant.infobip_phone_number or tenant.display_phone_number,
         recordingState=(
             RecordingState.PENDING if tenant.record_calls else RecordingState.NONE
         ),
@@ -173,12 +220,6 @@ async def start_call(tenant: CurrentTenant, payload: OutboundCallRequest) -> dic
             call.provider_call_id = str(
                 (result.get("calls") or [{}])[0].get("id") or result.get("id") or ""
             )
-        else:
-            raise AppError(
-                400,
-                f"{payload.channel.value} is not a channel you can place a call on.",
-                code="bad_channel",
-            )
     except AppError:
         call.status = CallStatus.FAILED
         call.ended_at = time.time()
@@ -200,6 +241,12 @@ async def ask_call_permission(tenant: CurrentTenant, payload: CallPermissionRequ
     message with an accept button; until they accept, `POST /calls` with
     WHATSAPP_CALL is refused by Meta.
     """
+    from .numbers import pick_line
+    from ...repositories import numbers as number_repo
+
+    line = await pick_line(tenant, payload.line_id, whatsapp=True)
+    if line is not None:
+        tenant = number_repo.as_tenant(tenant, line)
     result = await WhatsApp(tenant).request_call_permission(
         payload.to, payload.template, payload.language
     )
@@ -219,6 +266,11 @@ async def end_call(tenant: CurrentTenant, call_id: str) -> dict:
     if call is None:
         raise NotFound("Call")
 
+    from ...services import lines
+
+    tenant = await lines.tenant_for_call(tenant, call)
+    if live.get(call_id) is not None:
+        await live.finish(tenant, call_id, "ended from the dashboard")
     if call.provider_call_id and call.channel == Channel.PHONE:
         try:
             await Infobip(tenant).hangup(call.provider_call_id)

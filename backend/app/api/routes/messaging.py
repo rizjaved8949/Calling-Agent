@@ -7,8 +7,12 @@ import logging
 
 from fastapi import APIRouter, Depends, Query, status
 
+from ...errors import AppError, NotFound
 from ...models.call import SendTemplateRequest, SendTextRequest
+from ...models.number import NumberKind
+from ...models.tenant import Tenant
 from ...repositories import calls as call_repo
+from ...repositories import numbers as number_repo
 from ...security.rate_limit import check_expensive
 from ...services.whatsapp import WhatsApp, mask
 from ..deps import CurrentTenant
@@ -16,6 +20,24 @@ from ..deps import CurrentTenant
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/messages", tags=["messaging"])
+
+
+async def _speaking_as(tenant: Tenant, line_id: str) -> Tenant:
+    """The WhatsApp number to send from: the one named, else the first verified."""
+    whatsapp = [
+        n for n in await number_repo.list_for(tenant.phone_number_id)
+        if n.kind is NumberKind.WHATSAPP
+    ]
+    if line_id:
+        line = next((n for n in whatsapp if n.id == line_id), None)
+        if line is None:
+            raise NotFound("WhatsApp number")
+    else:
+        line = next((n for n in whatsapp if n.verified), None)
+        if line is None and whatsapp:
+            raise AppError(409, "None of your WhatsApp numbers is verified yet.",
+                           code="number_not_verified")
+    return number_repo.as_tenant(tenant, line) if line else tenant
 
 
 @router.get("")
@@ -38,6 +60,7 @@ async def send_text(tenant: CurrentTenant, payload: SendTextRequest) -> dict:
     it, Meta accepts the request and never delivers the message — which is why
     a first contact has to be a template.
     """
+    tenant = await _speaking_as(tenant, payload.line_id)
     message = await WhatsApp(tenant).send_text(
         payload.to, payload.body, call_id=payload.call_id or ""
     )
@@ -50,6 +73,7 @@ async def send_text(tenant: CurrentTenant, payload: SendTextRequest) -> dict:
 )
 async def send_template(tenant: CurrentTenant, payload: SendTemplateRequest) -> dict:
     """Send an approved template — the only way to open a conversation."""
+    tenant = await _speaking_as(tenant, payload.line_id)
     message = await WhatsApp(tenant).send_template(
         payload.to,
         payload.template,
@@ -65,13 +89,14 @@ async def send_template(tenant: CurrentTenant, payload: SendTemplateRequest) -> 
 
 
 @router.get("/templates")
-async def list_templates(tenant: CurrentTenant) -> dict:
+async def list_templates(tenant: CurrentTenant, lineId: str = "") -> dict:
     """The company's approved templates, straight from their WABA.
 
     Not cached: a template's status changes on Meta's schedule, and showing a
     stale "approved" for one they have since rejected sends the operator to
     debug a message that was never going to arrive.
     """
+    tenant = await _speaking_as(tenant, lineId)
     templates = await WhatsApp(tenant).templates()
     return {
         "templates": [

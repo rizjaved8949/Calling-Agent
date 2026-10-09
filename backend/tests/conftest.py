@@ -134,6 +134,8 @@ def fake_db(monkeypatch) -> FakeSupabase:
         "app.repositories.campaigns",
         "app.repositories.knowledge",
         "app.repositories.agents",
+        "app.repositories.numbers",
+        "app.security.superadmin",
         "app.services.storage",
     ):
         module = importlib.import_module(name)
@@ -141,6 +143,8 @@ def fake_db(monkeypatch) -> FakeSupabase:
             monkeypatch.setattr(module, "supabase", fake)
 
     tenant_repo.invalidate()
+    from app.security import superadmin
+    superadmin._cache = None
     yield fake
     tenant_repo.invalidate()
 

@@ -74,7 +74,7 @@ export function AgentsScreen() {
 
   return <div className="stack">
     <PageHead eyebrow="Build" title="Agents"
-      description="Each agent has its own voice, persona and knowledge. Point a number at one from Call setups."
+      description="Each agent has its own persona and knowledge base, and answers calls, makes them, or both. Put an agent on a number from the Numbers page."
       action={canManage ? <Button onClick={() => setCreating(true)}><Plus size={16}/>{t('New agent')}</Button> : undefined}/>
     {error && <div className="notice danger">{error}</div>}
     {agents === null ? <div className="small muted">{t('Loading…')}</div>
@@ -85,7 +85,10 @@ export function AgentsScreen() {
             {agents.map(agent => <Link to={'/app/agents/' + agent.id} className="card lift" key={agent.id}>
               <div className="row between">
                 <div className="brand-mark" style={{width: 45, height: 45, fontSize: '1rem'}}>{agent.name.slice(0, 1) || '?'}</div>
-                <Badge tone={agent.status === 'live' ? 'success' : agent.status === 'paused' ? 'warning' : ''}>{t(agent.status)}</Badge>
+                <div className="row" style={{gap: 6}}>
+                  <Badge>{agent.mode === 'inbound' ? t('inbound') : agent.mode === 'outbound' ? t('outbound') : t('in + out')}</Badge>
+                  <Badge tone={agent.status === 'live' ? 'success' : agent.status === 'paused' ? 'warning' : ''}>{t(agent.status)}</Badge>
+                </div>
               </div>
               <h2 style={{marginTop: 18, marginBottom: 5}}>{agent.name}</h2>
               <p className="small muted">{agent.greeting || t('No opening line yet')}</p>
@@ -148,6 +151,13 @@ export function AgentDetailScreen() {
     <PageHead eyebrow="Build" title={agent.name}
       description="How this agent introduces itself, what it knows, and when it escalates."
       action={<div className="row">
+        <select className="select" value={agent.mode ?? 'both'} disabled={!canManage}
+          aria-label={t('What this agent does')}
+          onChange={e => void save({mode: e.target.value as Agent['mode']})}>
+          <option value="inbound">{t('Answers calls (inbound)')}</option>
+          <option value="outbound">{t('Makes calls (outbound)')}</option>
+          <option value="both">{t('Inbound and outbound')}</option>
+        </select>
         <select className="select" value={agent.status} disabled={!canManage}
           onChange={e => void save({status: e.target.value as Agent['status']})}>
           <option value="draft">{t('Draft')}</option>
@@ -181,7 +191,7 @@ export function AgentDetailScreen() {
           <option value="">{t('Everything the company has uploaded')}</option>
           {bases.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
         </select>
-        <div className="help">{t('What this agent answers from, unless a call setup overrides it.')}</div>
+        <div className="help">{t('What this agent answers from. Upload documents to it on the Knowledge page.')} <Link to="/app/knowledge">{t('Manage knowledge')}</Link></div>
       </div>
     </div>
     {saving && <Badge>{t('Saving…')}</Badge>}

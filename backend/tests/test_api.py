@@ -69,11 +69,13 @@ def test_admin_routes_need_the_admin_key(client):
 
 
 def test_admin_api_is_disabled_without_a_configured_key(client, monkeypatch):
-    """A blank ADMIN_API_KEY must close the door, not leave it open."""
+    """A blank ADMIN_API_KEY must close the door, not leave it open: the old
+    key is refused, and only a signed-in super admin gets through."""
     from app.config import settings
 
     monkeypatch.setattr(settings, "admin_api_key", "")
-    assert client.get("/api/companies", headers=ADMIN).status_code == 403
+    assert client.get("/api/companies", headers=ADMIN).status_code == 401
+    assert client.get("/api/companies", headers={"X-Admin-Key": ""}).status_code == 401
 
 
 def test_stored_credentials_are_sealed(client, fake_db):

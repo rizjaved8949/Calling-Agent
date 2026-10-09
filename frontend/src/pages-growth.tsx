@@ -11,6 +11,8 @@ import {HelpCircle, Loader2, Pause, Play, Plus, Trash2, TrendingUp} from 'lucide
 import {Badge, Button, Empty, Field, PageHead, Tabs} from './app';
 import {useApp} from './app-context';
 import {api} from './lib/api';
+import {canCallOut, numberName, numbers as numberApi, type PhoneNumber} from './lib/api/numbers';
+import {workspace, type Agent} from './lib/api/workspace';
 
 const when = (epoch?: number) =>
   epoch ? new Date(epoch * 1000).toLocaleDateString(undefined,
@@ -144,7 +146,7 @@ export function GapsScreen() {
   return <div className="stack">
     <PageHead eyebrow="Agent" title="Questions you could not answer"
       description="Every time your agent said it would check and follow up. Each one is a question someone actually asked that your documents do not cover."
-      action={<Badge tone={gaps.length ? 'warning' : 'ok'}>
+      action={<Badge tone={gaps.length ? 'warning' : 'success'}>
         {data.total ?? 0} {t('found')}
       </Badge>}/>
 
@@ -186,7 +188,14 @@ export function CampaignsScreen() {
   const [error, setError] = useState('');
   const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState('');
-  const [draft, setDraft] = useState({name: '', channel: 'PHONE', numbers: '', gapSeconds: '20'});
+  const [draft, setDraft] = useState({name: '', lineId: '', agentId: '', opening: '', numbers: '', gapSeconds: '20'});
+  const [lines, setLines] = useState<PhoneNumber[]>([]);
+  const [agents, setAgents] = useState<Agent[]>([]);
+  useEffect(() => {
+    numberApi.list().then(b => setLines(b.numbers.filter(canCallOut))).catch(() => {});
+    workspace.agents().then(b => setAgents(b.agents.filter(a => a.mode !== 'inbound'))).catch(() => {});
+  }, []);
+  const line = lines.find(l => l.id === draft.lineId) ?? lines[0];
 
   const load = useCallback(async () => {
     try {
@@ -211,15 +220,23 @@ export function CampaignsScreen() {
       toast(t('A name and at least one number are both needed.'));
       return;
     }
+    if (!line) {toast(t('Connect and verify an outbound number first.')); return}
+    if (!draft.agentId && !line.outboundAgentId) {
+      toast(t('Choose an agent for this campaign, or give the number an outbound agent.'));
+      return;
+    }
     setBusy('new');
     try {
       await api.createCampaignLive({
         name: draft.name.trim(),
-        channel: draft.channel,
+        channel: line.kind === 'whatsapp' ? 'WHATSAPP_CALL' : 'PHONE',
+        lineId: line.id,
+        agentId: draft.agentId,
+        opening: draft.opening,
         numbers: draft.numbers,
         gapSeconds: Number(draft.gapSeconds) || 20,
       });
-      setDraft({name: '', channel: 'PHONE', numbers: '', gapSeconds: '20'});
+      setDraft({name: '', lineId: '', agentId: '', opening: '', numbers: '', gapSeconds: '20'});
       setAdding(false);
       await load();
     } catch (cause) {
@@ -259,12 +276,31 @@ export function CampaignsScreen() {
         onChange={v => setDraft(d => ({...d, numbers: v}))}
         placeholder={'03001112222, Ayesha\n03001112223, Omar'}
         help="One per line. A name after a comma is optional. Any number that cannot be read stops the whole list, so nobody is silently skipped."/>
+      <div className="field-grid">
+        <div className="field">
+          <label>{t('Call from')}</label>
+          <select className="select" value={line?.id ?? ''}
+            onChange={e => setDraft(d => ({...d, lineId: e.target.value}))}>
+            {lines.length === 0 && <option value="">{t('No verified outbound number')}</option>}
+            {lines.map(l => <option key={l.id} value={l.id}>{l.kind === 'whatsapp' ? 'WhatsApp · ' : 'Phone · '}{numberName(l)}</option>)}
+          </select>
+        </div>
+        <div className="field">
+          <label>{t('Agent')}</label>
+          <select className="select" value={draft.agentId}
+            onChange={e => setDraft(d => ({...d, agentId: e.target.value}))}>
+            <option value="">{line?.outboundAgentId
+              ? t('The number’s outbound agent') + ` (${agents.find(a => a.id === line.outboundAgentId)?.name ?? '…'})`
+              : t('Choose an agent')}</option>
+            {agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+          </select>
+        </div>
+      </div>
+      <Field label="Opening line (optional)" value={draft.opening}
+        onChange={v => setDraft(d => ({...d, opening: v}))}
+        placeholder="Hi, this is Sara from Acme calling about your enquiry…"
+        help="Leave empty to use the agent’s own greeting."/>
       <div className="row" style={{alignItems: 'flex-end', gap: 10}}>
-        <select className="select" value={draft.channel}
-          onChange={e => setDraft(d => ({...d, channel: e.target.value}))}>
-          <option value="PHONE">{t('Phone line')}</option>
-          <option value="WHATSAPP_CALL">{t('WhatsApp')}</option>
-        </select>
         <div style={{width: 160}}>
           <Field label="Seconds between calls" type="number" value={draft.gapSeconds}
             onChange={v => setDraft(d => ({...d, gapSeconds: v}))}/>
@@ -295,7 +331,7 @@ export function CampaignsScreen() {
                     </span>
                   </div>
                   <div className="row">
-                    <Badge tone={running ? 'ok' : row.status === 'DONE' ? '' : 'warning'}>
+                    <Badge tone={running ? 'success' : row.status === 'DONE' ? '' : 'warning'}>
                       {t(String(row.status).toLowerCase())}
                     </Badge>
                     {canManage && (running

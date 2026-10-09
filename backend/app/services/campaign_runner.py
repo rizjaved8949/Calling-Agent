@@ -187,6 +187,15 @@ async def _dial(tenant: Tenant, campaign: Campaign, call: Call, destination: str
 
 async def _call_one(tenant: Tenant, campaign: Campaign, contact) -> None:
     """Place one call and wait for it to finish."""
+    from ..repositories import numbers as number_repo
+
+    line = (
+        await number_repo.get(tenant.phone_number_id, campaign.line_id)
+        if campaign.line_id else None
+    )
+    if line is not None:
+        # Same company, speaking with this number's credentials.
+        tenant = number_repo.as_tenant(tenant, line)
     await _update_contact(tenant, campaign.id, contact.number,
                           state=ContactState.CALLING, attempts=contact.attempts + 1)
 
@@ -202,6 +211,7 @@ async def _call_one(tenant: Tenant, campaign: Campaign, contact) -> None:
         # price list is not answered from the support handbook.
         agentId=campaign.agent_id,
         knowledgeBaseId=campaign.knowledge_base_id,
+        lineId=campaign.line_id,
         metadata={"campaignId": campaign.id, "campaignName": campaign.name},
     )
     await call_repo.save_call(call)

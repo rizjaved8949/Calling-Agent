@@ -60,6 +60,15 @@ class KnowledgeBaseUpdate(BaseModel):
     is_default: bool | None = Field(default=None, alias="isDefault")
 
 
+class AgentMode(str, Enum):
+    """What the agent is for. A number's inbound slot takes an inbound or
+    both agent; its outbound slot takes an outbound or both agent."""
+
+    INBOUND = "inbound"
+    OUTBOUND = "outbound"
+    BOTH = "both"
+
+
 class AgentStatus(str, Enum):
     DRAFT = "draft"
     LIVE = "live"
@@ -81,6 +90,7 @@ class Agent(BaseModel):
     tenant_id: str = Field(default="", alias="tenantId")
     name: str = ""
     status: AgentStatus = AgentStatus.DRAFT
+    mode: AgentMode = AgentMode.BOTH
 
     # ---- What it says ----------------------------------------------------
     greeting: str = ""
@@ -113,6 +123,7 @@ class AgentCreate(BaseModel):
     tts_voice: str = Field(default="", alias="ttsVoice")
     knowledge_base_id: str = Field(default="", alias="knowledgeBaseId")
     status: AgentStatus = AgentStatus.DRAFT
+    mode: AgentMode = AgentMode.BOTH
 
 
 class AgentUpdate(BaseModel):
@@ -127,6 +138,7 @@ class AgentUpdate(BaseModel):
     tts_voice: str | None = Field(default=None, alias="ttsVoice")
     knowledge_base_id: str | None = Field(default=None, alias="knowledgeBaseId")
     status: AgentStatus | None = None
+    mode: AgentMode | None = None
 
 
 class Direction(str, Enum):

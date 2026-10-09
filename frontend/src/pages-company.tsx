@@ -7,6 +7,7 @@ import {useApp} from './app-context';
 import {formatDate,formatDuration} from './lib/format';
 import {api,LIVE} from './lib/api';
 import {ConnectionSetup} from './connection-setup';
+import {SetupChecklist} from './pages-numbers';
 import {presetKindHelp,presetKindLabel,presetsOfKind} from './lib/presets';
 import type {ChannelType,Persona,PresetKind} from './lib/types';
 
@@ -56,12 +57,12 @@ export function Dashboard(){
   }),[calls,today]);
   const setupDone=org.onboardingStep>=6;
 
-  if(!setupDone)return <div className="stack">
+  if(!setupDone&&!LIVE)return <div className="stack">
     <PageHead eyebrow="Welcome" title={'Let’s get '+org.name+' answering calls'} description="Work through these while we set your number up in the background."/>
     <div className="card stack">
       {[['Create your agent and write its greeting',readiness.personaReady,'/app/agents'],
         ['Upload the material it should answer from',readiness.knowledgeBaseReady,'/app/knowledge'],
-        ['Decide which calls use which material',readiness.routingReady,'/app/routing'],
+        ['Decide which calls use which material',readiness.routingReady,'/app/numbers'],
         ['Invite your team',store.memberships.filter(m=>m.orgId===org.id).length>1,'/app/team'],
         ['Your number goes live',readiness.phoneChannelReady||readiness.whatsappCallingReady,'/app/channels']].map(([label,done,to])=>
         <div className="row between checklist-row" key={label as string}>
@@ -73,6 +74,7 @@ export function Dashboard(){
 
   return <div className="stack dashboard-page">
     <PageHead eyebrow="Overview" title={org.name} description="What needs you right now."/>
+    {LIVE&&<SetupChecklist/>}
 
     <div className="grid cols-3">
       <Link className="card lift attention-card" to="/app/live">
@@ -85,7 +87,7 @@ export function Dashboard(){
         <div className={'stat-number mono '+(openQuestions.length?'warning':'')}>{openQuestions.length}</div>
         <div className="small muted">{openQuestions.length?t('Callers asked these and left without an answer'):t('Your agent answered everything')}</div>
       </Link>
-      <Link className="card lift attention-card" to="/app/channels">
+      <Link className="card lift attention-card" to="/app/numbers">
         <span className="stat-label">{t('Numbers needing attention')}</span>
         <div className={'stat-number mono '+(needsAttention.length?'warning':'')}>{needsAttention.length}</div>
         <div className="small muted">{needsAttention.length?t('Setup or a fault in progress'):t('All your numbers are active')}</div>
@@ -290,7 +292,7 @@ export function AgentDetail(){
       <h2>{t('Which numbers this agent answers on')}</h2>
       <p className="small muted">{t('Tick every number this agent should pick up. Other agents can answer the rest.')}</p>
       {channels.length===0
-        ?<Empty icon={Radio} title="No numbers yet" body="Ask us for a number and it will appear here." action={<Button to="/app/channels">Your numbers</Button>}/>
+        ?<Empty icon={Radio} title="No numbers yet" body="Ask us for a number and it will appear here." action={<Button to="/app/numbers">Your numbers</Button>}/>
         :(['sim','whatsapp_call','whatsapp_message'] as ChannelType[]).map(type=>{
           const group=channels.filter(c=>c.type===type);
           if(!group.length)return null;
@@ -442,7 +444,7 @@ export function ChannelDetail(){
   const [usage,setUsage]=useState<{agents:string[];rules:string[];campaigns:string[]}|null>(null);
   const [confirmRemove,setConfirmRemove]=useState(false);
   useEffect(()=>{if(id)api.channelUsage(id).then(setUsage)},[id,store.agents,store.callSetups,store.campaigns]);
-  if(!channel)return <Empty icon={Radio} title="Number not found" body="It may have been removed." action={<Button to="/app/channels">Your numbers</Button>}/>;
+  if(!channel)return <Empty icon={Radio} title="Number not found" body="It may have been removed." action={<Button to="/app/numbers">Your numbers</Button>}/>;
   const steps:[string,string][]=[['requested','Requested'],['setting_up','Being set up'],['testing','Testing'],['active','Active']];
   const currentStep=task?steps.findIndex(s=>s[0]===task.state):(channel.status==='connected'?3:0);
   const [tone,statusLabel,blurb]=STATUS_VIEW[channel.status]||STATUS_VIEW.disconnected;
@@ -537,7 +539,9 @@ export function SettingsPage(){
   // The company's own persona — what a number answers from when nothing
   // more specific (an agent, a call setup) has been built for it yet. See
   // services/routing.py's "company" fallback.
-  if(LIVE) tabs.splice(1,0,'Default agent');
+  // The pacing presets are not wired to the live voice engine, so a live
+  // workspace does not offer switches that change nothing.
+  if(LIVE){tabs.splice(tabs.indexOf('How calls are handled'),1);tabs.splice(1,0,'Default agent');}
   return <div className="stack">
     <PageHead eyebrow="Settings" title="Settings" description="Your company details and how your calls are handled."/>
     <Tabs items={tabs} active={tab} onChange={setTab}/>

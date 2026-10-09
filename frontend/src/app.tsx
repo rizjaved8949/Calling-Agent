@@ -1,6 +1,6 @@
 import React,{useEffect,useMemo,useState} from 'react';
 import {BrowserRouter,Link,NavLink,Navigate,Route,Routes,useLocation,useNavigate} from 'react-router-dom';
-import {Activity,BookOpen,BrainCircuit,Building2,ChartNoAxesCombined,ChevronDown,Command,Headphones,History,LayoutDashboard,LifeBuoy,ListChecks,Menu,MessageSquare,Mic2,Moon,PhoneOutgoing,Radio,Route as RouteIcon,ServerCog,Settings,ShieldCheck,Sun,Users,X,Search,LogOut,HelpCircle} from 'lucide-react';
+import {Phone,Activity,BookOpen,BrainCircuit,Building2,ChartNoAxesCombined,ChevronDown,Command,Headphones,History,LayoutDashboard,LifeBuoy,ListChecks,Menu,MessageSquare,Mic2,Moon,PhoneOutgoing,Radio,Route as RouteIcon,ServerCog,Settings,ShieldCheck,Sun,Users,X,Search,LogOut,HelpCircle} from 'lucide-react';
 import {api,subscribe,subscribePending} from './lib/api';
 import type {Store,Session,Organization,Role} from './lib/types';
 
@@ -69,6 +69,8 @@ import {OperatorCompanies,PlatformLoginScreen} from './pages-operator';
 import {LiveCalls} from './pages-live';
 import {CampaignsScreen,GapsScreen,UsageScreen} from './pages-growth';
 import {LIVE,hydrate} from './lib/api';
+import {NumbersScreen} from './pages-numbers';
+import {DialerScreen} from './pages-dialer';
 
 function Provider({children}:{children:React.ReactNode}){
   const [store,setStore]=useState<Store>(()=>api.snapshot());
@@ -203,13 +205,14 @@ export function PresetPicker({options,value,onChange,disabled}:{options:{id:stri
 
 
 type NavGroup=[string,[React.ComponentType<{size?:number}>,string,string][]][];
+// The order a company sets itself up in: a number, an agent, what it knows.
 const ADMIN_NAV:NavGroup=[
-  ['Workspace',[[LayoutDashboard,'Dashboard','/app/dashboard'],[Mic2,'Agents','/app/agents'],[BrainCircuit,'Knowledge','/app/knowledge'],[RouteIcon,'Call setups','/app/setups'],[Radio,'Numbers','/app/channels']]],
-  ['Operations',[[Activity,'Live','/app/live'],[PhoneOutgoing,'Campaigns','/app/campaigns'],[History,'History','/app/history'],[MessageSquare,'Messages','/app/messages'],[ListChecks,'Unanswered','/app/unanswered']]],
-  ['Manage',[[BookOpen,'Guides','/app/guides'],[Users,'Team','/app/team'],[ChartNoAxesCombined,'Usage','/app/usage'],[Settings,'Settings','/app/settings']]],
+  ['Setup',[[LayoutDashboard,'Dashboard','/app/dashboard'],[Radio,'Numbers','/app/numbers'],[Mic2,'Agents','/app/agents'],[BrainCircuit,'Knowledge','/app/knowledge']]],
+  ['Calls',[[Phone,'Dialer','/app/dialer'],[Activity,'Live','/app/live'],[PhoneOutgoing,'Campaigns','/app/campaigns'],[History,'History','/app/history'],[MessageSquare,'Messages','/app/messages'],[ListChecks,'Unanswered','/app/unanswered']]],
+  ['Manage',[[Users,'Team','/app/team'],[ChartNoAxesCombined,'Usage','/app/usage'],[Settings,'Settings','/app/settings'],[BookOpen,'Guides','/app/guides']]],
 ];
 const STAFF_NAV:NavGroup=[
-  ['My work',[[Headphones,'My queue','/app/queue'],[Activity,'Live','/app/live'],[RouteIcon,'Call setups','/app/setups'],[History,'My calls','/app/history']]],
+  ['My work',[[Phone,'Dialer','/app/dialer'],[Activity,'Live','/app/live'],[History,'My calls','/app/history']]],
   ['Help me',[[Search,'Customer lookup','/app/lookup'],[HelpCircle,'Ask the documents','/app/ask'],[BookOpen,'Guides','/app/guides']]],
 ];
 const PLATFORM_NAV:NavGroup=[
@@ -225,7 +228,7 @@ function Shell({children,platform=false}:{children:React.ReactNode;platform?:boo
   useEffect(()=>{const handle=(e:KeyboardEvent)=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();setPalette(x=>!x)}if(e.key==='Escape')setPalette(false)};window.addEventListener('keydown',handle);return()=>window.removeEventListener('keydown',handle)},[]);
   const nav=platform?PLATFORM_NAV:role==='staff'?STAFF_NAV:ADMIN_NAV;
   const current=nav.flatMap(x=>x[1]).filter(x=>location.pathname.startsWith(x[2])).sort((a,b)=>b[2].length-a[2].length)[0]?.[1]||(platform?'Platform':'Overview');
-  const home=platform?'/platform/companies':role==='staff'?'/app/queue':'/app/dashboard';
+  const home=platform?'/platform/companies':role==='staff'?'/app/dialer':'/app/dashboard';
   const endImpersonation=()=>{if(session?.impersonating){api.endImpersonation(session.impersonating.orgId);setSession({...session,impersonating:undefined});navigate('/platform/companies')}};
   return <div className={'app'+(platform?' platform':'')}>
     <div className={'mobile-backdrop '+(open?'show':'')} onClick={()=>setOpen(false)}/>
@@ -270,7 +273,7 @@ function Protected({children,manage=false}:{children:React.ReactNode;manage?:boo
   if(!session||(LIVE&&!hasBackendKey()))return <Navigate to="/login" replace/>;
   if(!hydrated)return <div className="route-loading">Loading your workspace…</div>;
   if(session.portal==='platform'&&!session.impersonating)return <Navigate to="/platform/companies" replace/>;
-  if(manage&&role==='staff')return <Navigate to="/app/queue" replace/>;
+  if(manage&&role==='staff')return <Navigate to="/app/dialer" replace/>;
   return <Shell>{children}</Shell>;
 }
 /**
@@ -338,7 +341,9 @@ function AppRoutes(){
     <Route path="/app/campaigns" element={<Protected manage><WhenLive real={<CampaignsScreen/>}><Campaigns/></WhenLive></Protected>}/>
     <Route path="/app/campaigns/:id" element={<Protected manage><WhenLive real={<CampaignsScreen/>}><CampaignDetail/></WhenLive></Protected>}/>
     <Route path="/app/unanswered" element={<Protected manage><WhenLive real={<GapsScreen/>}><Unanswered/></WhenLive></Protected>}/>
-    <Route path="/app/channels" element={<Protected manage><Channels/></Protected>}/>
+    <Route path="/app/numbers" element={<Protected manage><NumbersScreen/></Protected>}/>
+    <Route path="/app/dialer" element={<Protected><DialerScreen/></Protected>}/>
+    <Route path="/app/channels" element={LIVE?<Navigate to="/app/numbers" replace/>:<Protected manage><Channels/></Protected>}/>
     <Route path="/app/channels/:id" element={<Protected manage><ChannelDetail/></Protected>}/>
     <Route path="/app/messages" element={<Protected manage><Messages/></Protected>}/>
     <Route path="/app/team" element={<Protected manage><WhenLive real={<TeamScreen/>}><Team/></WhenLive></Protected>}/>

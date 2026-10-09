@@ -42,11 +42,13 @@ export type KbDocument = {
 };
 
 export type AgentStatus = 'draft' | 'live' | 'paused';
+export type AgentMode = 'inbound' | 'outbound' | 'both';
 
 export type Agent = {
   id: string;
   name: string;
   status: AgentStatus;
+  mode: AgentMode;
   greeting: string;
   roleDescription: string;
   language: string;

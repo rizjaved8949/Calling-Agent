@@ -50,17 +50,32 @@ Without Supabase credentials the backend keeps its rows in a local JSON file,
 so the whole stack runs with nothing else installed. `GET /health` says which
 store is in use.
 
-## Selling it to a company
+## How a company sets itself up
 
-1. You register them: `POST /api/companies` with your `X-Admin-Key`. The
-   response carries their API key, **once**.
-2. They sign in and paste that key, then enter their own Meta and carrier
-   credentials on the settings screen. Each company brings its own Meta app, so
-   their traffic and their bill are theirs.
-3. They paste the webhook URL the settings screen shows into their Meta app.
+1. **Sign up** at `/signup`. The owner lands on the Dashboard checklist.
+2. **Numbers → Connect a number.** Pick *Phone line (Infobip)* or *WhatsApp
+   (Meta)*, choose inbound / outbound / both, and paste the credentials from
+   the provider console (each field says where to find it). The backend asks
+   the provider straight away — Infobip's account balance, Meta's phone number
+   record — and marks the number **verified** or **not verified** with the
+   provider's own reason. Paste the URL it shows into Infobip (call events) or
+   the Meta app (callback URL, subscribed to `messages` and `calls`).
+3. **Agents → New agent.** Inbound, outbound or both, with greeting, persona and
+   language. **Knowledge** → create a base, upload documents, pick it on the agent.
+4. **Back on Numbers**, choose the agent that answers incoming calls and the one
+   that makes outgoing calls. Change the agent there to change how the number
+   behaves. A number with no inbound agent declines calls.
+5. **Outbound:** *Live* (agent calls one person), *Campaigns* (agent works a
+   list one by one), or the **Dialer** — an employee calls from the company
+   number and talks through the browser; the customer sees the company number.
+6. **Team → invite** employees. Staff land on the Dialer.
 
-The credentials in `backend/.env` are the operator's own account. A customer
-never falls back to them — no carrier key, no calls, and the screen says so.
+Every number keeps its own credentials, sealed in `voice_numbers` (apply
+`backend/supabase/migrations/20261010000000_voice_numbers.sql`). A customer
+never falls back to the credentials in `backend/.env` — except a company you
+switch to **"Allow your credentials"** in the platform portal (`/ops-login`),
+which can then connect a number with *"Use the platform's own credentials"*.
+That is how a demo account calls on your numbers.
 
 See [backend/README.md](backend/README.md) for the API and what is not built yet.
 

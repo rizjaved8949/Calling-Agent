@@ -203,11 +203,36 @@ async def operator_media(socket: WebSocket, call_id: str, token: str = Query(def
         pump.cancel()
         with contextlib.suppress(asyncio.CancelledError, Exception):
             await pump
-        # The operator leaving does not end the call. The caller is still
-        # there, so the agent picks it back up rather than the line going dead.
-        with contextlib.suppress(Exception):
-            await session.hand_back()
-        log.info("call %s: the operator left, agent resumed", call_id)
+        if session.human:
+            # A dialer call is the employee's own: hanging up the browser
+            # hangs up the call.
+            await _hang_up_human(tenant, call_id)
+            log.info("call %s: the employee hung up", call_id)
+        else:
+            # The operator leaving does not end the call. The caller is still
+            # there, so the agent picks it back up rather than the line going dead.
+            with contextlib.suppress(Exception):
+                await session.hand_back()
+            log.info("call %s: the operator left, agent resumed", call_id)
+
+
+async def _hang_up_human(tenant: Tenant, call_id: str) -> None:
+    from ...services import lines
+    from ...services.agent import whatsapp_media
+    from ...services.telephony import Infobip
+    from ...services.whatsapp import WhatsApp
+
+    call = await call_repo.get_call(tenant.phone_number_id, call_id)
+    if call is None:
+        return
+    effective = await lines.tenant_for_call(tenant, call)
+    await live.finish(effective, call_id, "the employee hung up")
+    with contextlib.suppress(Exception):
+        if call.provider_call_id and call.channel is Channel.PHONE:
+            await Infobip(effective).hangup(call.provider_call_id)
+        elif call.provider_call_id and call.channel is Channel.WHATSAPP_CALL:
+            await WhatsApp(effective).terminate_call(call.provider_call_id)
+            await whatsapp_media.drop(call_id)
 
 
 # ---------------------------------------------------------------------------

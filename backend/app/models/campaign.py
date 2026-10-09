@@ -76,6 +76,8 @@ class Campaign(BaseModel):
     # back the same way any other call does — see services/routing.py.
     agent_id: str = Field(default="", alias="agentId")
     knowledge_base_id: str = Field(default="", alias="knowledgeBaseId")
+    # Which connected number the list is called from.
+    line_id: str = Field(default="", alias="lineId")
 
     # Seconds between calls. A floor rather than a target: the point is that a
     # list is worked through at a human pace, not that it finishes quickly.
@@ -115,6 +117,7 @@ class Campaign(BaseModel):
             "opening": self.opening or None,
             "agentId": self.agent_id or None,
             "knowledgeBaseId": self.knowledge_base_id or None,
+            "lineId": self.line_id or None,
             "gapSeconds": self.gap_seconds,
             "total": total,
             "counts": tally,
@@ -138,6 +141,7 @@ class CampaignCreate(BaseModel):
     gap_seconds: int = Field(default=20, ge=5, le=600, alias="gapSeconds")
     agent_id: str = Field(default="", alias="agentId")
     knowledge_base_id: str = Field(default="", alias="knowledgeBaseId")
+    line_id: str = Field(default="", alias="lineId")
     # Pasted in, one per line: "number" or "number, name". Parsed server-side
     # so the same rules apply however it was entered.
     numbers: str = ""
@@ -151,4 +155,5 @@ class CampaignUpdate(BaseModel):
     gap_seconds: int | None = Field(default=None, ge=5, le=600, alias="gapSeconds")
     agent_id: str | None = Field(default=None, alias="agentId")
     knowledge_base_id: str | None = Field(default=None, alias="knowledgeBaseId")
+    line_id: str | None = Field(default=None, alias="lineId")
     numbers: str | None = None

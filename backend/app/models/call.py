@@ -120,6 +120,14 @@ class Call(BaseModel):
     # setup | explicit | agent | company — see services/routing.py
     resolved_by: str = Field(default="", alias="resolvedBy")
 
+    # Which of the company's numbers carried this call (`voice_numbers.id`).
+    line_id: str = Field(default="", alias="lineId")
+    # "ai": the agent talks. "human": an employee placed it from the web
+    # dialer and talks through their browser; no model is started.
+    mode: str = "ai"
+    # The person who placed a human call, so "My calls" can find it.
+    placed_by: str = Field(default="", alias="placedBy")
+
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     def public(self) -> dict[str, Any]:
@@ -156,6 +164,9 @@ class Call(BaseModel):
             "knowledgeBaseId": self.knowledge_base_id or None,
             "knowledgeBaseName": self.knowledge_base_name or None,
             "resolvedBy": self.resolved_by or None,
+            "lineId": self.line_id or None,
+            "mode": self.mode,
+            "placedBy": self.placed_by or None,
             "error": self.error or None,
         }
 
@@ -172,6 +183,11 @@ class OutboundCallRequest(BaseModel):
     # call that arrives with nothing specified.
     agent_id: str = Field(default="", alias="agentId")
     knowledge_base_id: str = Field(default="", alias="knowledgeBaseId")
+    # Which connected number to call from. Blank picks the first verified
+    # number of the right kind that is allowed to make outbound calls.
+    line_id: str = Field(default="", alias="lineId")
+    # True from the web dialer: an employee talks, not the agent.
+    human: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -199,6 +215,7 @@ class Message(BaseModel):
     created_at: float = Field(default_factory=time.time, alias="createdAt")
     # Set when the message belongs to the conversation around a call.
     call_id: str = Field(default="", alias="callId")
+    line_id: str = Field(default="", alias="lineId")
 
     def public(self) -> dict[str, Any]:
         return {
@@ -214,6 +231,7 @@ class Message(BaseModel):
             "error": self.error or None,
             "createdAt": self.created_at,
             "callId": self.call_id or None,
+            "lineId": self.line_id or None,
         }
 
 
@@ -223,6 +241,7 @@ class SendTextRequest(BaseModel):
     to: str = Field(min_length=3)
     body: str = Field(min_length=1, max_length=4000)
     call_id: str | None = Field(default=None, alias="callId")
+    line_id: str = Field(default="", alias="lineId")
 
 
 class CallPermissionRequest(BaseModel):
@@ -236,6 +255,7 @@ class CallPermissionRequest(BaseModel):
     to: str = Field(min_length=3)
     template: str = "call_permission_request"
     language: str = "en"
+    line_id: str = Field(default="", alias="lineId")
 
 
 class SendTemplateRequest(BaseModel):
@@ -247,3 +267,4 @@ class SendTemplateRequest(BaseModel):
     # Positional body parameters, in order. Meta has no named parameters.
     parameters: list[str] = Field(default_factory=list)
     call_id: str | None = Field(default=None, alias="callId")
+    line_id: str = Field(default="", alias="lineId")

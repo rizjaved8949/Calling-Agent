@@ -93,12 +93,36 @@ class Tenant(BaseModel):
 
     default_country_code: str = Field(default="", alias="defaultCountryCode")
 
+    # Set by the platform operator, never by the company: lets this company's
+    # numbers run on the platform's own Meta/Infobip credentials from the
+    # server environment. This is how a demo account calls on the owner's line.
+    allow_platform_credentials: bool = Field(default=False, alias="allowPlatformCredentials")
+
+    # ---- Per-call overlay (never stored) ----------------------------------
+    # A company has many numbers, each with its own credentials. When a call
+    # or message is handled for one of them, `repositories/numbers.as_tenant`
+    # returns a copy of the tenant with that number's credentials laid over
+    # these fields and these two set. `phone_number_id` stays the company key,
+    # so every row is still filed under the company.
+    line_id: str = Field(default="", alias="lineId")
+    meta_phone_number_id: str = Field(default="", alias="metaPhoneNumberId")
+
     # ---- Derived ----------------------------------------------------------
+
+    @property
+    def graph_number_id(self) -> str:
+        """The id Meta's Graph API knows this number by."""
+        return self.meta_phone_number_id or self.phone_number_id
 
     @property
     def configured(self) -> bool:
         """Enough credentials to actually talk to Meta as this business."""
-        return bool(self.access_token and self.phone_number_id and self.waba_id)
+        return bool(
+            self.access_token
+            and self.waba_id
+            and self.graph_number_id
+            and not self.graph_number_id.startswith("pending-")
+        )
 
     def public(self) -> dict[str, Any]:
         """Safe to log or return over HTTP — never includes a secret."""
@@ -131,6 +155,7 @@ class Tenant(BaseModel):
                 "phoneNumber": self.infobip_phone_number or None,
             },
             "qaWebhookConfigured": bool(self.qa_webhook_url),
+            "allowPlatformCredentials": self.allow_platform_credentials,
         }
 
 
@@ -176,6 +201,7 @@ class TenantCreate(BaseModel):
     qa_webhook_url: str = Field(default="", alias="qaWebhookUrl")
     qa_api_key: str = Field(default="", alias="qaApiKey")
     default_country_code: str = Field(default="", alias="defaultCountryCode")
+    allow_platform_credentials: bool = Field(default=False, alias="allowPlatformCredentials")
 
 
 class TenantUpdate(BaseModel):
@@ -210,3 +236,4 @@ class TenantUpdate(BaseModel):
     qa_webhook_url: str | None = Field(default=None, alias="qaWebhookUrl")
     qa_api_key: str | None = Field(default=None, alias="qaApiKey")
     default_country_code: str | None = Field(default=None, alias="defaultCountryCode")
+    allow_platform_credentials: bool | None = Field(default=None, alias="allowPlatformCredentials")

@@ -82,8 +82,11 @@ class Infobip:
         # told so. The env values are the platform owner's own account and are
         # reached only through the legacy single-tenant row.
         self.api_key = tenant.infobip_api_key.strip()
-        base = tenant.infobip_base_url.strip()
-        self.base_url = base.rstrip("/") if base else ""
+        base = tenant.infobip_base_url.strip().rstrip("/")
+        # Infobip's portal shows the base URL without a scheme.
+        if base and not base.startswith("http"):
+            base = "https://" + base
+        self.base_url = base
 
     @property
     def configured(self) -> bool:

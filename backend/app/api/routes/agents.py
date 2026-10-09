@@ -172,6 +172,9 @@ async def delete_agent(tenant: CurrentTenant, agent_id: str) -> None:
             raise Conflict(
                 f"{setup.name!r} is answered by this agent. Disable it first."
             )
+    from .numbers import clear_agent
+
+    await clear_agent(tenant.phone_number_id, agent_id)
     await repo.delete_agent(tenant.phone_number_id, agent_id)
     log.info("tenant %s: agent %s deleted", tenant.phone_number_id, agent_id)
 

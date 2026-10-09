@@ -53,6 +53,7 @@ async def resolve(
     direction: Direction,
     knowledge_base_id: str = "",
     agent_id: str = "",
+    line_id: str = "",
 ) -> Resolved:
     """Walk the chain. Never raises: an unanswerable call is worse than a
     call answered from the company's whole pile."""
@@ -69,7 +70,23 @@ async def resolve(
         if agent is None:
             log.warning("tenant %s: agent %s was named but does not exist", tenant_id, agent_id)
 
-    # 2. Otherwise the setup for this number and direction.
+    # 2. The agent assigned to the number the call is on, for this direction.
+    line_id = line_id or tenant.line_id
+    if agent is None and line_id:
+        from ..repositories import numbers as number_repo
+
+        number = await number_repo.get(tenant_id, line_id)
+        if number is not None:
+            assigned = (
+                number.inbound_agent_id if direction is Direction.INBOUND
+                else number.outbound_agent_id
+            )
+            if assigned:
+                agent = await agent_repo.get_agent(tenant_id, assigned)
+                if agent is not None:
+                    resolved_by = "number"
+
+    # 3. Otherwise the legacy call setup for this channel and direction.
     setup = None
     if agent is None and direction is Direction.INBOUND:
         setup = await agent_repo.active_inbound_setup(tenant_id, channel)
@@ -83,7 +100,7 @@ async def resolve(
     if not kb_id and knowledge_base_id:
         kb_id, resolved_by = knowledge_base_id, "explicit"
 
-    # 4. The agent's default.
+    # 4. The agent's own knowledge base.
     if not kb_id and agent is not None and agent.knowledge_base_id:
         kb_id, resolved_by = agent.knowledge_base_id, "agent"
 

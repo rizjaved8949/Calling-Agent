@@ -86,13 +86,20 @@ async def list_campaigns(tenant: CurrentTenant) -> dict:
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_campaign(tenant: CurrentTenant, payload: CampaignCreate) -> dict:
+    from .numbers import pick_line
+
+    line = await pick_line(
+        tenant, payload.line_id, whatsapp=payload.channel is Channel.WHATSAPP_CALL
+    )
     campaign = Campaign(
+        lineId=line.id if line else "",
+        # The number's outbound agent unless the campaign names its own.
+        agentId=payload.agent_id or (line.outbound_agent_id if line else ""),
         tenantId=tenant.phone_number_id,
         name=payload.name,
         channel=payload.channel,
         opening=payload.opening,
         gapSeconds=payload.gap_seconds,
-        agentId=payload.agent_id,
         knowledgeBaseId=payload.knowledge_base_id,
         contacts=_contacts_from(payload.numbers, tenant),
     )

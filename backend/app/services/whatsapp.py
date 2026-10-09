@@ -186,7 +186,7 @@ class WhatsApp:
             # answer under a thumbnail. These answers are text.
             "text": {"preview_url": False, "body": body[:MAX_BODY]},
         }
-        result = await self._post(f"{self.tenant.phone_number_id}/messages", payload)
+        result = await self._post(f"{self.tenant.graph_number_id}/messages", payload)
         return await self._record(
             to=to, body=body, kind="text", result=result, call_id=call_id
         )
@@ -219,7 +219,7 @@ class WhatsApp:
                 **({"components": components} if components else {}),
             },
         }
-        result = await self._post(f"{self.tenant.phone_number_id}/messages", payload)
+        result = await self._post(f"{self.tenant.graph_number_id}/messages", payload)
         return await self._record(
             to=to,
             body=" | ".join(parameters or []),
@@ -233,7 +233,7 @@ class WhatsApp:
         """Show the blue ticks. Best effort — never worth failing a reply over."""
         try:
             await self._post(
-                f"{self.tenant.phone_number_id}/messages",
+                f"{self.tenant.graph_number_id}/messages",
                 {
                     "messaging_product": "whatsapp",
                     "status": "read",
@@ -264,7 +264,7 @@ class WhatsApp:
         exists to prevent.
         """
         return await self._post(
-            f"{self.tenant.phone_number_id}/calls",
+            f"{self.tenant.graph_number_id}/calls",
             {
                 "messaging_product": "whatsapp",
                 "to": msisdn(to, self.tenant),
@@ -287,7 +287,7 @@ class WhatsApp:
         the only part Meta treats specially.
         """
         return await self._post(
-            f"{self.tenant.phone_number_id}/messages",
+            f"{self.tenant.graph_number_id}/messages",
             {
                 "messaging_product": "whatsapp",
                 "to": msisdn(to, self.tenant),
@@ -303,7 +303,7 @@ class WhatsApp:
         sent the caller hears ringing; after it, Meta starts media.
         """
         return await self._post(
-            f"{self.tenant.phone_number_id}/calls",
+            f"{self.tenant.graph_number_id}/calls",
             {
                 "messaging_product": "whatsapp",
                 "call_id": provider_call_id,
@@ -314,7 +314,7 @@ class WhatsApp:
 
     async def reject_call(self, provider_call_id: str) -> dict[str, Any]:
         return await self._post(
-            f"{self.tenant.phone_number_id}/calls",
+            f"{self.tenant.graph_number_id}/calls",
             {
                 "messaging_product": "whatsapp",
                 "call_id": provider_call_id,
@@ -324,7 +324,7 @@ class WhatsApp:
 
     async def terminate_call(self, provider_call_id: str) -> dict[str, Any]:
         return await self._post(
-            f"{self.tenant.phone_number_id}/calls",
+            f"{self.tenant.graph_number_id}/calls",
             {
                 "messaging_product": "whatsapp",
                 "call_id": provider_call_id,
@@ -356,6 +356,7 @@ class WhatsApp:
             templateName=template,
             status="accepted",
             callId=call_id,
+            lineId=self.tenant.line_id,
         )
         return await call_repo.save_message(message)
 

@@ -11,6 +11,7 @@ import {Badge, Button, Empty, Field, PageHead} from './app';
 import {useApp} from './app-context';
 import {api} from './lib/api';
 import {joinCallAsOperator, type OperatorCall} from './lib/operator';
+import {canCallOut, numberName, numbers as numberApi, type PhoneNumber} from './lib/api/numbers';
 
 type LiveCall = {
   callId: string;
@@ -47,14 +48,27 @@ function clock(seconds: number): string {
 function PlaceCall({onPlaced}: {onPlaced: () => void}) {
   const {t, toast} = useApp();
   const [number, setNumber] = useState('');
-  const [channel, setChannel] = useState<'PHONE' | 'WHATSAPP_CALL'>('PHONE');
+  const [lines, setLines] = useState<PhoneNumber[]>([]);
+  const [lineId, setLineId] = useState('');
   const [busy, setBusy] = useState('');
+  useEffect(() => {
+    numberApi.list().then(b => {
+      // Only numbers with an outbound agent: this form puts the agent on the
+      // call. Calling yourself is the Dialer's job.
+      const usable = b.numbers.filter(n => canCallOut(n) && n.outboundAgentId);
+      setLines(usable);
+      if (usable[0]) setLineId(id => id || usable[0].id);
+    }).catch(() => {});
+  }, []);
+  const line = lines.find(l => l.id === lineId);
+  const channel: 'PHONE' | 'WHATSAPP_CALL' = line?.kind === 'whatsapp' ? 'WHATSAPP_CALL' : 'PHONE';
 
   const call = async () => {
     if (!number.trim()) {toast(t('Enter a number first.')); return}
     setBusy('call');
     try {
-      await api.placeCall(number.trim(), channel);
+      if (!line) {toast(t('Give a verified number an outbound agent on the Numbers page first.')); return}
+      await numberApi.placeCall({to: number.trim(), channel, lineId: line.id});
       toast(t('Calling…'));
       setNumber('');
       onPlaced();
@@ -69,7 +83,7 @@ function PlaceCall({onPlaced}: {onPlaced: () => void}) {
     if (!number.trim()) {toast(t('Enter a number first.')); return}
     setBusy('permission');
     try {
-      await api.askCallPermission(number.trim());
+      await numberApi.askPermission(number.trim(), lineId);
       toast(t('Asked. They will see a message with an accept button.'));
     } catch (cause) {
       toast(cause instanceof Error ? cause.message : t('That request could not be sent.'));
@@ -79,17 +93,17 @@ function PlaceCall({onPlaced}: {onPlaced: () => void}) {
   };
 
   return <div className="card stack">
-    <strong>{t('Place a call')}</strong>
+    <strong>{t('Have the agent call someone')}</strong>
     <div className="row" style={{alignItems: 'flex-end', flexWrap: 'wrap', gap: 10}}>
       <div style={{flex: '1 1 220px'}}>
         <Field label="Number" value={number} onChange={setNumber}
           placeholder="03001112222"
           help="A local number is expanded using your country code."/>
       </div>
-      <select className="select" value={channel} disabled={Boolean(busy)}
-        onChange={e => setChannel(e.target.value as 'PHONE' | 'WHATSAPP_CALL')}>
-        <option value="PHONE">{t('Phone line')}</option>
-        <option value="WHATSAPP_CALL">{t('WhatsApp')}</option>
+      <select className="select" style={{width: 'auto'}} value={lineId} disabled={Boolean(busy) || !lines.length}
+        onChange={e => setLineId(e.target.value)} aria-label={t('Call from')}>
+        {lines.length === 0 && <option value="">{t('No number with an outbound agent')}</option>}
+        {lines.map(l => <option key={l.id} value={l.id}>{l.kind === 'whatsapp' ? 'WhatsApp · ' : 'Phone · '}{numberName(l)}</option>)}
       </select>
       <Button onClick={() => void call()} disabled={Boolean(busy)}>
         {busy === 'call'
@@ -171,7 +185,7 @@ export function LiveCalls() {
   return <div className="stack">
     <PageHead eyebrow="Calls" title="Happening now"
       description="Calls with audio actually moving through them. A call that shows here is one you can join."
-      action={loading ? <Badge>{t('Checking…')}</Badge> : <Badge tone={calls.length ? 'ok' : ''}>
+      action={loading ? <Badge>{t('Checking…')}</Badge> : <Badge tone={calls.length ? 'success' : ''}>
         {calls.length} {t(calls.length === 1 ? 'live call' : 'live calls')}
       </Badge>}/>
 
@@ -197,7 +211,7 @@ export function LiveCalls() {
                   {call.handledBy === 'operator'
                     ? <Badge tone="warning">{t('a person is on this call')}</Badge>
                     : call.speaking
-                      ? <Badge tone="ok">{t('agent speaking')}</Badge>
+                      ? <Badge tone="success">{t('agent speaking')}</Badge>
                       : <Badge>{t('agent listening')}</Badge>}
                   {canManage && (mine
                     ? <Button small variant="outline" onClick={() => void leave(call.callId)}>

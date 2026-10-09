@@ -36,6 +36,7 @@ from ...models.call import (
 from ...models.tenant import Tenant
 from ...repositories import calls as call_repo
 from ...repositories import knowledge
+from ...repositories import numbers as number_repo
 from ...repositories import tenants as tenant_repo
 from ...security import playback
 from ...services import reports
@@ -75,6 +76,9 @@ async def verify_whatsapp(request: Request) -> Response:
     for tenant in await tenant_repo.list_all():
         if tenant.verify_token:
             accepted.add(tenant.verify_token.strip())
+    for number in await number_repo.list_all():
+        if number.verify_token:
+            accepted.add(number.verify_token.strip())
     accepted.discard("")
 
     if token in accepted:
@@ -118,7 +122,7 @@ async def whatsapp_events(request: Request) -> dict:
         return {"status": "ignored"}
 
     phone_number_id = _phone_number_id(payload)
-    tenant = await tenant_repo.get(phone_number_id) if phone_number_id else None
+    tenant = await _tenant_for_meta(phone_number_id)
 
     if not signature_ok(tenant, raw, request.headers.get("x-hub-signature-256")):
         # 403, not 401: there is no credential to supply, and Meta treats both
@@ -140,6 +144,34 @@ async def whatsapp_events(request: Request) -> dict:
     except Exception:  # noqa: BLE001 — one bad event must not disable the webhook
         log.exception("failed while handling a WhatsApp event for %s", phone_number_id)
     return {"status": "received"}
+
+
+async def _tenant_for_meta(phone_number_id: str) -> Tenant | None:
+    """The company, speaking as the number this delivery is about.
+
+    A number connected on the Numbers page wins; a company whose row is keyed
+    on the Meta id itself (the older one-number setup) is the fallback.
+    """
+    if not phone_number_id:
+        return None
+    line = await number_repo.by_meta_phone_number_id(phone_number_id)
+    if line is not None:
+        company = await tenant_repo.get(line.tenant_id)
+        if company is not None:
+            return number_repo.as_tenant(company, line)
+    return await tenant_repo.get(phone_number_id)
+
+
+async def _inbound_allowed(tenant: Tenant) -> bool:
+    """Whether this number answers calls at all.
+
+    An outbound-only number, or one nobody has given an inbound agent, is not
+    answered by a stranger's agent — the call is declined and logged instead.
+    """
+    if not tenant.line_id:
+        return True
+    line = await number_repo.get(tenant.phone_number_id, tenant.line_id)
+    return bool(line and line.verified and line.takes_inbound and line.inbound_agent_id)
 
 
 async def _handle_whatsapp(tenant: Tenant, payload: dict[str, Any]) -> None:
@@ -178,6 +210,7 @@ async def _on_messages(tenant: Tenant, value: dict[str, Any]) -> None:
             body=body,
             status="received",
             createdAt=float(raw.get("timestamp") or time.time()),
+            lineId=tenant.line_id,
         )
         await call_repo.save_message(message)
         log.info(
@@ -288,6 +321,7 @@ async def _on_calls(tenant: Tenant, value: dict[str, Any]) -> None:
                 status=CallStatus.RINGING,
                 counterparty=f"+{counterparty}" if counterparty else "",
                 providerCallId=provider_call_id,
+                lineId=tenant.line_id,
                 startedAt=float(raw.get("timestamp") or time.time()),
                 recordingState=(
                     RecordingState.PENDING if tenant.record_calls else RecordingState.NONE
@@ -357,6 +391,31 @@ async def _on_calls(tenant: Tenant, value: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 
+@router.post("/infobip/line/{number_id}")
+async def infobip_line_events(number_id: str, request: Request) -> dict:
+    """Call events for one connected SIM number.
+
+    The URL shown on the Numbers page. It names the number, so the right
+    company and the right carrier credentials are known before the payload is
+    read. The id is a random 128-bit value and is the only secret Infobip
+    offers us, the same arrangement as the per-company URL below.
+    """
+    line = await number_repo.get_any(number_id)
+    company = await tenant_repo.get(line.tenant_id) if line else None
+    if line is None or company is None:
+        log.warning("Infobip event for unknown number %s", number_id)
+        return {"status": "unknown-number"}
+    try:
+        payload = await request.json()
+    except ValueError:
+        return {"status": "ignored"}
+    try:
+        await _handle_infobip(number_repo.as_tenant(company, line), payload)
+    except Exception:  # noqa: BLE001
+        log.exception("failed while handling an Infobip event for number %s", number_id)
+    return {"status": "received"}
+
+
 @router.post("/infobip/{phone_number_id}")
 async def infobip_events(phone_number_id: str, request: Request) -> dict:
     """Call progress from the carrier.
@@ -401,6 +460,13 @@ async def _answer_whatsapp(tenant: Tenant, call: Call, sdp_offer: str) -> None:
     if not whatsapp_media.available():
         log.error("call %s: aiortc is not installed, cannot answer", call.id)
         await _fail_call(tenant, call, "the media stack is not installed")
+        return
+
+    if not await _inbound_allowed(tenant):
+        log.info("call %s: this number takes no inbound calls, declining", call.id)
+        with contextlib.suppress(Exception):
+            await WhatsApp(tenant).reject_call(call.provider_call_id)
+        await _fail_call(tenant, call, "this number is not set up to answer calls")
         return
 
     bridge = None
@@ -503,6 +569,12 @@ async def _attach_media(tenant: Tenant, call: Call) -> None:
 
 async def _answer_inbound(tenant: Tenant, call: Call) -> None:
     """Answer a SIM call the carrier is offering."""
+    if not await _inbound_allowed(tenant):
+        log.info("call %s: this number takes no inbound calls, hanging up", call.id)
+        with contextlib.suppress(Exception):
+            await Infobip(tenant).hangup(call.provider_call_id)
+        await _fail_call(tenant, call, "this number is not set up to answer calls")
+        return
     try:
         await Infobip(tenant).answer(call.provider_call_id)
         log.info("call %s: answered on the carrier", call.id)
@@ -539,6 +611,8 @@ async def _handle_infobip(tenant: Tenant, payload: dict[str, Any]) -> None:
                 status=CallStatus.RINGING,
                 counterparty=caller,
                 providerCallId=provider_call_id,
+                lineId=tenant.line_id,
+                fromNumber=tenant.infobip_phone_number,
                 recordingState=(
                     RecordingState.PENDING if tenant.record_calls else RecordingState.NONE
                 ),
