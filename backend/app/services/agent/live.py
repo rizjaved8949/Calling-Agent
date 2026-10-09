@@ -103,11 +103,12 @@ async def persona_for(tenant: Tenant, call: Call | None = None) -> AgentPersona:
     language = (voice["language"] or "").strip()
     can_message = bool(call) and await _can_send_whatsapp(tenant)
 
-    rules = [
+    # Who it is. Said first, because everything after is about how to behave.
+    opening = [
         persona,
         "",
-        # Deliberately naming no organisation. The company's own persona above
-        # says who they are, and repeating a name from the account record
+        # Deliberately naming no organisation. The company's persona above says
+        # who they are, and repeating a name from the account record
         # contradicted it whenever the two differed — an account called
         # "Calling Agent" had its university assistant introduce itself as the
         # assistant for Calling Agent, in the same breath as saying otherwise.
@@ -116,9 +117,33 @@ async def persona_for(tenant: Tenant, call: Call | None = None) -> AgentPersona:
         "anyone asks who or what you are, say so plainly and warmly — never "
         "claim to be human, and never pretend the caller has reached a "
         "department or an individual.",
+    ]
+
+    if context:
+        material = [
+            "",
+            "## The material you answer from",
+            "Answer only from this. If the answer is not here, say you will "
+            "check and have someone call back — never invent a figure, a date "
+            "or a policy.",
+            "",
+            context,
+        ]
+    else:
+        material = [
+            "",
+            "You have no reference material, so do not state specific facts "
+            "about this business. Offer to take a message instead.",
+        ]
+
+    # Everything below comes *after* the material on purpose. The knowledge
+    # base runs to tens of thousands of characters, and rules placed before it
+    # were followed about two times in five: the agent would say "I have sent
+    # it on WhatsApp" and send nothing. Last word in the prompt wins.
+    conduct = [
         "",
-        # Everything below is about the medium, not the business, so it applies
-        # whatever persona the company wrote.
+        "## How to behave on this call",
+        "",
         "You are on a telephone call:",
         "- Speak in short, natural sentences, the way people actually talk.",
         "- Never read out punctuation, bullet points or formatting. There is "
@@ -136,35 +161,47 @@ async def persona_for(tenant: Tenant, call: Call | None = None) -> AgentPersona:
         "more than what you were saying.",
         "- Be warm and unhurried. A caller should feel helped, not processed.",
     ]
-    rules.append(
-        f"Speak {_language_name(language)} unless the caller uses another "
+    conduct.append(
+        f"- Speak {_language_name(language)} unless the caller uses another "
         "language, in which case follow them. Mirror their mix of languages "
         "rather than forcing one."
         if language
-        else "Speak whatever language the caller speaks, and mirror their mix of "
-             "languages rather than forcing one."
+        else "- Speak whatever language the caller speaks, and mirror their mix "
+             "of languages rather than forcing one."
     )
 
     tone = (voice.get("tone") or "").strip()
     if tone:
-        rules += ["", "How this company wants you to sound:", tone]
+        conduct += ["", "How this company wants you to sound:", tone]
 
     escalation = (voice.get("escalation") or "").strip()
     if escalation:
-        rules += ["", "When to hand over or follow up:", escalation]
+        conduct += ["", "When to hand over or follow up:", escalation]
 
     if can_message:
-        rules += [
+        conduct += [
             "",
-            "If they want anything in writing — a link, an address, a price, a "
-            "summary of what you agreed — send it with send_whatsapp_message. "
-            "You already have the number they are calling from, so never ask "
-            "them for it. Tell them it is on its way, then carry on.",
+            "### Sending something in writing",
+            "When they ask for anything in writing — a link, an address, a fee, "
+            "a summary — you MUST call the send_whatsapp_message function. It "
+            "is the only way a message is actually sent.",
+            "- You already have the number they are calling from. Never ask for "
+            "it, and never ask which number to use.",
+            "- Never tell a caller you have sent something unless you called "
+            "the function and it confirmed. Saying 'I have sent it' without "
+            "calling it is a lie to someone who will go and look for it.",
+            "- Call the function first, then tell them it is on its way.",
         ]
 
-    rules += [
+    # The company's own words again, at the end. Identity suffers the same
+    # burial as everything else placed before a large knowledge base: a persona
+    # saying "call it the university, not by name" was ignored in favour of the
+    # name used throughout the documents.
+    conduct += ["", "### Who you are, once more", persona]
+
+    conduct += [
         "",
-        "Ending the call:",
+        "### Ending the call",
         "- When their question is answered and they have nothing else, say a "
         "warm goodbye and call end_call in the same turn.",
         "- If the call is going nowhere — somebody testing you, saying the same "
@@ -174,23 +211,8 @@ async def persona_for(tenant: Tenant, call: Call | None = None) -> AgentPersona:
         "have someone call them back instead.",
     ]
 
-    if context:
-        rules += [
-            "",
-            "Answer only from the material below. If the answer is not in it, "
-            "say you will check and have someone call back — never invent a "
-            "figure, a date or a policy.",
-            "",
-            context,
-        ]
-    else:
-        rules += [
-            "",
-            "You have no reference material, so do not state specific facts "
-            "about this business. Offer to take a message instead.",
-        ]
     return AgentPersona(
-        instructions="\n".join(rules),
+        instructions="\n".join(opening + material + conduct),
         greeting=(voice["greeting"] or "").strip(),
         voice=(voice["ttsVoice"] or "").strip(),
         language=language,

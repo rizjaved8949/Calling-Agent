@@ -245,3 +245,53 @@ async def test_ending_waits_for_the_goodbye_before_hanging_up(monkeypatch):
     await asyncio.wait_for(task, timeout=5)
     assert hung_up == ["done"]
     live._sessions.pop("c-9", None)
+
+
+# ---------------------------------------------------------------------------
+# Where things sit in the prompt
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_the_rules_come_after_the_material(fake_db, with_whatsapp, monkeypatch):
+    """Measured, not guessed: with the rules before a 67k-character knowledge
+    base the agent used send_whatsapp_message two times in five, telling the
+    caller "I have sent it" while sending nothing. Moved after, five in five.
+    Last word in the prompt wins, so ordering is load-bearing."""
+    from app.services import routing
+
+    async def big_context(_tenant, _resolved):
+        return "FEE SCHEDULE. " + ("x" * 60_000)
+
+    monkeypatch.setattr(routing, "context_for", big_context)
+
+    text = (await live.persona_for(_tenant(), _call())).instructions
+    material = text.index("## The material you answer from")
+    conduct = text.index("## How to behave on this call")
+    assert material < conduct, "the rules were buried before the knowledge base again"
+    assert text.index("send_whatsapp_message") > material
+
+
+@pytest.mark.asyncio
+async def test_the_persona_is_restated_at_the_end(fake_db, no_whatsapp, monkeypatch):
+    """A persona saying "call it the university, never by name" was ignored in
+    favour of the name used throughout the documents, for the same reason."""
+    from app.services import routing
+
+    async def big_context(_tenant, _resolved):
+        return "The University of Central Punjab. " + ("x" * 60_000)
+
+    monkeypatch.setattr(routing, "context_for", big_context)
+
+    persona = "You are the university's assistant. Say 'the university', never its name."
+    text = (await live.persona_for(_tenant(persona=persona), _call())).instructions
+    assert text.count(persona) == 2, "the persona is stated once and buried"
+    assert text.rindex(persona) > text.index("## The material you answer from")
+
+
+@pytest.mark.asyncio
+async def test_she_is_forbidden_from_claiming_an_unsent_message(fake_db, with_whatsapp):
+    """The failure mode was not silence. It was saying "I have sent it on
+    WhatsApp" to somebody who would then go and look for it."""
+    text = (await live.persona_for(_tenant(), _call())).instructions
+    assert "Never tell a caller you have sent something unless you called" in text
+    assert "is a lie to someone who will go and look for it" in text
