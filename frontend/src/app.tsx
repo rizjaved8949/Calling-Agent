@@ -217,7 +217,9 @@ const ADMIN_NAV:NavGroup=[
   ['Manage',[[Users,'Team','/app/team'],[ChartNoAxesCombined,'Usage','/app/usage'],[Settings,'Settings','/app/settings'],[BookOpen,'Guides','/app/guides'],[LifeBuoy,'Contact support','/app/support']]],
 ];
 const STAFF_NAV:NavGroup=[
-  ['My work',[[Phone,'Dialer','/app/dialer'],[Activity,'Live','/app/live'],[AudioLines,'Call recordings','/app/recordings']]],
+  // Campaigns are an employee's own work too: the agent does the ringing, so
+  // a list of people to call is a thing staff build, not only owners.
+  ['My work',[[Phone,'Dialer','/app/dialer'],[Activity,'Live','/app/live'],[PhoneOutgoing,'Campaigns','/app/campaigns'],[AudioLines,'Call recordings','/app/recordings']]],
   ['Help me',[[Search,'Customer lookup','/app/lookup'],[HelpCircle,'Ask the documents','/app/ask'],[BookOpen,'Guides','/app/guides']]],
 ];
 const PLATFORM_NAV:NavGroup=[
@@ -373,7 +375,8 @@ function AppRoutes(){
     <Route path="/app/knowledge" element={<Protected manage><WhenLive real={<KnowledgeBasesScreen/>}><Knowledge/></WhenLive></Protected>}/>
     <Route path="/app/knowledge/:kbId" element={<Protected manage><WhenLive real={<KnowledgeBaseDetailScreen/>}><KnowledgeDetail/></WhenLive></Protected>}/>
     <Route path="/app/setups" element={<Protected><WhenLive real={<CallSetupsScreen/>}><CallSetups/></WhenLive></Protected>}/>
-    <Route path="/app/campaigns" element={<Protected manage><WhenLive real={<CampaignsScreen/>}><Campaigns/></WhenLive></Protected>}/>
+    {/* Not `manage`: an employee builds a list of people for the agent to ring. */}
+    <Route path="/app/campaigns" element={<Protected><WhenLive real={<CampaignsScreen/>}><Campaigns/></WhenLive></Protected>}/>
     <Route path="/app/campaigns/:id" element={<Protected manage><WhenLive real={<CampaignsScreen/>}><CampaignDetail/></WhenLive></Protected>}/>
     <Route path="/app/unanswered" element={<Protected manage><WhenLive real={<GapsScreen/>}><Unanswered/></WhenLive></Protected>}/>
     <Route path="/app/numbers" element={<Protected manage><NumbersScreen/></Protected>}/>

@@ -186,6 +186,32 @@ async function readError(response: Response): Promise<ApiError> {
   }
 }
 
+/**
+ * The signed-in person, for routes whose answer depends on *who* is asking.
+ *
+ * Every employee of a company holds the same company API key, so that key
+ * says which company but never which person — and a rule like "an employee
+ * cannot delete a recording" drawn only in the UI is a suggestion, not a
+ * rule. This sends the Firebase ID token alongside, which the server trusts
+ * to name the person.
+ *
+ * Best effort on purpose: a failure here leaves the request authenticated by
+ * the company key exactly as before, which is the behaviour that existed
+ * before this was added.
+ */
+async function personalToken(): Promise<string> {
+  try {
+    const {auth} = await import('../firebase');
+    const user = auth?.currentUser;
+    if (!user) return '';
+    // Cached by the SDK and refreshed only when it is close to expiring, so
+    // this is not a network call on every request.
+    return await user.getIdToken();
+  } catch {
+    return '';
+  }
+}
+
 async function send(path: string, options: RequestOptions = {}): Promise<Response> {
   const headers: Record<string, string> = {};
   if (options.bearer) {
@@ -201,6 +227,8 @@ async function send(path: string, options: RequestOptions = {}): Promise<Respons
       const company = getViewingCompany();
       if (company) headers['X-Company-Id'] = company;
     }
+    const personal = await personalToken();
+    if (personal) headers['X-User-Token'] = personal;
   }
 
   let body: BodyInit | undefined;

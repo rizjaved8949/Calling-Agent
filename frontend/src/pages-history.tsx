@@ -251,7 +251,9 @@ export function CallHistoryScreen() {
 
   return <div className="stack">
     <PageHead eyebrow="Calls" title="Call recordings"
-      description="Every recorded call. Open one to play it, read the transcript, download the audio or delete it."
+      description={canManage
+        ? 'Every recorded call. Open one to play it, read the transcript, download the audio or delete it.'
+        : 'The calls you placed. Open one to play it, read the transcript or download the audio.'}
       action={<div className="row wrap">
         <Button variant="outline" onClick={() => void load()} disabled={busy}>
           <RefreshCw size={15}/> {t('Refresh')}
@@ -367,10 +369,13 @@ export function CallHistoryScreen() {
                 <td data-label="" onClick={stop}>
                   <div className="row" style={{gap: 6}}>
                     <Link className="button outline small" to={'/app/recordings/' + call.id}>Open</Link>
-                    <button className="icon-btn" title="Delete the whole call — record, audio and transcript"
+                    {/* The server refuses this for an employee, so offering
+                        it would only be a button that fails. */}
+                    {canManage && <button className="icon-btn"
+                      title="Delete the whole call — record, audio and transcript"
                       aria-label="Delete the whole call" onClick={() => remove(call)}>
                       <Trash2 size={15}/>
-                    </button>
+                    </button>}
                   </div>
                 </td>
               </tr>)}</tbody>
@@ -394,7 +399,7 @@ export function CallHistoryScreen() {
 
 export function CallDetailScreen() {
   const {id} = useParams();
-  const {toast} = useApp();
+  const {toast, canManage} = useApp();
   const navigate = useNavigate();
   const [confirm, confirmDialog] = useConfirm();
   const [call, setCall] = useState<WireCall | null>(null);
@@ -474,7 +479,9 @@ export function CallDetailScreen() {
       description={`${CHANNEL_LABEL[call.channel] ?? call.channel} · ${formatWhen(call.startedAt)}`}
       action={<div className="row wrap">
         <Button variant="outline" to="/app/recordings"><ArrowLeft size={15}/> All calls</Button>
-        <Button variant="outline" onClick={removeCall}><Trash2 size={15}/> Delete call</Button>
+        {canManage && <Button variant="outline" onClick={removeCall}>
+          <Trash2 size={15}/> Delete call
+        </Button>}
       </div>}/>
 
     {error && <ErrorNote error={error} onRetry={() => void load()}/>}
@@ -502,9 +509,9 @@ export function CallDetailScreen() {
                   <Button variant="outline" onClick={() => void callsApi.download(call.id)}>
                     <Download size={15}/> Download
                   </Button>
-                  <Button variant="outline" onClick={removeRecording}>
+                  {canManage && <Button variant="outline" onClick={removeRecording}>
                     <Trash2 size={15}/> Delete recording
-                  </Button>
+                  </Button>}
                 </div>
               </>
             : <>

@@ -27,7 +27,7 @@ from ...services.audio import extension_for, is_audio
 from ...repositories import tenants as tenant_repo
 from ...security import playback
 from ...services.telephony import Infobip
-from ..deps import CurrentTenant, current_tenant
+from ..deps import CurrentMember, CurrentTenant, current_tenant, refuse_staff
 
 log = logging.getLogger(__name__)
 
@@ -66,13 +66,16 @@ class BulkDelete(BaseModel):
 
 
 @bulk_router.post("/delete")
-async def delete_many(tenant: CurrentTenant, payload: BulkDelete) -> dict:
+async def delete_many(
+    tenant: CurrentTenant, member: CurrentMember, payload: BulkDelete,
+) -> dict:
     """Erase the audio for every call matching the filters.
 
     Done here rather than one request per call from the browser: a hundred
     deletes is a hundred round trips, and a tab closed halfway through leaves
     half of them gone with no way to tell which.
     """
+    refuse_staff(member, "delete recordings")
     if payload.call_ids:
         found = [
             await call_repo.get_call(tenant.phone_number_id, call_id)
@@ -328,13 +331,20 @@ def _requested_range(header: str | None, size: int) -> tuple[int, int] | None:
 
 
 @router.delete("", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
-async def delete_recording(tenant: CurrentTenant, call_id: str) -> None:
+async def delete_recording(
+    tenant: CurrentTenant, member: CurrentMember, call_id: str,
+) -> None:
     """Erase the audio but keep the call.
 
     Separate from deleting the call because they are different decisions: a
     company may need the record of who rang and when long after it has to
     stop keeping their voice.
+
+    An employee may listen to their own calls but not erase them: a recording
+    is the company's record of what was said on its behalf, and the person who
+    said it is the last one who should be able to remove it.
     """
+    refuse_staff(member, "delete a recording")
     call = await call_repo.get_call(tenant.phone_number_id, call_id)
     if call is None:
         raise NotFound("Call")

@@ -30,7 +30,7 @@ from ...services import recordings as recording_service
 from ...services import reports
 from ...services.telephony import Infobip
 from ...services.whatsapp import WhatsApp, mask, to_e164
-from ..deps import CurrentTenant
+from ..deps import CurrentMember, CurrentTenant, refuse_staff
 
 log = logging.getLogger(__name__)
 
@@ -40,12 +40,21 @@ router = APIRouter(prefix="/calls", tags=["calls"])
 @router.get("")
 async def list_calls(
     tenant: CurrentTenant,
+    member: CurrentMember,
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     status_filter: CallStatus | None = Query(None, alias="status"),
     channel: Channel | None = None,
     counterparty: str | None = Query(None, min_length=3),
 ) -> dict:
+    """The company's calls — or, for an employee, their own.
+
+    An employee works a queue of their own calls; the whole company's history
+    is the owner's view of the business, including calls to customers they
+    have no part in. Filtered after the page is fetched rather than in the
+    query because the store has no index on who placed a call, and a company
+    with one employee would otherwise pay for one.
+    """
     calls = await call_repo.list_calls(
         tenant.phone_number_id,
         limit=limit,
@@ -54,6 +63,9 @@ async def list_calls(
         channel=channel.value if channel else None,
         counterparty=counterparty,
     )
+    if member.is_staff:
+        mine = member.describe().lower()
+        calls = [c for c in calls if (c.placed_by or "").lower() == mine]
     return {"calls": [c.public() for c in calls], "limit": limit, "offset": offset}
 
 
@@ -146,7 +158,9 @@ async def get_call(tenant: CurrentTenant, call_id: str) -> dict:
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, dependencies=[Depends(check_expensive)])
-async def start_call(tenant: CurrentTenant, payload: OutboundCallRequest) -> dict:
+async def start_call(
+    tenant: CurrentTenant, member: CurrentMember, payload: OutboundCallRequest,
+) -> dict:
     """Place an outbound call and record the attempt.
 
     The row is written *before* the provider is asked, so a call that the
@@ -182,7 +196,11 @@ async def start_call(tenant: CurrentTenant, payload: OutboundCallRequest) -> dic
         counterparty=destination,
         lineId=line.id if line else "",
         mode="human" if payload.human else "ai",
-        placedBy=str(payload.metadata.get("placedBy") or "")[:200],
+        # Taken from whoever is signed in, not from the request body: an
+        # employee only sees the calls they placed, so a client-supplied name
+        # would be the thing deciding what that employee can see.
+        placedBy=(member.describe()
+                  or str(payload.metadata.get("placedBy") or ""))[:200],
         fromNumber=(line.phone_number if line else "")
         or tenant.infobip_phone_number or tenant.display_phone_number,
         recordingState=(
@@ -301,13 +319,14 @@ async def end_call(tenant: CurrentTenant, call_id: str) -> dict:
     # `-> None` annotation.
     response_model=None,
 )
-async def delete_call(tenant: CurrentTenant, call_id: str) -> None:
+async def delete_call(tenant: CurrentTenant, member: CurrentMember, call_id: str) -> None:
     """Delete the call and its audio.
 
     Unlike removing a company, this is explicitly a deletion of content, so the
     recording goes with it — a call record whose audio outlives it is a privacy
     problem dressed as a tidiness one.
     """
+    refuse_staff(member, "delete a call")
     call = await call_repo.get_call(tenant.phone_number_id, call_id)
     if call is None:
         raise NotFound("Call")

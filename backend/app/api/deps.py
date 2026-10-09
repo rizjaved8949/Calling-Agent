@@ -102,6 +102,84 @@ CurrentTenant = Annotated[Tenant, Depends(current_tenant)]
 AdminOnly = Annotated[None, Depends(require_admin)]
 
 
+class Member:
+    """The person behind a request, when there is one.
+
+    Every route authenticates by the *company* API key, and every employee of
+    a company holds the same one — so until now the server could tell which
+    company was asking but never which person, and a rule like "staff cannot
+    delete a recording" could only ever be drawn in the UI, which is a
+    suggestion rather than a rule.
+
+    The browser sends its Firebase ID token alongside the company key, in
+    `X-User-Token`, and that is what names the person. It is optional on
+    purpose: a script holding the API key has no Firebase session, and
+    refusing those would break every integration. Such a caller is treated as
+    the owner, which is exactly what holding the company key already grants.
+    """
+
+    __slots__ = ("uid", "email", "role")
+
+    def __init__(self, uid: str = "", email: str = "", role: str = "owner"):
+        self.uid = uid
+        self.email = email
+        self.role = role
+
+    @property
+    def is_staff(self) -> bool:
+        return self.role == "staff"
+
+    def describe(self) -> str:
+        """How this person is recorded on a call they placed."""
+        return self.email or self.uid
+
+
+async def current_member(
+    tenant: CurrentTenant,
+    x_user_token: Annotated[str | None, Header()] = None,
+) -> Member:
+    """Who is asking, within the company that `current_tenant` resolved.
+
+    A token that does not verify, or that belongs to somebody outside this
+    company, is treated as no token at all rather than as a failure: the
+    company key is still perfectly good, and the only consequence is that the
+    request is handled with the permissions that key already carries.
+    """
+    token = _bearer(x_user_token)
+    if not token:
+        return Member()
+    try:
+        claims = firebase.verify_id_token(token)
+    except Exception:  # noqa: BLE001 — an unreadable token is simply no token
+        return Member()
+
+    uid = str(claims.get("uid") or "")
+    email = str(claims.get("email") or "")
+    if not uid:
+        return Member()
+
+    from ..repositories import users as user_repo
+
+    link = await user_repo.get(uid)
+    if not link or str(link.get("phoneNumberId") or "") != tenant.phone_number_id:
+        # Signed in, but not as a member of the company this key names. Their
+        # Firebase identity tells us nothing about what they may do here.
+        return Member()
+    return Member(uid=uid, email=email or str(link.get("email") or ""),
+                  role=str(link.get("role") or "owner"))
+
+
+CurrentMember = Annotated[Member, Depends(current_member)]
+
+
+def refuse_staff(member: Member, what: str) -> None:
+    """Stop here if this is an employee, saying who can do it instead."""
+    if member.is_staff:
+        raise Forbidden(
+            f"Only an owner or admin can {what}. Ask whoever runs this account."
+        )
+
+
 class FirebaseIdentity:
     """A person, proven by Firebase, before anything is known about which
     company — if any — they belong to."""
