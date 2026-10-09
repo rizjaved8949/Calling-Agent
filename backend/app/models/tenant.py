@@ -97,6 +97,11 @@ class Tenant(BaseModel):
     # numbers run on the platform's own Meta/Infobip credentials from the
     # server environment. This is how a demo account calls on the owner's line.
     allow_platform_credentials: bool = Field(default=False, alias="allowPlatformCredentials")
+    # Switched off by the operator: nobody can sign in, no call is answered or
+    # placed, and no message is sent. Everything is kept — this is a pause, not
+    # a deletion, and it is reversible with one click.
+    suspended: bool = False
+    suspended_reason: str = Field(default="", alias="suspendedReason")
 
     # ---- Per-call overlay (never stored) ----------------------------------
     # A company has many numbers, each with its own credentials. When a call
@@ -156,6 +161,8 @@ class Tenant(BaseModel):
             },
             "qaWebhookConfigured": bool(self.qa_webhook_url),
             "allowPlatformCredentials": self.allow_platform_credentials,
+            "suspended": self.suspended,
+            "suspendedReason": self.suspended_reason or None,
         }
 
 
@@ -202,6 +209,12 @@ class TenantCreate(BaseModel):
     qa_api_key: str = Field(default="", alias="qaApiKey")
     default_country_code: str = Field(default="", alias="defaultCountryCode")
     allow_platform_credentials: bool = Field(default=False, alias="allowPlatformCredentials")
+    # Who signs in. Without these a registered company exists but nobody can
+    # reach it — the operator has to invite somebody afterwards, and until
+    # then the row is just a row.
+    owner_email: str = Field(default="", alias="ownerEmail", max_length=320)
+    owner_password: str = Field(default="", alias="ownerPassword", max_length=200)
+    owner_name: str = Field(default="", alias="ownerName", max_length=120)
 
 
 class TenantUpdate(BaseModel):
@@ -237,3 +250,5 @@ class TenantUpdate(BaseModel):
     qa_api_key: str | None = Field(default=None, alias="qaApiKey")
     default_country_code: str | None = Field(default=None, alias="defaultCountryCode")
     allow_platform_credentials: bool | None = Field(default=None, alias="allowPlatformCredentials")
+    suspended: bool | None = None
+    suspended_reason: str | None = Field(default=None, alias="suspendedReason")

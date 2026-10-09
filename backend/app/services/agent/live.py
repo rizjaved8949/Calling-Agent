@@ -45,10 +45,28 @@ def active() -> int:
 
 
 def live_settings() -> LiveSettings:
+    """The engine from the server's environment.
+
+    `live_settings_now` is what a call uses: it also reads what the platform
+    operator set in the portal. This stays for probes and tests that have no
+    database to ask.
+    """
     return LiveSettings(
         model=settings.gemini_live_model,
         api_key=settings.gemini_api_key.strip(),
     )
+
+
+async def live_settings_now() -> LiveSettings:
+    """The engine in force, operator's choice first, environment second."""
+    from .. import platform_settings
+
+    try:
+        chosen = await platform_settings.current()
+    except Exception:  # noqa: BLE001 — never fail a call over a settings read
+        log.exception("could not read the platform engine settings")
+        return live_settings()
+    return LiveSettings(model=chosen["model"], api_key=chosen["apiKey"])
 
 
 async def persona_for(tenant: Tenant, call: Call | None = None) -> AgentPersona:
@@ -408,7 +426,7 @@ async def warm_up(tenant: Tenant, call: Call, *, keepalive: bool = True) -> None
         session = CallSession(
             call.id,
             send_to_caller=_discard,
-            live_settings=live_settings(),
+            live_settings=await live_settings_now(),
             persona=await persona_for(tenant, call),
             record=tenant.record_calls,
             keepalive=keepalive,
@@ -447,7 +465,7 @@ async def start(
     session = CallSession(
         call.id,
         send_to_caller=send_to_caller,
-        live_settings=live_settings(),
+        live_settings=await live_settings_now(),
         # A human call never starts the model, so it needs no persona.
         persona=AgentPersona(instructions="", greeting="") if human
         else await persona_for(tenant, call),

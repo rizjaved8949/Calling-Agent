@@ -88,6 +88,13 @@ async def current_tenant(
         # Deliberately the same message as a missing key: telling an attacker
         # that a key is well-formed but unknown is a hint they can work with.
         raise Unauthorized("Present the company API key as a bearer token.")
+    if tenant.suspended:
+        # 403 rather than 401: the credential is perfectly good, and telling
+        # them to sign in again would send them round a loop that cannot end.
+        raise Forbidden(
+            tenant.suspended_reason
+            or "This account is switched off. Contact the platform operator."
+        )
     return tenant
 
 

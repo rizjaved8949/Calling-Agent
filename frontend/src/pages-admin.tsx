@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import {Badge, Button, Empty, PageHead} from './app';
 import {useApp} from './app-context';
-import {CopyField, ErrorNote, Loading, Modal, Section, TextInput, useConfirm} from './ui';
+import {CopyField, ErrorNote, Loading, Modal, Section, Select, TextInput, useConfirm} from './ui';
 import {api, setViewingCompany, getViewingCompany} from './lib/api';
 import {request} from './lib/api/http';
 import {
@@ -40,6 +40,8 @@ type CompanyRow = {
   lastCallAt: number | null;
   driveConnected: boolean;
   allowPlatformCredentials: boolean;
+  suspended?: boolean;
+  suspendedReason?: string | null;
 };
 
 type Overview = {
@@ -77,6 +79,7 @@ export function AdminCompanies() {
   const [busy, setBusy] = useState('');
   const [adding, setAdding] = useState(false);
   const [issued, setIssued] = useState<{name: string; apiKey: string} | null>(null);
+  const [suspending, setSuspending] = useState<CompanyRow | null>(null);
   const viewing = getViewingCompany();
 
   const load = useCallback(async () => {
@@ -103,6 +106,18 @@ export function AdminCompanies() {
     } catch (cause) {
       toast(errorText(cause, 'Could not change that.'));
     } finally {setBusy('')}
+  };
+
+  const resume = async (row: CompanyRow) => {
+    try {
+      await request(`/api/platform/companies/${encodeURIComponent(row.id)}/suspend`,
+        {method: 'POST', body: {suspended: false}});
+      setData(old => old && {...old, companies: old.companies.map(c =>
+        c.id === row.id ? {...c, suspended: false, suspendedReason: null} : c)});
+      toast(`${row.name || row.id} is switched back on.`);
+    } catch (cause) {
+      toast(errorText(cause, 'Could not switch them back on.'));
+    }
   };
 
   const view = (companyId: string) => {
@@ -164,12 +179,19 @@ export function AdminCompanies() {
                     ? <span>last call {formatWhen(row.lastCallAt)}</span>
                     : <span>no calls yet</span>}
                 </div>
-                {row.blocker && <div className="small" style={{color: 'var(--warning)', marginTop: 4}}>
-                  <CircleAlert size={12}/> {row.blocker}
-                </div>}
+                {row.suspended
+                  ? <div className="small" style={{color: 'var(--destructive)', marginTop: 4}}>
+                      <CircleAlert size={12}/> Switched off
+                      {row.suspendedReason ? ` — ${row.suspendedReason}` : ''}
+                    </div>
+                  : row.blocker && <div className="small" style={{color: 'var(--warning)', marginTop: 4}}>
+                      <CircleAlert size={12}/> {row.blocker}
+                    </div>}
               </div>
               <div className="list-row-actions">
-                <Badge tone={STAGE_TONE[row.stage]}>{row.stage}</Badge>
+                {row.suspended
+                  ? <Badge tone="danger">switched off</Badge>
+                  : <Badge tone={STAGE_TONE[row.stage]}>{row.stage}</Badge>}
                 {viewing === row.id && <Badge tone="live">viewing</Badge>}
                 <Button small variant={row.allowPlatformCredentials ? '' : 'outline'}
                   disabled={busy === row.id} onClick={() => void toggleCredentials(row)}
@@ -180,6 +202,13 @@ export function AdminCompanies() {
                 <Button small variant="outline" onClick={() => view(row.id)}>
                   {viewing === row.id ? 'Stop viewing' : 'View as'}
                 </Button>
+                <Button small variant="outline"
+                  onClick={() => row.suspended ? void resume(row) : setSuspending(row)}
+                  title={row.suspended
+                    ? 'Let them sign in and take calls again'
+                    : 'Stop sign-in and calling without deleting anything'}>
+                  {row.suspended ? 'Switch on' : 'Switch off'}
+                </Button>
               </div>
             </div>)}
           </div>}
@@ -189,9 +218,72 @@ export function AdminCompanies() {
       laptop and wrong in production — the next deploy erases it.
     </div>}
 
+    {suspending && <SuspendCompany row={suspending} onClose={() => setSuspending(null)}
+      onDone={reason => {
+        setData(old => old && {...old, companies: old.companies.map(c =>
+          c.id === suspending.id ? {...c, suspended: true, suspendedReason: reason} : c)});
+        setSuspending(null);
+        toast(`${suspending.name || suspending.id} is switched off.`);
+      }}/>}
+
     {adding && <RegisterCompany onClose={() => setAdding(false)}
       onRegistered={(name, apiKey) => {setIssued({name, apiKey}); setAdding(false); void load()}}/>}
   </div>;
+}
+
+/**
+ * Switching a company off.
+ *
+ * The reason is asked for here rather than invented, because it is the exact
+ * sentence they will meet when they try to sign in — "This account is switched
+ * off" with no explanation reads as a fault, and they will raise a ticket
+ * about it.
+ */
+function SuspendCompany({row, onClose, onDone}: {
+  row: CompanyRow; onClose: () => void; onDone: (reason: string) => void;
+}) {
+  const [reason, setReason] = useState('This account is switched off. Please contact us.');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const go = async () => {
+    setBusy(true); setError('');
+    try {
+      await request(`/api/platform/companies/${encodeURIComponent(row.id)}/suspend`,
+        {method: 'POST', body: {suspended: true, reason: reason.trim()}});
+      onDone(reason.trim());
+    } catch (cause) {
+      setError(errorText(cause, 'Could not switch them off.'));
+    } finally {setBusy(false)}
+  };
+
+  return <Modal title={`Switch off ${row.name || row.id}?`} onClose={onClose}
+    footer={<>
+      <button className="button secondary" onClick={onClose} disabled={busy}>Cancel</button>
+      <button className="button danger" onClick={() => void go()} disabled={busy}>
+        {busy ? <><Loader2 size={15} className="spin"/> Switching off…</> : 'Switch off'}
+      </button>
+    </>}>
+    <div className="stack">
+      <div className="row" style={{alignItems: 'flex-start', gap: 12}}>
+        <CircleAlert size={20} color="var(--warning)" style={{flex: 'none', marginTop: 2}}/>
+        <div className="small" style={{lineHeight: 1.6}}>
+          <p style={{margin: '0 0 8px'}}>
+            Nobody at this company can sign in, their numbers stop answering, and
+            no call or message goes out.
+          </p>
+          <p style={{margin: 0}}>
+            <b>Nothing is deleted.</b> Their {row.calls} calls, {row.recordings} recordings
+            and {row.numbers} number{row.numbers === 1 ? '' : 's'} are kept, and one
+            click switches them back on.
+          </p>
+        </div>
+      </div>
+      <TextInput label="What they are told" rows={2} value={reason} onChange={setReason}
+        help="Shown when they try to sign in. A reason saves them raising a ticket about it."/>
+      {error && <div className="notice danger small">{error}</div>}
+    </div>
+  </Modal>;
 }
 
 function RegisterCompany({onClose, onRegistered}: {
@@ -200,6 +292,9 @@ function RegisterCompany({onClose, onRegistered}: {
   const [name, setName] = useState('');
   const [phoneNumberId, setPhoneNumberId] = useState('');
   const [countryCode, setCountryCode] = useState('');
+  const [ownerEmail, setOwnerEmail] = useState('');
+  const [ownerName, setOwnerName] = useState('');
+  const [ownerPassword, setOwnerPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -213,6 +308,9 @@ function RegisterCompany({onClose, onRegistered}: {
         // this id is only the row key until then — same as a self-signup.
         phoneNumberId: phoneNumberId.trim() || `pending-${Date.now().toString(36)}`,
         defaultCountryCode: countryCode.trim(),
+        ownerEmail: ownerEmail.trim(),
+        ownerPassword: ownerPassword,
+        ownerName: ownerName.trim(),
       }) as {apiKey?: string} | undefined;
       onRegistered(name.trim(), body?.apiKey ?? '');
     } catch (cause) {
@@ -237,6 +335,18 @@ function RegisterCompany({onClose, onRegistered}: {
       <TextInput label="Country code" value={countryCode} onChange={setCountryCode}
         placeholder="92"
         help="Used when somebody types a local number without its country code."/>
+
+      <Section title="Who signs in"
+        help="Without this the company exists but nobody can reach it. Leave empty only if you plan to invite somebody yourself.">
+        <TextInput label="Owner email" value={ownerEmail} onChange={setOwnerEmail}
+          type="email" placeholder="owner@northwind.test"/>
+        <div className="field-grid">
+          <TextInput label="Owner name" value={ownerName} onChange={setOwnerName}
+            placeholder="Sara Ahmed"/>
+          <TextInput label="Owner password" value={ownerPassword} onChange={setOwnerPassword}
+            type="password" help="At least 8 characters. Give it to them to change."/>
+        </div>
+      </Section>
       {error && <div className="notice danger small">{error}</div>}
     </div>
   </Modal>;
@@ -501,5 +611,131 @@ export function AdminHealth() {
         </Section>
       </div>
     </>}
+  </div>;
+}
+
+
+// ---------------------------------------------------------------------------
+// The speech engine
+// ---------------------------------------------------------------------------
+
+type Engine = {
+  id: string; label: string; supported: boolean;
+  defaultModel: string; keyHint: string; note: string;
+};
+
+type EngineState = {
+  engine: string; model: string; keySet: boolean; keyHint: string;
+  source: string; engines: Engine[]; supported: boolean;
+};
+
+/**
+ * Which engine carries the conversations, and the key it runs on.
+ *
+ * These lived in the server's environment, so rotating a leaked key or trying
+ * a newer model meant someone with access to the host — and until they got to
+ * it, every call on the platform was failing. The key is write-only here: it
+ * is sealed before storage and only its last four characters come back.
+ */
+export function AdminEngine() {
+  const {toast} = useApp();
+  const [state, setState] = useState<EngineState | null>(null);
+  const [engine, setEngine] = useState('');
+  const [model, setModel] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const body = await request<EngineState>('/api/platform/engine');
+      setState(body);
+      setEngine(body.engine);
+      setModel(body.model);
+      setError('');
+    } catch (cause) {
+      setError(errorText(cause, 'Could not read the engine settings.'));
+    }
+  }, []);
+  useEffect(() => {void load()}, [load]);
+
+  if (!state) return <div className="stack">
+    <PageHead eyebrow="Platform" title="Speech engine"/>
+    {error ? <ErrorNote error={error} onRetry={() => void load()}/> : <Loading/>}
+  </div>;
+
+  const chosen = state.engines.find(e => e.id === engine);
+  const dirty = engine !== state.engine || model !== state.model || apiKey !== '';
+
+  const save = async () => {
+    setBusy(true); setError('');
+    try {
+      const body = await request<EngineState>('/api/platform/engine', {
+        method: 'PUT',
+        // An untouched key field means "leave it alone", never "clear it" —
+        // the field starts empty because the key is never shown back.
+        body: {engine, model, ...(apiKey ? {apiKey} : {})},
+      });
+      setState(body); setApiKey('');
+      toast('Engine settings saved. New calls use them straight away.');
+    } catch (cause) {
+      setError(errorText(cause, 'That could not be saved.'));
+    } finally {setBusy(false)}
+  };
+
+  return <div className="stack">
+    <PageHead eyebrow="Platform" title="Speech engine"
+      description="What carries every conversation on the platform, for every company."/>
+
+    {error && <ErrorNote error={error}/>}
+
+    <div className="stat-grid">
+      <Stat label="In use" value={state.engine} hint={state.supported ? undefined : 'not supported'}/>
+      <Stat label="Model" value={state.model || '—'}/>
+      <Stat label="API key" value={state.keySet ? state.keyHint : 'not set'}
+        hint={`from ${state.source}`}/>
+    </div>
+
+    {!state.keySet && <div className="notice danger">
+      No key is set anywhere. Calls will connect and then sit in silence until one is.
+    </div>}
+
+    <div className="card">
+      <Section title="Engine" help="Only an engine this build can speak to may be selected.">
+        <Select label="Provider" value={engine} onChange={setEngine}>
+          {state.engines.map(e => <option key={e.id} value={e.id} disabled={!e.supported}>
+            {e.label}{e.supported ? '' : ' — not available in this build'}
+          </option>)}
+        </Select>
+        {chosen && <div className={'notice small ' + (chosen.supported ? '' : 'warning')}>
+          {chosen.note}
+        </div>}
+      </Section>
+
+      <Section title="Model and key">
+        <TextInput label="Model" value={model} onChange={setModel}
+          placeholder={chosen?.defaultModel ?? ''}
+          help="Leave empty to use the build's default. A model name the provider does not know fails every call, so change it deliberately."/>
+        <TextInput label="API key" value={apiKey} onChange={setApiKey} type="password"
+          placeholder={state.keySet ? 'leave empty to keep the current key' : chosen?.keyHint}
+          help={state.keySet
+            ? `A key ending ${state.keyHint} is in place, from ${state.source}. Type a new one to replace it.`
+            : chosen?.keyHint}/>
+        <div className="row">
+          <Button disabled={!dirty || busy} onClick={() => void save()}>
+            {busy ? <><Loader2 size={15} className="spin"/> Saving…</> : 'Save'}
+          </Button>
+          {dirty && <span className="small muted">Takes effect on the next call.</span>}
+        </div>
+      </Section>
+
+      <Section title="Where this is stored"
+        help="Beside the super admin's own record, with the same protection. The key is sealed before it is written and no screen or endpoint can read it back.">
+        <p className="small muted" style={{margin: 0}}>
+          Leaving the key empty here falls back to the server's own environment
+          variable, which is how this platform ran before this screen existed.
+        </p>
+      </Section>
+    </div>
   </div>;
 }

@@ -68,7 +68,7 @@ import {NumbersScreen} from './pages-numbers';
 import {DialerScreen} from './pages-dialer';
 import {CallHistoryScreen,CallDetailScreen} from './pages-history';
 import {MessagesScreen} from './pages-messages';
-import {AdminCompanies,AdminCompanyDetail,AdminHealth} from './pages-admin';
+import {AdminCompanies,AdminCompanyDetail,AdminHealth,AdminEngine} from './pages-admin';
 import {DashboardScreen} from './pages-dashboard';
 import {SettingsScreen} from './pages-settings';
 
@@ -217,7 +217,7 @@ const STAFF_NAV:NavGroup=[
 ];
 const PLATFORM_NAV:NavGroup=[
   ['Customers',[[Building2,'Companies','/platform/companies']]],
-  ['This server',[[ServerCog,'Health','/platform/health']]],
+  ['This server',[[Mic2,'Speech engine','/platform/engine'],[ServerCog,'Health','/platform/health']]],
 ];
 
 function Shell({children,platform=false}:{children:React.ReactNode;platform?:boolean}){
@@ -363,6 +363,7 @@ function AppRoutes(){
     <Route path="/platform/companies" element={<PlatformOnly><WhenLive real={<AdminCompanies/>}><PlatformCompanies/></WhenLive></PlatformOnly>}/>
     <Route path="/platform/companies/:id" element={<PlatformOnly><WhenLive real={<AdminCompanyDetail/>}><PlatformCompanyDetail/></WhenLive></PlatformOnly>}/>
     <Route path="/platform/health" element={<PlatformOnly><WhenLive real={<AdminHealth/>}><PlatformHealth/></WhenLive></PlatformOnly>}/>
+    <Route path="/platform/engine" element={<PlatformOnly><AdminEngine/></PlatformOnly>}/>
     {/* The portal used to list screens for features that do not exist —
         provisioning, shared presets, a search console, an audit trail. They
         redirect rather than 404 so an old bookmark still lands somewhere. */}

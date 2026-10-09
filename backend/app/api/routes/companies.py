@@ -16,7 +16,7 @@ import logging
 from fastapi import APIRouter, Response, status
 
 from ...config import settings
-from ...errors import Conflict, NotFound
+from ...errors import AppError, Conflict, NotFound
 from ...models.credentials import (
     CredentialsUpdate,
     channel_readiness,
@@ -107,18 +107,91 @@ async def create_company(_: AdminOnly, payload: TenantCreate) -> dict:
         )
 
     api_key = tenant_repo.new_api_key()
-    tenant = Tenant(
-        **payload.model_dump(by_alias=True, exclude_none=True),
-        apiKey=api_key,
-    )
+    fields = payload.model_dump(by_alias=True, exclude_none=True)
+    owner_email = str(fields.pop("ownerEmail", "") or "").strip().lower()
+    owner_password = str(fields.pop("ownerPassword", "") or "")
+    owner_name = str(fields.pop("ownerName", "") or "").strip()
+
+    tenant = Tenant(**fields, apiKey=api_key)
     await tenant_repo.save(tenant)
     log.info("onboarded company %s (%s)", tenant.name, tenant.phone_number_id)
+
+    owner: dict[str, str] | None = None
+    if owner_email:
+        try:
+            owner = await _create_owner(
+                tenant, email=owner_email, password=owner_password, name=owner_name
+            )
+        except AppError:
+            # The company exists but nobody can sign in, which is worse than
+            # not having created it: the operator would have to find and
+            # delete the row before trying again.
+            await tenant_repo.delete(tenant.phone_number_id)
+            raise
+
     return {
         **tenant.public(),
         # Shown once. There is no endpoint that returns it again.
         "apiKey": api_key,
         "apiKeyNotice": "Store this now — it is not shown again.",
+        "owner": owner,
     }
+
+
+async def _create_owner(
+    tenant: Tenant, *, email: str, password: str, name: str
+) -> dict[str, str]:
+    """Give the new company somebody who can sign in.
+
+    A sign-in needs Firebase, which this deployment may not have configured —
+    and a company registered with an owner nobody can log in as is a trap, so
+    that is refused rather than half-done.
+    """
+    from firebase_admin import auth as fb_auth
+
+    from ...repositories import users as user_repo
+    from ...services import firebase
+
+    if "@" not in email:
+        raise AppError(422, "Enter a valid email address for the owner.", code="bad_email")
+    if len(password) < 8:
+        raise AppError(
+            422, "Give the owner a password of at least 8 characters.", code="weak_password"
+        )
+    if not firebase.configured():
+        raise AppError(
+            503,
+            "Sign-in is not configured on this server, so an owner cannot be "
+            "created. Register the company without one and invite them later.",
+            code="no_sign_in",
+        )
+
+    app = firebase._app()
+    try:
+        existing = fb_auth.get_user_by_email(email, app=app)
+    except fb_auth.UserNotFoundError:
+        existing = None
+    if existing is not None:
+        if await user_repo.get(existing.uid) is not None:
+            raise AppError(
+                409,
+                f"{email} already belongs to a company. Use a different address.",
+                code="email_taken",
+            )
+        user = existing
+        fb_auth.update_user(user.uid, password=password, app=app)
+    else:
+        user = fb_auth.create_user(
+            email=email, password=password, display_name=name or email,
+            email_verified=True, app=app,
+        )
+
+    await user_repo.create(
+        user.uid, email=email, display_name=name or email,
+        phone_number_id=tenant.phone_number_id, role="owner",
+    )
+    log.info("company %s: owner %s can sign in", tenant.phone_number_id, email)
+    return {"email": email, "role": "owner"}
 
 
 @router.get("/{phone_number_id}")
