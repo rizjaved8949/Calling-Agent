@@ -15,6 +15,8 @@ from fastapi import APIRouter, Request, Response, status
 from fastapi.responses import RedirectResponse
 
 from ...config import settings
+from pydantic import BaseModel, ConfigDict, Field
+
 from ...errors import AppError, Conflict, NotFound
 from ...http_headers import content_disposition
 from ...models.call import Channel, RecordingState
@@ -30,6 +32,87 @@ from ..deps import CurrentTenant, current_tenant
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/calls/{call_id}/recording", tags=["recordings"])
+
+# Not under /calls/{call_id}: this acts on many at once, and nesting it there
+# would have "recordings" read as a call id.
+bulk_router = APIRouter(prefix="/recordings", tags=["recordings"])
+
+
+class BulkDelete(BaseModel):
+    """Which recordings to erase.
+
+    The filters mirror the ones on the screen, so what is deleted is what the
+    person was looking at — a bulk delete that quietly uses a different set
+    than the list in front of you is how a year of audio disappears.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    # The rows the screen was showing. Preferred over the filters below,
+    # because the screen filters on more than the API does — direction, which
+    # number, whether it has audio — and a bulk delete that works from a
+    # coarser filter than the list in front of you deletes more than you
+    # agreed to. Ids leave no room for that.
+    call_ids: list[str] | None = Field(default=None, alias="callIds", max_length=1000)
+    channel: Channel | None = None
+    counterparty: str | None = None
+    # Also remove the call rows, not just their audio. Off by default: the
+    # record of who rang and when is usually worth keeping after the voice
+    # has to go.
+    delete_calls: bool = Field(default=False, alias="deleteCalls")
+    # A deliberate guard against a mis-click: the screen sends the number it
+    # showed, and a mismatch is refused rather than taking "about that many".
+    expected: int | None = None
+
+
+@bulk_router.post("/delete")
+async def delete_many(tenant: CurrentTenant, payload: BulkDelete) -> dict:
+    """Erase the audio for every call matching the filters.
+
+    Done here rather than one request per call from the browser: a hundred
+    deletes is a hundred round trips, and a tab closed halfway through leaves
+    half of them gone with no way to tell which.
+    """
+    if payload.call_ids:
+        found = [
+            await call_repo.get_call(tenant.phone_number_id, call_id)
+            for call_id in dict.fromkeys(payload.call_ids)
+        ]
+        # A call of another company's resolves to None and is simply absent.
+        calls = [c for c in found if c is not None]
+    else:
+        calls = await call_repo.list_calls(
+            tenant.phone_number_id,
+            limit=1000,
+            channel=payload.channel.value if payload.channel else None,
+            counterparty=payload.counterparty or None,
+        )
+    matching = [c for c in calls if c.recording_path or payload.delete_calls]
+    if payload.expected is not None and payload.expected != len(matching):
+        raise Conflict(
+            f"This would delete {len(matching)} recordings, not the "
+            f"{payload.expected} on your screen. Refresh and try again."
+        )
+
+    erased = failed = 0
+    for call in matching:
+        try:
+            if call.recording_path:
+                await recording_service.forget(tenant, call)
+            if payload.delete_calls:
+                await call_repo.delete_call(tenant.phone_number_id, call.id)
+            erased += 1
+        except Exception:  # noqa: BLE001 — one stubborn file must not stop the rest
+            failed += 1
+            log.exception("could not delete the recording for call %s", call.id)
+
+    reports.schedule_sync(tenant)
+    log.info(
+        "tenant %s bulk-deleted %d recording(s)%s (%d failed)",
+        tenant.phone_number_id, erased,
+        " and their calls" if payload.delete_calls else "", failed,
+    )
+    return {"deleted": erased, "failed": failed, "deletedCalls": payload.delete_calls}
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)

@@ -127,6 +127,15 @@ export const callsApi = {
   },
   deleteRecording: (callId: string) =>
     request<void>(`/api/calls/${callId}/recording`, { method: 'DELETE' }),
+  /** Erase the audio for everything matching the filters, in one request. */
+  deleteMany: (body: { callIds: string[]; deleteCalls?: boolean }) =>
+    request<{ deleted: number; failed: number; deletedCalls: boolean }>(
+      '/api/recordings/delete',
+      { method: 'POST', body: {
+        callIds: body.callIds,
+        deleteCalls: body.deleteCalls ?? false,
+      } },
+    ),
   /** Ask the carrier for its own copy, for a call recorded on their side. */
   fetchFromCarrier: (callId: string) =>
     request<{ status: string; detail?: string }>(`/api/calls/${callId}/recording/fetch`, {

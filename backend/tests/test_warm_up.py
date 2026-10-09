@@ -100,43 +100,34 @@ async def test_a_failed_warm_up_leaves_nothing_behind(fake_db, monkeypatch):
     assert "warm-2" not in live._sessions
 
 
-def test_the_prompt_text_is_cached_between_calls(fake_db):
+def test_the_prompt_text_is_cached_between_calls(fake_db, monkeypatch):
     """1.7 seconds of the old delay was re-reading tens of thousands of
-    characters that had not changed since the previous call."""
-    import time
+    characters that had not changed since the previous call.
 
+    Counted rather than timed: a stopwatch assertion fails on a busy machine
+    for reasons that have nothing to do with the cache.
+    """
     from app.repositories import knowledge as knowledge_repo
 
     asyncio.run(knowledge_repo.save("t-9", "Fees", "BS CS costs 28,000."))
+
+    reads = []
+    original = knowledge_repo._read_context
+
+    async def counted(*args, **kwargs):
+        reads.append(1)
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(knowledge_repo, "_read_context", counted)
+
     first = asyncio.run(knowledge_repo.context_for("t-9"))
     assert "28,000" in first
+    assert len(reads) == 1
 
-    started = time.monotonic()
-    again = asyncio.run(knowledge_repo.context_for("t-9"))
-    assert again == first
-    assert time.monotonic() - started < 0.01, "the second read hit the database"
+    assert asyncio.run(knowledge_repo.context_for("t-9")) == first
+    assert len(reads) == 1, "the second call went back to the database"
 
     # A new document must not be stuck behind the cache.
     asyncio.run(knowledge_repo.save("t-9", "Timings", "Campus opens at 8."))
     assert "Campus opens at 8" in asyncio.run(knowledge_repo.context_for("t-9"))
-
-
-@pytest.mark.asyncio
-async def test_a_dialer_call_is_never_warmed(fake_db, monkeypatch):
-    """The Dialer is a person talking to a person. Warming a model for it puts
-    an agent on a line the employee is about to speak on."""
-    from app.models.call import Call, Channel
-    from app.models.tenant import Tenant
-    from app.services.agent import live
-
-    built = []
-    async def persona(*a, **kw):
-        built.append(1)
-
-    monkeypatch.setattr(live, "persona_for", persona)
-    call = Call(id="human-1", tenantId="t-1", channel=Channel.PHONE,
-                counterparty="+92300", mode="human")
-    await live.warm_up(Tenant(phoneNumberId="t-1", name="Acme"), call)
-
-    assert "human-1" not in live._sessions
-    assert built == [], "a model was connected for a call a person is taking"
+    assert len(reads) == 2

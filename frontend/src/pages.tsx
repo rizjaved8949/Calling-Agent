@@ -100,9 +100,12 @@ export function AuthScreen({mode}:{mode:'login'|'signup'|'forgot'|'verify'|'invi
   // into the actual "Calling Agent" demo company, which can place real calls
   // and send real WhatsApp messages. Kept here deliberately for showing the
   // product around without typing a password each time.
-  async function demoLogin(email:string){
+  // Each demo seat carries its own password: the employee account is a
+  // separate person with a separate login, not the owner's with a different
+  // label, and sharing one password between them was only ever a shortcut.
+  async function demoLogin(email:string,password:string){
     setError('');setBusy(true);
-    try{finish(await loginWithEmail(email,'Demo@1234'))}
+    try{finish(await loginWithEmail(email,password))}
     catch(cause){setError(friendlyAuthError(cause));setBusy(false)}
   }
   function submitMock(e:React.FormEvent){
@@ -141,9 +144,9 @@ export function AuthScreen({mode}:{mode:'login'|'signup'|'forgot'|'verify'|'invi
         <div className="small muted">{t('Or try the live demo — real data, not a fixture')}</div>
         <div className="demo-row">
           <button className="button outline small" type="button" disabled={busy}
-            onClick={()=>void demoLogin('admin@amgoc.us')}>{t('Demo: company owner')}</button>
+            onClick={()=>void demoLogin('admin@amgoc.us','Demo@1234')}>{t('Demo: company owner')}</button>
           <button className="button outline small" type="button" disabled={busy}
-            onClick={()=>void demoLogin('employee@amgoc.us')}>{t('Demo: employee')}</button>
+            onClick={()=>void demoLogin('mazanshakir@gmail.com','Employee@169')}>{t('Demo: employee')}</button>
         </div>
       </div>}
       {mode==='login'&&!LIVE&&<div className="demo-logins"><div className="small muted">{t('Or open one of the three portals')}</div><div className="demo-row"><button className="button outline small" type="button" onClick={()=>{setSession({email:'samira@northstar.edu',name:'Samira Khan',userId:'user-1',orgId:'org-northstar',portal:'company'});navigate('/app/dashboard')}}>{t('Company admin')}</button><button className="button outline small" type="button" onClick={()=>{setSession({email:'omar@northstar.edu',name:'Omar Farooq',userId:'user-2',orgId:'org-northstar',portal:'company'});navigate('/app/queue')}}>{t('Company staff')}</button><button className="button outline small" type="button" onClick={()=>{api.setProfile('user-platform');setSession({email:'ops@platform.internal',name:'Platform Operations',userId:'user-platform',orgId:'org-northstar',portal:'platform',platformRole:'superadmin'});navigate('/platform/companies')}}>{t('Platform (us)')}</button></div></div>}

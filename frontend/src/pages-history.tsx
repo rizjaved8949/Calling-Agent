@@ -123,7 +123,7 @@ function useRowPlayer() {
 }
 
 export function CallHistoryScreen() {
-  const {t, toast} = useApp();
+  const {t, toast, canManage} = useApp();
   const navigate = useNavigate();
   const player = useRowPlayer();
   const [confirm, confirmDialog] = useConfirm();
@@ -200,6 +200,38 @@ export function CallHistoryScreen() {
     },
   });
 
+  // What the bulk delete would actually take: the rows on screen with audio.
+  const recorded = shown.filter(c => c.recording.available);
+  const channelName = channel === 'PHONE' ? 'phone line'
+    : channel === 'WHATSAPP_CALL' ? 'WhatsApp' : '';
+
+  const deleteShown = () => confirm({
+    title: `Delete ${recorded.length} recording${recorded.length === 1 ? '' : 's'}?`,
+    body: <>
+      <p style={{margin: '0 0 10px'}}>
+        The audio for {recorded.length === 1 ? 'the call' : 'every call'} shown
+        {channelName ? <> on your <b>{channelName}</b></> : null} is erased for
+        everyone, including any copy in your Google Drive. This cannot be undone.
+      </p>
+      <p style={{margin: 0}}>
+        The call records, transcripts and summaries stay — only the audio goes.
+        {!filtered && ' Use the filters above first if you only meant some of them.'}
+      </p>
+    </>,
+    confirmLabel: `Delete ${recorded.length} recording${recorded.length === 1 ? '' : 's'}`,
+    onConfirm: async () => {
+      // The exact rows on screen, so "delete these" means these — the screen
+      // filters on direction and number, which the list endpoint does not.
+      const result = await callsApi.deleteMany({
+        callIds: recorded.map(c => c.id),
+      });
+      toast(result.failed
+        ? `${result.deleted} deleted, ${result.failed} could not be.`
+        : `${result.deleted} recording${result.deleted === 1 ? '' : 's'} deleted.`);
+      await load();
+    },
+  });
+
   const clearFilters = () => {
     setStatus(''); setChannel(''); setDirection(''); setLineId('');
     setSearch(''); setRecordedOnly(true); setPage(0);
@@ -210,9 +242,14 @@ export function CallHistoryScreen() {
   return <div className="stack">
     <PageHead eyebrow="Calls" title="Call recordings"
       description="Every recorded call. Open one to play it, read the transcript, download the audio or delete it."
-      action={<Button variant="outline" onClick={() => void load()} disabled={busy}>
-        <RefreshCw size={15}/> {t('Refresh')}
-      </Button>}/>
+      action={<div className="row wrap">
+        <Button variant="outline" onClick={() => void load()} disabled={busy}>
+          <RefreshCw size={15}/> {t('Refresh')}
+        </Button>
+        {canManage && recorded.length > 0 && <Button variant="outline" onClick={deleteShown}>
+          <Trash2 size={15}/> {t('Delete these recordings')}
+        </Button>}
+      </div>}/>
 
     <div className="card stack">
       <div className="field-grid tight">

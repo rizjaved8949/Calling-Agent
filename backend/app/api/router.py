@@ -43,6 +43,7 @@ api_router.include_router(calls.router, dependencies=_limited)
 # Mounted after calls so that /calls/{id}/recording is matched by the
 # recording router rather than being swallowed by /calls/{call_id}.
 api_router.include_router(recordings.router, dependencies=_limited)
+api_router.include_router(recordings.bulk_router, dependencies=_limited)
 api_router.include_router(messaging.router, dependencies=_limited)
 api_router.include_router(knowledge.router, dependencies=_limited)
 # Agents, knowledge bases and the routing between them. Mounted after
