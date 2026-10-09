@@ -8,6 +8,21 @@
  * from this base"), so there is no mock branch to keep in step with.
  */
 import { request } from './http';
+import { auth } from '../firebase';
+
+/**
+ * `/api/team/*` authorizes off who is signed in, not the shared company key
+ * (see `api/routes/team.py`'s own docstring on why) — it is the one place
+ * this client needs a fresh Firebase ID token rather than the stored company
+ * key `request()` sends everywhere else. Getting a fresh one each call
+ * rather than caching it means a token that expired since the last page
+ * load is silently renewed instead of failing with "sign-in has expired."
+ */
+async function personToken(): Promise<string> {
+  const user = auth?.currentUser;
+  if (!user) throw new Error('Sign in again to manage the team.');
+  return user.getIdToken();
+}
 
 export type KnowledgeBase = {
   id: string;
