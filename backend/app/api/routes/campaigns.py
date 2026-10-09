@@ -92,6 +92,8 @@ async def create_campaign(tenant: CurrentTenant, payload: CampaignCreate) -> dic
         channel=payload.channel,
         opening=payload.opening,
         gapSeconds=payload.gap_seconds,
+        agentId=payload.agent_id,
+        knowledgeBaseId=payload.knowledge_base_id,
         contacts=_contacts_from(payload.numbers, tenant),
     )
     await campaign_repo.save(campaign)

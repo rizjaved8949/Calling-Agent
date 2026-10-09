@@ -109,6 +109,17 @@ class Call(BaseModel):
     # Whoever ultimately spoke to the caller: the agent, or a named person.
     handled_by: str = Field(default="agent", alias="handledBy")
 
+    # ---- Which agent answered, and what it was allowed to know -----------
+    # Filled in by `services/routing.py` when the call is answered. Recorded
+    # rather than re-derived, because "why did it say that?" is asked weeks
+    # later, by which time the setups have been edited and the chain would
+    # resolve differently.
+    agent_id: str = Field(default="", alias="agentId")
+    knowledge_base_id: str = Field(default="", alias="knowledgeBaseId")
+    knowledge_base_name: str = Field(default="", alias="knowledgeBaseName")
+    # setup | explicit | agent | company — see services/routing.py
+    resolved_by: str = Field(default="", alias="resolvedBy")
+
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     def public(self) -> dict[str, Any]:
@@ -141,6 +152,10 @@ class Call(BaseModel):
             "topic": self.topic or None,
             "language": self.language or None,
             "handledBy": self.handled_by,
+            "agentId": self.agent_id or None,
+            "knowledgeBaseId": self.knowledge_base_id or None,
+            "knowledgeBaseName": self.knowledge_base_name or None,
+            "resolvedBy": self.resolved_by or None,
             "error": self.error or None,
         }
 
@@ -152,6 +167,11 @@ class OutboundCallRequest(BaseModel):
     channel: Channel = Channel.PHONE
     # Overrides the tenant's default greeting for this call only.
     greeting: str | None = None
+    # Which agent makes this call, and what it may answer from. Both optional:
+    # left out, `services/routing.py` falls back the same way it does for a
+    # call that arrives with nothing specified.
+    agent_id: str = Field(default="", alias="agentId")
+    knowledge_base_id: str = Field(default="", alias="knowledgeBaseId")
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

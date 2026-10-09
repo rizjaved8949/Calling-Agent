@@ -21,7 +21,7 @@ import time
 from typing import Callable
 
 from ...config import settings
-from ...models.call import Call, CallStatus, RecordingState
+from ...models.call import Call, CallStatus, Direction, RecordingState
 from ...models.tenant import Tenant
 from ...repositories import calls as call_repo
 from ...repositories import knowledge
@@ -50,15 +50,50 @@ def live_settings() -> LiveSettings:
     )
 
 
-async def persona_for(tenant: Tenant) -> AgentPersona:
-    """The company's agent, built from their own settings and material.
+async def persona_for(tenant: Tenant, call: Call | None = None) -> AgentPersona:
+    """The agent for this call, built from the company's settings and material.
+
+    Which agent, and which documents, is `services/routing.py`'s decision —
+    the number's setup, a base named on the call, the agent's own default, or
+    everything the company has, in that order. Resolving here rather than at
+    each of the four places that answer a call means a phone call, a WhatsApp
+    call and a browser test all pick the same agent for the same number.
 
     The knowledge goes in the system prompt rather than behind a tool, so the
     agent never has to decide to look something up mid-sentence — on a phone
     call that pause is the difference between an answer and dead air.
     """
-    context = await knowledge.context_for(tenant.phone_number_id)
-    persona = (tenant.persona or "").strip() or (
+    from ...models.agent import Direction as SetupDirection
+    from .. import routing
+
+    if call is None:
+        # A caller with no call in hand (a preview, a probe) gets the company's
+        # own settings and all of its documents, as before.
+        context = await knowledge.context_for(tenant.phone_number_id)
+        voice = {"greeting": tenant.agent_greeting, "persona": tenant.persona,
+                 "language": tenant.language, "ttsVoice": tenant.tts_voice}
+    else:
+        resolved = await routing.resolve(
+            tenant,
+            channel=call.channel,
+            direction=(
+                SetupDirection.INBOUND
+                if call.direction is Direction.INBOUND
+                else SetupDirection.OUTBOUND
+            ),
+            knowledge_base_id=call.knowledge_base_id,
+            agent_id=call.agent_id,
+        )
+        context = await routing.context_for(tenant, resolved)
+        voice = routing.persona_for(tenant, resolved)
+        # Recorded on the call so "why did it answer that?" stays answerable
+        # after the setups have been edited.
+        call.agent_id = resolved.agent_id
+        call.knowledge_base_id = resolved.knowledge_base_id
+        call.knowledge_base_name = resolved.knowledge_base_name
+        call.resolved_by = resolved.resolved_by
+
+    persona = (voice["persona"] or "").strip() or (
         "You are the voice assistant answering calls for this business. "
         "Be warm, brief and practical."
     )
@@ -68,7 +103,7 @@ async def persona_for(tenant: Tenant) -> AgentPersona:
         "You are on a telephone call. Speak in short, natural sentences. Never "
         "read out punctuation, lists or formatting — there is nothing to look at.",
     ]
-    language = (tenant.language or "").strip()
+    language = (voice["language"] or "").strip()
     rules.append(
         f"Speak {language} unless the caller uses another language, in which "
         f"case follow them." if language
@@ -91,8 +126,8 @@ async def persona_for(tenant: Tenant) -> AgentPersona:
         ]
     return AgentPersona(
         instructions="\n".join(rules),
-        greeting=(tenant.agent_greeting or "").strip(),
-        voice=(tenant.tts_voice or "").strip(),
+        greeting=(voice["greeting"] or "").strip(),
+        voice=(voice["ttsVoice"] or "").strip(),
         language=language,
     )
 
@@ -113,7 +148,7 @@ async def start(
         call.id,
         send_to_caller=send_to_caller,
         live_settings=live_settings(),
-        persona=await persona_for(tenant),
+        persona=await persona_for(tenant, call),
         record=tenant.record_calls,
         keepalive=keepalive,
         on_transcript=lambda who, text: None,

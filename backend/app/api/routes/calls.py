@@ -139,6 +139,10 @@ async def start_call(tenant: CurrentTenant, payload: OutboundCallRequest) -> dic
         recordingState=(
             RecordingState.PENDING if tenant.record_calls else RecordingState.NONE
         ),
+        # Carried onto the call so `services/routing.py` sees them when the
+        # agent is built. Blank falls back the same way an inbound call does.
+        agentId=payload.agent_id,
+        knowledgeBaseId=payload.knowledge_base_id,
         metadata=payload.metadata,
     )
     await call_repo.save_call(call)

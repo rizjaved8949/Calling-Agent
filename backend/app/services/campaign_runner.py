@@ -198,6 +198,10 @@ async def _call_one(tenant: Tenant, campaign: Campaign, contact) -> None:
         counterparty=contact.number,
         fromNumber=tenant.infobip_phone_number or tenant.display_phone_number,
         recordingState=RecordingState.PENDING if tenant.record_calls else RecordingState.NONE,
+        # The campaign's own agent and knowledge, so a list worked from the
+        # price list is not answered from the support handbook.
+        agentId=campaign.agent_id,
+        knowledgeBaseId=campaign.knowledge_base_id,
         metadata={"campaignId": campaign.id, "campaignName": campaign.name},
     )
     await call_repo.save_call(call)

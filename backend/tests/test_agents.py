@@ -308,3 +308,131 @@ async def test_persona_falls_back_to_the_company_when_there_is_no_agent(fake_db)
         tenant, channel=Channel.PHONE, direction=Direction.INBOUND
     )
     assert routing.persona_for(tenant, resolved)["greeting"] == "Hello from the company"
+
+
+# ---------------------------------------------------------------------------
+# The runtime actually using the resolution
+# ---------------------------------------------------------------------------
+
+async def test_an_answered_call_uses_the_setups_knowledge_and_records_why(fake_db):
+    """The whole point: the agent on this number answers from this base.
+
+    Exercises `live.persona_for` with a real Call, which is the path every
+    answered call takes — a phone call, a WhatsApp call and a browser test
+    all arrive here.
+    """
+    from app.models.agent import Agent, CallSetup, Direction as SetupDirection, KnowledgeBase
+    from app.models.call import Call, Channel, Direction
+    from app.repositories import agents as repo
+    from app.repositories import knowledge as knowledge_repo
+    from app.services.agent import live
+
+    tenant = await _tenant("340")
+    kb = KnowledgeBase(tenantId="340", name="Support handbook")
+    await repo.save_knowledge_base(kb)
+    await knowledge_repo.save("340", "support.txt", "Refunds take five days.",
+                              knowledge_base_id=kb.id)
+    await knowledge_repo.save("340", "prices.txt", "A consultation is 2000 rupees.")
+    agent = Agent(tenantId="340", name="Support", greeting="Support here")
+    await repo.save_agent(agent)
+    await repo.save_setup(CallSetup(
+        tenantId="340", name="Main line", channel=Channel.PHONE,
+        direction=SetupDirection.INBOUND, agentId=agent.id, knowledgeBaseId=kb.id,
+    ))
+
+    call = Call(tenantId="340", channel=Channel.PHONE, direction=Direction.INBOUND)
+    persona = await live.persona_for(tenant, call)
+
+    assert "Refunds take five days" in persona.instructions
+    assert "2000 rupees" not in persona.instructions, "the other base leaked into the prompt"
+    assert persona.greeting == "Support here"
+    # And the call records what answered it.
+    assert call.agent_id == agent.id
+    assert call.knowledge_base_id == kb.id
+    assert call.resolved_by == "setup"
+
+
+async def test_an_outbound_call_answers_from_the_base_it_names(fake_db):
+    """A campaign dialling from the price list, not the support handbook."""
+    from app.models.agent import KnowledgeBase
+    from app.models.call import Call, Channel, Direction
+    from app.repositories import agents as repo
+    from app.repositories import knowledge as knowledge_repo
+    from app.services.agent import live
+
+    tenant = await _tenant("341")
+    prices = KnowledgeBase(tenantId="341", name="Prices")
+    await repo.save_knowledge_base(prices)
+    await knowledge_repo.save("341", "prices.txt", "A consultation is 2000 rupees.",
+                              knowledge_base_id=prices.id)
+    await knowledge_repo.save("341", "support.txt", "Refunds take five days.",
+                              knowledge_base_id="other-base")
+
+    call = Call(tenantId="341", channel=Channel.PHONE, direction=Direction.OUTBOUND,
+                knowledgeBaseId=prices.id)
+    persona = await live.persona_for(tenant, call)
+
+    assert "2000 rupees" in persona.instructions
+    assert "Refunds take five days" not in persona.instructions
+    assert call.resolved_by == "explicit"
+
+
+async def test_a_company_with_no_agents_answers_exactly_as_before(fake_db):
+    """The fallback that makes this safe to add to a running system."""
+    from app.models.call import Call, Channel, Direction
+    from app.repositories import knowledge as knowledge_repo
+    from app.services.agent import live
+
+    tenant = await _tenant("342", agentGreeting="Hello from Acme")
+    await knowledge_repo.save("342", "hours.txt", "We are open until six.")
+
+    call = Call(tenantId="342", channel=Channel.PHONE, direction=Direction.INBOUND)
+    persona = await live.persona_for(tenant, call)
+
+    assert "open until six" in persona.instructions
+    assert persona.greeting == "Hello from Acme"
+    assert call.resolved_by == "company"
+
+
+async def test_a_whatsapp_message_answers_from_that_numbers_knowledge(fake_db):
+    """A message to the support number answers from the support handbook."""
+    from app.models.agent import Agent, CallSetup, Direction as SD, KnowledgeBase
+    from app.models.call import Channel
+    from app.repositories import agents as repo
+    from app.repositories import knowledge as knowledge_repo
+    from app.services import routing
+
+    tenant = await _tenant("350")
+    kb = KnowledgeBase(tenantId="350", name="Support handbook")
+    await repo.save_knowledge_base(kb)
+    await knowledge_repo.save("350", "support.txt", "Refunds take five days.",
+                              knowledge_base_id=kb.id)
+    await knowledge_repo.save("350", "prices.txt", "A consultation is 2000 rupees.",
+                              knowledge_base_id="a-different-base")
+    agent = Agent(tenantId="350", name="Support")
+    await repo.save_agent(agent)
+    await repo.save_setup(CallSetup(
+        tenantId="350", name="WhatsApp support", channel=Channel.WHATSAPP_MESSAGE,
+        direction=SD.INBOUND, agentId=agent.id, knowledgeBaseId=kb.id,
+    ))
+
+    resolved = await routing.resolve(
+        tenant, channel=Channel.WHATSAPP_MESSAGE, direction=SD.INBOUND
+    )
+    context = await routing.context_for(tenant, resolved)
+    assert "Refunds take five days" in context
+    assert "2000 rupees" not in context, "the wrong base answered a WhatsApp message"
+    assert resolved.resolved_by == "setup"
+
+
+async def test_a_campaign_carries_its_agent_onto_every_call(fake_db):
+    """What makes one list answer from the price list and another not."""
+    from app.models.campaign import Campaign, CampaignStatus, Contact
+
+    campaign = Campaign(
+        tenantId="351", name="Renewals", status=CampaignStatus.RUNNING,
+        agentId="agent-sales", knowledgeBaseId="kb-prices",
+        contacts=[Contact(number="+923001112222")],
+    )
+    assert campaign.public()["agentId"] == "agent-sales"
+    assert campaign.public()["knowledgeBaseId"] == "kb-prices"

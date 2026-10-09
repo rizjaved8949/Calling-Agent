@@ -72,6 +72,11 @@ class Campaign(BaseModel):
     # restate the whole persona to change one sentence.
     opening: str = ""
 
+    # Which agent works this list, and what it may answer from. Blank falls
+    # back the same way any other call does — see services/routing.py.
+    agent_id: str = Field(default="", alias="agentId")
+    knowledge_base_id: str = Field(default="", alias="knowledgeBaseId")
+
     # Seconds between calls. A floor rather than a target: the point is that a
     # list is worked through at a human pace, not that it finishes quickly.
     gap_seconds: int = Field(default=20, alias="gapSeconds")
@@ -108,6 +113,8 @@ class Campaign(BaseModel):
             "channel": self.channel.value,
             "status": self.status.value,
             "opening": self.opening or None,
+            "agentId": self.agent_id or None,
+            "knowledgeBaseId": self.knowledge_base_id or None,
             "gapSeconds": self.gap_seconds,
             "total": total,
             "counts": tally,
@@ -129,6 +136,8 @@ class CampaignCreate(BaseModel):
     channel: Channel = Channel.PHONE
     opening: str = ""
     gap_seconds: int = Field(default=20, ge=5, le=600, alias="gapSeconds")
+    agent_id: str = Field(default="", alias="agentId")
+    knowledge_base_id: str = Field(default="", alias="knowledgeBaseId")
     # Pasted in, one per line: "number" or "number, name". Parsed server-side
     # so the same rules apply however it was entered.
     numbers: str = ""
@@ -140,4 +149,6 @@ class CampaignUpdate(BaseModel):
     name: str | None = None
     opening: str | None = None
     gap_seconds: int | None = Field(default=None, ge=5, le=600, alias="gapSeconds")
+    agent_id: str | None = Field(default=None, alias="agentId")
+    knowledge_base_id: str | None = Field(default=None, alias="knowledgeBaseId")
     numbers: str | None = None

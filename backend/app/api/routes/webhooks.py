@@ -216,7 +216,17 @@ async def _auto_reply(tenant: Tenant, incoming: Message) -> None:
     simply left without a reply. So every failure is logged and swallowed.
     """
     try:
-        context = await knowledge.context_for(tenant.phone_number_id)
+        # A WhatsApp number can have its own agent and its own knowledge, same
+        # as a phone line — a message arriving on the support number should be
+        # answered from the support handbook, not from everything the company
+        # has ever uploaded. Same chain a call walks; see services/routing.py.
+        from ...models.agent import Direction as SetupDirection
+        from ...services import routing
+
+        resolved = await routing.resolve(
+            tenant, channel=Channel.WHATSAPP_MESSAGE, direction=SetupDirection.INBOUND
+        )
+        context = await routing.context_for(tenant, resolved)
         history = await _recent_exchange(tenant.phone_number_id, incoming.counterparty)
         answer = await reply.compose(tenant, incoming.body, context, history)
         if not answer:
