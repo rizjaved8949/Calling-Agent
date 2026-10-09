@@ -439,6 +439,31 @@ export const live = {
       { method: 'POST' },
     ),
 
+  // ---- Usage, gaps and campaigns ----------------------------------------
+
+  usage: () => request<Record<string, any>>('/api/usage'),
+
+  gaps: () => request<Record<string, any>>('/api/gaps'),
+
+  campaigns: () => request<{ campaigns: Record<string, any>[] }>('/api/campaigns'),
+
+  campaign: (id: string) => request<Record<string, any>>(`/api/campaigns/${id}`),
+
+  createCampaign: (body: Record<string, unknown>) =>
+    request<Record<string, any>>('/api/campaigns', { method: 'POST', body }),
+
+  updateCampaign: (id: string, body: Record<string, unknown>) =>
+    request<Record<string, any>>(`/api/campaigns/${id}`, { method: 'PATCH', body }),
+
+  startCampaign: (id: string) =>
+    request<Record<string, any>>(`/api/campaigns/${id}/start`, { method: 'POST' }),
+
+  pauseCampaign: (id: string) =>
+    request<Record<string, any>>(`/api/campaigns/${id}/pause`, { method: 'POST' }),
+
+  deleteCampaign: (id: string) =>
+    request<void>(`/api/campaigns/${id}`, { method: 'DELETE' }),
+
   driveStatus: () =>
     request<{ connected: boolean; accountEmail: string | null; folderName: string | null; oauthConfigured: boolean }>(
       '/api/google/status',

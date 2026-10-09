@@ -354,8 +354,12 @@ export const api = {
     return row; }),
 
   // ---- Outbound campaigns -------------------------------------------------
-  getCampaigns: (orgId:string) => mock(()=>store.campaigns.filter(x=>x.orgId===orgId)),
-  getCampaign: (campaignId:string) => mock(()=>store.campaigns.find(x=>x.id===campaignId)),
+  getCampaigns: (orgId:string) => LIVE
+    ? real(async()=>(await live.campaigns()).campaigns)
+    : mock(()=>store.campaigns.filter(x=>x.orgId===orgId)),
+  getCampaign: (campaignId:string) => LIVE
+    ? real(()=>live.campaign(campaignId))
+    : mock(()=>store.campaigns.find(x=>x.id===campaignId)),
   getCampaignContacts: (campaignId:string) => mock(()=>store.campaignContacts.filter(x=>x.campaignId===campaignId)),
   createCampaign: (orgId:string,patch:Partial<Campaign>) => update(()=> {
     const row:Campaign={id:'camp-'+id(),orgId,name:patch.name||'Untitled campaign',setupId:patch.setupId||store.callSetups.find(x=>x.orgId===orgId&&x.direction==='OUTBOUND')?.id||'',status:'draft',total:patch.total||0,attempted:0,connected:0,unanswered:0,windowStart:patch.windowStart||'09:00',windowEnd:patch.windowEnd||'17:00',maxAttempts:patch.maxAttempts||2,retryAfterMinutes:patch.retryAfterMinutes||240,createdAt:new Date().toISOString()};
@@ -369,7 +373,9 @@ export const api = {
   setCampaignStatus: (campaignId:string,status:Campaign['status']) => update(()=> { const row=store.campaigns.find(x=>x.id===campaignId)!; row.status=status; logAudit(row.orgId,'Set the campaign '+row.name+' to '+status,'Campaign',row.id); return row; }),
 
   // ---- The improvement loop ----------------------------------------------
-  getUnanswered: (orgId:string) => mock(()=>store.unanswered.filter(x=>x.orgId===orgId)),
+  getUnanswered: (orgId:string) => LIVE
+    ? real(async()=>(await live.gaps()).gaps)
+    : mock(()=>store.unanswered.filter(x=>x.orgId===orgId)),
   resolveUnanswered: (questionId:string,status:'answered'|'ignored'|'open') => update(()=> { const row=store.unanswered.find(x=>x.id===questionId)!; row.status=status; return row; }),
 
   // ---- Messaging ----------------------------------------------------------
@@ -419,7 +425,10 @@ export const api = {
     store.calls.unshift(row);
     logAudit(orgId,'Placed a call from '+channel.label,'Call',row.id);
     return row; }),
-  getUsage: (orgId:string) => mock(()=>store.usage.filter(x=>x.orgId===orgId)),
+  /** Counted from the call and message logs, not from a separate meter. */
+  getUsage: (orgId:string) => LIVE
+    ? real(()=>live.usage())
+    : mock(()=>store.usage.filter(x=>x.orgId===orgId)),
   getPlans: () => mock(()=>store.plans),
   changePlan: (orgId:string,plan:string) => update(()=> {const row=store.organizations.find(x=>x.id===orgId)!;row.plan=plan;return row;}),
   getApiKeys: (orgId:string) => mock(()=>store.apiKeys.filter(x=>x.orgId===orgId)),
@@ -567,6 +576,27 @@ export const api = {
   askCallPermission: (to:string) => LIVE
     ? real(()=>live.askCallPermission(to))
     : notSupported('Asking for call permission needs the live API.'),
+
+  /** Questions the agent had to defer, which is what to upload next. */
+  getGaps: () => LIVE ? real(()=>live.gaps()) : mock(()=>null),
+  getCampaignDetail: (id:string) => LIVE
+    ? real(()=>live.campaign(id))
+    : mock(()=>store.campaigns.find(c=>c.id===id)),
+  createCampaignLive: (body:Record<string,unknown>) => LIVE
+    ? real(()=>live.createCampaign(body))
+    : notSupported('Creating a campaign needs the live API.'),
+  updateCampaignLive: (id:string,body:Record<string,unknown>) => LIVE
+    ? real(()=>live.updateCampaign(id,body))
+    : notSupported('Editing a campaign needs the live API.'),
+  startCampaign: (id:string) => LIVE
+    ? real(()=>live.startCampaign(id))
+    : notSupported('Starting a campaign needs the live API.'),
+  pauseCampaign: (id:string) => LIVE
+    ? real(()=>live.pauseCampaign(id))
+    : notSupported('Pausing a campaign needs the live API.'),
+  deleteCampaignLive: (id:string) => LIVE
+    ? real(()=>live.deleteCampaign(id))
+    : notSupported('Deleting a campaign needs the live API.'),
 
   /** Live calls, for the screen that lets a person take one over. */
   getLiveCalls: () => LIVE

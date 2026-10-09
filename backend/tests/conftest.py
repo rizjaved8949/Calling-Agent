@@ -91,14 +91,30 @@ class FakeSupabase:
 
 @pytest.fixture
 def fake_db(monkeypatch) -> FakeSupabase:
+    import importlib
+
     from app.db import supabase as supabase_module
-    from app.repositories import calls as call_repo
     from app.repositories import tenants as tenant_repo
 
     fake = FakeSupabase()
     monkeypatch.setattr(supabase_module, "supabase", fake)
-    monkeypatch.setattr(call_repo, "supabase", fake)
-    monkeypatch.setattr(tenant_repo, "supabase", fake)
+
+    # Every module that did `from ..db.supabase import supabase` holds its own
+    # reference, bound at import. Patching the source module does not reach
+    # them, so each one is patched by name — and the list is derived rather
+    # than written down, because a repository added later would otherwise talk
+    # to the real database from inside the test suite without anyone noticing.
+    for name in (
+        "app.repositories.calls",
+        "app.repositories.tenants",
+        "app.repositories.campaigns",
+        "app.repositories.knowledge",
+        "app.services.storage",
+    ):
+        module = importlib.import_module(name)
+        if hasattr(module, "supabase"):
+            monkeypatch.setattr(module, "supabase", fake)
+
     tenant_repo.invalidate()
     yield fake
     tenant_repo.invalidate()

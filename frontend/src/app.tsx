@@ -66,6 +66,7 @@ import {ApiKeyGate,ComingSoon,hasBackendKey} from './connect-backend';
 import {AgentScreen,KnowledgeScreen} from './pages-agent';
 import {OperatorCompanies} from './pages-operator';
 import {LiveCalls} from './pages-live';
+import {CampaignsScreen,GapsScreen,UsageScreen} from './pages-growth';
 import {LIVE,hydrate} from './lib/api';
 
 function Provider({children}:{children:React.ReactNode}){
@@ -326,14 +327,14 @@ function AppRoutes(){
     <Route path="/app/knowledge" element={<Protected manage><WhenLive real={<KnowledgeScreen/>}><Knowledge/></WhenLive></Protected>}/>
     <Route path="/app/knowledge/:kbId" element={<Protected manage><WhenLive real={<KnowledgeScreen/>}><KnowledgeDetail/></WhenLive></Protected>}/>
     <Route path="/app/setups" element={<Protected><NotYet title="Call setups" detail={"Routing rules per number arrive with the voice engine."}><CallSetups/></NotYet></Protected>}/>
-    <Route path="/app/campaigns" element={<Protected manage><NotYet title="Campaigns" detail={"Outbound campaigns are not connected yet."}><Campaigns/></NotYet></Protected>}/>
-    <Route path="/app/campaigns/:id" element={<Protected manage><NotYet title="Campaign" detail={"Outbound campaigns are not connected yet."}><CampaignDetail/></NotYet></Protected>}/>
-    <Route path="/app/unanswered" element={<Protected manage><NotYet title="Unanswered questions" detail={"This is produced by the agent during a call, which is not running yet."}><Unanswered/></NotYet></Protected>}/>
+    <Route path="/app/campaigns" element={<Protected manage><WhenLive real={<CampaignsScreen/>}><Campaigns/></WhenLive></Protected>}/>
+    <Route path="/app/campaigns/:id" element={<Protected manage><WhenLive real={<CampaignsScreen/>}><CampaignDetail/></WhenLive></Protected>}/>
+    <Route path="/app/unanswered" element={<Protected manage><WhenLive real={<GapsScreen/>}><Unanswered/></WhenLive></Protected>}/>
     <Route path="/app/channels" element={<Protected manage><Channels/></Protected>}/>
     <Route path="/app/channels/:id" element={<Protected manage><ChannelDetail/></Protected>}/>
     <Route path="/app/messages" element={<Protected manage><Messages/></Protected>}/>
     <Route path="/app/team" element={<Protected manage><NotYet title="Team" detail={"Invitations and roles arrive with sign-in."}><Team/></NotYet></Protected>}/>
-    <Route path="/app/usage" element={<Protected manage><NotYet title="Usage and billing" detail={"Metering is not connected yet."}><Usage/></NotYet></Protected>}/>
+    <Route path="/app/usage" element={<Protected manage><WhenLive real={<UsageScreen/>}><Usage/></WhenLive></Protected>}/>
     <Route path="/app/settings" element={<Protected manage><SettingsPage/></Protected>}/>
     <Route path="/app/live" element={<Protected><WhenLive real={<LiveCalls/>}><Live/></WhenLive></Protected>}/>
     <Route path="/app/history" element={<Protected><HistoryPage/></Protected>}/>

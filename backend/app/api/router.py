@@ -10,8 +10,8 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from .routes import (
-    calls, companies, exports, google, health, knowledge, media, messaging, recordings,
-    webhooks,
+    calls, campaigns, companies, exports, gaps, google, health, knowledge, media,
+    messaging, recordings, usage, webhooks,
 )
 
 api_router = APIRouter(prefix="/api")
@@ -25,6 +25,9 @@ api_router.include_router(recordings.router)
 api_router.include_router(messaging.router)
 api_router.include_router(knowledge.router)
 api_router.include_router(media.router)
+api_router.include_router(campaigns.router)
+api_router.include_router(usage.router)
+api_router.include_router(gaps.router)
 api_router.include_router(google.router)
 api_router.include_router(exports.router)
 api_router.include_router(webhooks.router)
