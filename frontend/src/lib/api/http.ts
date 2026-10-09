@@ -225,7 +225,24 @@ async function send(path: string, options: RequestOptions = {}): Promise<Respons
     throw new ApiError(0, 'Could not reach the server. Check your connection.', 'offline', cause);
   }
 
-  if (!response.ok) throw await readError(response);
+  if (!response.ok) {
+    const failure = await readError(response);
+    // The portal's "View as" is held in storage, so it survives a reload — and
+    // survived the company being removed, which left every screen saying
+    // "Company not found" with no way to tell that the account being looked at
+    // was not your own. Letting go of it is the only sensible move: the next
+    // request is for the operator's own view, which exists.
+    if (failure.status === 404 && getViewingCompany() && !options.anonymous) {
+      setViewingCompany(null);
+      throw new ApiError(
+        404,
+        'That company no longer exists, so the portal has stopped viewing it. ' +
+        'Reload to go back to your own account.',
+        'viewed_company_gone',
+      );
+    }
+    throw failure;
+  }
   return response;
 }
 

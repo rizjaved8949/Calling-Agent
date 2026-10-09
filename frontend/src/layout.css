@@ -327,3 +327,33 @@
 }
 .template-head { font-weight: 800; margin-bottom: 6px; }
 .template-foot { margin-top: 8px; font-size: .76rem; color: var(--muted); }
+
+/* --- The help assistant --------------------------------------------------- */
+.help-thread {
+  display: flex; flex-direction: column; gap: 14px;
+  max-height: 420px; overflow: auto;
+  padding: 14px; background: var(--surface); border-radius: 12px;
+}
+.help-you {
+  align-self: flex-end; max-width: 80%;
+  background: color-mix(in oklch, var(--accent) 16%, var(--card));
+  padding: 9px 13px; border-radius: 14px; font-size: .87rem; line-height: 1.5;
+  display: flex; flex-direction: column; gap: 5px;
+}
+.help-answer {
+  align-self: flex-start; max-width: 92%;
+  background: var(--card); padding: 11px 14px; border-radius: 14px;
+  font-size: .88rem; line-height: 1.7; white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* An answer the assistant is not sure of should not look like one it is. */
+.help-answer.unsure { border-inline-start: 3px solid var(--warning); }
+
+/* --- A guide, read rather than skimmed ----------------------------------- */
+.guide-body p {
+  margin: 0 0 16px;
+  font-size: 1rem;
+  line-height: 1.85;
+  max-width: 68ch;
+}
+.guide-body p:last-of-type { margin-bottom: 4px; }

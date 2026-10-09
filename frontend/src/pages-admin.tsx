@@ -504,6 +504,8 @@ export function AdminCompanyDetail() {
             </table></div>}
       </Section>
 
+      <CompanyEngine id={id!} company={company} onSaved={load}/>
+
       <Section title="What they have connected"
         help="Read from their own credentials. No secret is shown — only whether it is set.">
         {(company.channels ?? []).map((channel: ChannelReadiness, index: number) =>
@@ -738,4 +740,68 @@ export function AdminEngine() {
       </Section>
     </div>
   </div>;
+}
+
+
+/**
+ * One company's own speech engine.
+ *
+ * Every company runs on the platform's key until there is a reason to
+ * separate one — a customer large enough to want its own billing, or one
+ * being moved to a different model ahead of everybody else. Left empty this
+ * section does nothing, which is the normal state.
+ */
+function CompanyEngine({id, company, onSaved}: {
+  id: string; company: Record<string, any>; onSaved: () => Promise<void> | void;
+}) {
+  const {toast} = useApp();
+  const [model, setModel] = useState(String(company.engineModel ?? ''));
+  const [apiKey, setApiKey] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const keySet = Boolean(company.engineKeySet);
+  const dirty = model !== String(company.engineModel ?? '') || apiKey !== '';
+
+  const save = async (clear = false) => {
+    setBusy(true); setError('');
+    try {
+      await request(`/api/companies/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        body: clear
+          ? {engineModel: '', engineApiKey: ''}
+          : {engineModel: model, ...(apiKey ? {engineApiKey: apiKey} : {})},
+      });
+      setApiKey('');
+      if (clear) setModel('');
+      toast(clear
+        ? 'They are back on the platform engine.'
+        : 'Saved. Their next call uses it.');
+      await onSaved();
+    } catch (cause) {
+      setError(errorText(cause, 'That could not be saved.'));
+    } finally {setBusy(false)}
+  };
+
+  return <Section title="Their own speech engine"
+    help="Leave empty and they run on the platform's engine, which is how every company runs unless you separate one."
+    action={keySet ? <Badge tone="warning">own key</Badge> : <Badge>platform engine</Badge>}>
+    <div className="field-grid">
+      <TextInput label="Model" value={model} onChange={setModel}
+        placeholder="platform default"
+        help="A model the provider does not know fails every one of their calls."/>
+      <TextInput label="API key" value={apiKey} onChange={setApiKey} type="password"
+        placeholder={keySet ? 'leave empty to keep theirs' : 'platform key'}
+        help={keySet
+          ? 'A key is in place. Type a new one to replace it.'
+          : 'Billed to whoever owns this key.'}/>
+    </div>
+    <div className="row wrap">
+      <Button disabled={!dirty || busy} onClick={() => void save()}>
+        {busy ? <><Loader2 size={15} className="spin"/> Saving…</> : 'Save'}
+      </Button>
+      {(keySet || company.engineModel) && <Button variant="outline" disabled={busy}
+        onClick={() => void save(true)}>Use the platform engine</Button>}
+    </div>
+    {error && <div className="notice danger small">{error}</div>}
+  </Section>;
 }

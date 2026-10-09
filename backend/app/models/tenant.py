@@ -102,6 +102,12 @@ class Tenant(BaseModel):
     # a deletion, and it is reversible with one click.
     suspended: bool = False
     suspended_reason: str = Field(default="", alias="suspendedReason")
+    # This company's own speech engine, set by the platform operator. Left
+    # empty it uses the platform's, which is how every company runs until
+    # somebody has a reason to separate one — a customer large enough to want
+    # its own billing, or one being moved to a different model.
+    engine_model: str = Field(default="", alias="engineModel")
+    engine_api_key: str = Field(default="", alias="engineApiKey")
 
     # ---- Per-call overlay (never stored) ----------------------------------
     # A company has many numbers, each with its own credentials. When a call
@@ -163,12 +169,15 @@ class Tenant(BaseModel):
             "allowPlatformCredentials": self.allow_platform_credentials,
             "suspended": self.suspended,
             "suspendedReason": self.suspended_reason or None,
+            "engineModel": self.engine_model or None,
+            "engineKeySet": bool(self.engine_api_key),
         }
 
 
 # The fields inside `data` that are sealed before the row is written. Anything
 # listed here is run through secret_box on the way in and out.
 SECRET_FIELDS = (
+    "engineApiKey",
     "accessToken",
     "appSecret",
     "verifyToken",
@@ -252,3 +261,5 @@ class TenantUpdate(BaseModel):
     allow_platform_credentials: bool | None = Field(default=None, alias="allowPlatformCredentials")
     suspended: bool | None = None
     suspended_reason: str | None = Field(default=None, alias="suspendedReason")
+    engine_model: str | None = Field(default=None, alias="engineModel")
+    engine_api_key: str | None = Field(default=None, alias="engineApiKey")

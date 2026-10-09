@@ -57,16 +57,25 @@ def live_settings() -> LiveSettings:
     )
 
 
-async def live_settings_now() -> LiveSettings:
-    """The engine in force, operator's choice first, environment second."""
+async def live_settings_now(tenant: Tenant | None = None) -> LiveSettings:
+    """The engine this call runs on.
+
+    Three places, narrowest first: the company's own key if the operator gave
+    it one, then the platform's, then the server's environment. A company
+    without its own is not a special case — it is every company, until there
+    is a reason to separate one.
+    """
     from .. import platform_settings
 
     try:
         chosen = await platform_settings.current()
     except Exception:  # noqa: BLE001 — never fail a call over a settings read
         log.exception("could not read the platform engine settings")
-        return live_settings()
-    return LiveSettings(model=chosen["model"], api_key=chosen["apiKey"])
+        chosen = {"model": settings.gemini_live_model,
+                  "apiKey": settings.gemini_api_key.strip()}
+    model = (tenant.engine_model.strip() if tenant else "") or chosen["model"]
+    key = (tenant.engine_api_key.strip() if tenant else "") or chosen["apiKey"]
+    return LiveSettings(model=model, api_key=key)
 
 
 async def persona_for(tenant: Tenant, call: Call | None = None) -> AgentPersona:
@@ -426,7 +435,7 @@ async def warm_up(tenant: Tenant, call: Call, *, keepalive: bool = True) -> None
         session = CallSession(
             call.id,
             send_to_caller=_discard,
-            live_settings=await live_settings_now(),
+            live_settings=await live_settings_now(tenant),
             persona=await persona_for(tenant, call),
             record=tenant.record_calls,
             keepalive=keepalive,
@@ -465,7 +474,7 @@ async def start(
     session = CallSession(
         call.id,
         send_to_caller=send_to_caller,
-        live_settings=await live_settings_now(),
+        live_settings=await live_settings_now(tenant),
         # A human call never starts the model, so it needs no persona.
         persona=AgentPersona(instructions="", greeting="") if human
         else await persona_for(tenant, call),

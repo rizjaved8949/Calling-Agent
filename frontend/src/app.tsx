@@ -59,6 +59,7 @@ import {HistoryNavigationProvider} from './history-navigation';
 
 import {AppCtx,useApp} from './app-context';
 import {hasBackendKey} from './connect-backend';
+import {getViewingCompany,setViewingCompany} from './lib/api';
 import {AgentsScreen,AgentDetailScreen,KnowledgeBasesScreen,KnowledgeBaseDetailScreen,CallSetupsScreen,TeamScreen,InviteAcceptScreen,StaffQueueScreen,StaffLookupScreen,StaffAskScreen} from './pages-workspace';
 import {OperatorCompanies,PlatformLoginScreen} from './pages-operator';
 import {LiveCalls} from './pages-live';
@@ -71,6 +72,7 @@ import {MessagesScreen} from './pages-messages';
 import {AdminCompanies,AdminCompanyDetail,AdminHealth,AdminEngine} from './pages-admin';
 import {DashboardScreen} from './pages-dashboard';
 import {SettingsScreen} from './pages-settings';
+import {GuidesScreen,GuideScreen} from './pages-guides';
 
 function Provider({children}:{children:React.ReactNode}){
   const [store,setStore]=useState<Store>(()=>api.snapshot());
@@ -224,6 +226,7 @@ function Shell({children,platform=false}:{children:React.ReactNode;platform?:boo
   const {session,org,setOrg,store,t,theme,setTheme,setSession,connection,role,readOnly}=useApp();
   const [open,setOpen]=useState(false),[collapsed,setCollapsed]=useState(false),[palette,setPalette]=useState(false),[query,setQuery]=useState('');
   const location=useLocation(),navigate=useNavigate();
+  const viewing=getViewingCompany();
   useEffect(()=>{const handle=(e:KeyboardEvent)=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();setPalette(x=>!x)}if(e.key==='Escape')setPalette(false)};window.addEventListener('keydown',handle);return()=>window.removeEventListener('keydown',handle)},[]);
   const nav=platform?PLATFORM_NAV:role==='staff'?STAFF_NAV:ADMIN_NAV;
   const current=nav.flatMap(x=>x[1]).filter(x=>location.pathname.startsWith(x[2])).sort((a,b)=>b[2].length-a[2].length)[0]?.[1]||(platform?'Platform':'Overview');
@@ -245,6 +248,11 @@ function Shell({children,platform=false}:{children:React.ReactNode;platform?:boo
     <div className="main">
       {platform&&<div className="portal-banner platform-banner"><ShieldCheck size={15}/>{t('Platform portal — internal. Everything here is hidden from customers.')}</div>}
       {readOnly&&<div className="portal-banner impersonation-banner"><LifeBuoy size={15}/>{t('Read-only support session for')} <strong>{org.name}</strong><button className="link-btn" onClick={endImpersonation}>{t('Exit')}</button></div>}
+      {/* The portal's "View as" lives in storage and survives a reload, so
+          without this you can be looking at another company's workspace for
+          days with nothing on screen to say so — and every oddity in it reads
+          as a bug in your own account. */}
+      {viewing&&!readOnly&&<div className="portal-banner impersonation-banner"><ShieldCheck size={15}/>{t('You are viewing another company as the platform operator')} — <strong>{viewing}</strong><button className="link-btn" onClick={()=>{setViewingCompany(null);window.location.reload()}}>{t('Stop viewing')}</button></div>}
       <header className="topbar">
         <div className="row"><button className="icon-btn mobile-menu" onClick={()=>{setCollapsed(false);setOpen(true)}} aria-label={t('Open menu')}><Menu size={21}/></button><span className="small muted">{platform?t('Platform'):t('Workspace')} /</span><strong>{t(current)}</strong></div>
         <div className="top-actions">
@@ -354,8 +362,8 @@ function AppRoutes(){
     {/* The tab was called History. Old links still land in the right place. */}
     <Route path="/app/history" element={<Navigate to="/app/recordings" replace/>}/>
     <Route path="/app/history/:id" element={<HistoryRedirect/>}/>
-    <Route path="/app/guides" element={<Protected><Guides/></Protected>}/>
-    <Route path="/app/guides/:slug" element={<Protected><GuideDetail/></Protected>}/>
+    <Route path="/app/guides" element={<Protected><WhenLive real={<GuidesScreen/>}><Guides/></WhenLive></Protected>}/>
+    <Route path="/app/guides/:slug" element={<Protected><WhenLive real={<GuideScreen/>}><GuideDetail/></WhenLive></Protected>}/>
     <Route path="/app/queue" element={<Protected><WhenLive real={<StaffQueueScreen/>}><StaffQueue/></WhenLive></Protected>}/>
     <Route path="/app/lookup" element={<Protected><WhenLive real={<StaffLookupScreen/>}><StaffLookup/></WhenLive></Protected>}/>
     <Route path="/app/ask" element={<Protected><WhenLive real={<StaffAskScreen/>}><StaffAsk/></WhenLive></Protected>}/>

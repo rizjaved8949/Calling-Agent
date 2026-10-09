@@ -166,3 +166,65 @@ def test_a_call_uses_the_operators_key(client, fake_db):
     chosen = asyncio.run(live.live_settings_now())
     assert chosen.api_key == "AIza-chosen-5555"
     assert chosen.model == "chosen-model"
+
+
+# ---------------------------------------------------------------------------
+# A company with its own engine
+# ---------------------------------------------------------------------------
+
+def test_a_company_can_be_given_its_own_key(client, tenant_factory, fake_db):
+    import asyncio
+
+    from app.repositories import tenants as tenant_repo
+    from app.services.agent import live
+
+    tenant_factory("990")
+    client.put("/api/platform/engine", json={
+        "engine": "gemini", "model": "platform-model", "apiKey": "AIza-platform-0000",
+    }, headers=ADMIN)
+
+    # Until it is given one, it runs on the platform's.
+    shared = asyncio.run(tenant_repo.get("990"))
+    assert asyncio.run(live.live_settings_now(shared)).api_key == "AIza-platform-0000"
+
+    client.patch("/api/companies/990", json={
+        "engineModel": "their-model", "engineApiKey": "AIza-theirs-7777",
+    }, headers=ADMIN)
+
+    theirs = asyncio.run(tenant_repo.get("990"))
+    chosen = asyncio.run(live.live_settings_now(theirs))
+    assert chosen.api_key == "AIza-theirs-7777"
+    assert chosen.model == "their-model"
+
+
+def test_one_companys_key_does_not_leak_to_another(client, tenant_factory, fake_db):
+    import asyncio
+
+    from app.repositories import tenants as tenant_repo
+    from app.services.agent import live
+
+    tenant_factory("991")
+    tenant_factory("992")
+    client.patch("/api/companies/991", json={"engineApiKey": "AIza-only-991"},
+                 headers=ADMIN)
+
+    other = asyncio.run(tenant_repo.get("992"))
+    assert asyncio.run(live.live_settings_now(other)).api_key != "AIza-only-991"
+
+
+def test_a_companys_engine_key_is_never_returned(client, tenant_factory, auth, fake_db):
+    _, key = tenant_factory("993")
+    client.patch("/api/companies/993", json={"engineApiKey": "AIza-secret-4321"},
+                 headers=ADMIN)
+
+    mine = client.get("/api/companies/me", headers=auth(key))
+    assert "AIza-secret-4321" not in mine.text
+    assert mine.json()["engineKeySet"] is True
+
+
+def test_a_companys_engine_key_is_sealed_in_the_row(client, tenant_factory, fake_db):
+    client_tenant = tenant_factory("994")
+    client.patch("/api/companies/994", json={"engineApiKey": "AIza-sealed-8888"},
+                 headers=ADMIN)
+    stored = fake_db._table("voice_tenants")["994"]["data"]
+    assert stored["engineApiKey"] != "AIza-sealed-8888", "the key was stored in the clear"
