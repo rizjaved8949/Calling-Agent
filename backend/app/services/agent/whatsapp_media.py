@@ -184,6 +184,20 @@ def AgentAudioTrack(sample_rate: int = WIRE_RATE):
     return _agent_track_class()(sample_rate)
 
 
+def _resampled(resampler, frame) -> list:
+    """PyAV's output, as a list.
+
+    `resample()` returns a list on PyAV 9 and later and a single frame (or
+    None) before that. Both shapes appear in the wild depending on which wheel
+    the host resolved, and treating a bare frame as iterable silently drops
+    every caller.
+    """
+    produced = resampler.resample(frame)
+    if produced is None:
+        return []
+    return list(produced) if isinstance(produced, (list, tuple)) else [produced]
+
+
 class WhatsAppBridge:
     """One WhatsApp call, terminated here and joined to a `CallSession`."""
 
@@ -203,9 +217,8 @@ class WhatsAppBridge:
         self.connected = asyncio.Event()
         self.closed = False
 
-        # Meta speaks 48 kHz; the session speaks 16 kHz. Down on the way in,
-        # up on the way out, each with its own filter state.
-        self._to_session = RateConverter(1, 3)    # 48k -> 16k
+        # Outgoing only. The inbound direction is resampled by PyAV, which is
+        # the one thing that knows what Meta actually negotiated — see _drain.
         self._to_meta = RateConverter(3, 1)       # 16k -> 48k
         self._session = None
         self._consume: asyncio.Task | None = None
@@ -302,30 +315,41 @@ class WhatsAppBridge:
         self.outgoing.push(self._to_meta.process(pcm16))
 
     async def _drain(self, track) -> None:
-        """Caller audio from Meta, resampled and handed to the session."""
-        import numpy as np
+        """Caller audio from Meta, converted to what the session listens to.
 
+        PyAV does the conversion rather than our own resampler, because this
+        frame is whatever Opus produced and only PyAV knows its shape. Opus
+        decodes to 48 kHz **stereo**, and `to_ndarray()` on a packed format
+        returns one interleaved row — so reading it as mono and dividing the
+        rate by three yields left and right samples alternating at twice the
+        speed. That is not quiet or distorted, it is unrecognisable as speech:
+        the agent greets the caller, hears noise for the rest of the call, and
+        never speaks again.
+
+        Resampling to mono at the session's own rate hands that to PyAV, which
+        also copes with Meta negotiating anything other than 48 kHz without a
+        branch of our own guessing at the ratio.
+        """
+        from av.audio.resampler import AudioResampler
+
+        resampler = AudioResampler(format="s16", layout="mono", rate=PHONE_RATE)
+        frames = 0
         while not self.closed:
             try:
                 frame = await track.recv()
             except Exception:  # noqa: BLE001 — the track ended with the call
-                return
+                break
             if self._session is None:
                 continue
             try:
-                samples = frame.to_ndarray()
-                if samples.ndim > 1:            # stereo on the wire
-                    samples = samples.mean(axis=0)
-                pcm = samples.astype(np.int16).tobytes()
-                if frame.sample_rate != WIRE_RATE:
-                    # Meta negotiated something else; convert from whatever
-                    # arrived rather than assuming.
-                    ratio = RateConverter(PHONE_RATE, frame.sample_rate)
-                    self._session.feed_caller(ratio.process(pcm))
-                else:
-                    self._session.feed_caller(self._to_session.process(pcm))
+                for converted in _resampled(resampler, frame):
+                    pcm = converted.to_ndarray().tobytes()
+                    if pcm:
+                        frames += 1
+                        self._session.feed_caller(pcm)
             except Exception:  # noqa: BLE001 — one bad frame is not a dropped call
                 log.debug("call %s: could not read a frame", self.call_id, exc_info=True)
+        log.info("call %s: %d frames of caller audio reached the agent", self.call_id, frames)
 
     async def close(self) -> None:
         if self.closed:
