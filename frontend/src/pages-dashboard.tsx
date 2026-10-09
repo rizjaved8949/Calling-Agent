@@ -138,12 +138,12 @@ export function DashboardScreen() {
 
     <div className="stat-grid">
       <Tile label="Calls in the last 24 hours" value={day}
-        hint={day ? `${answered} answered` : 'nothing yet today'} to="/app/history"/>
+        hint={day ? `${answered} answered` : 'nothing yet today'} to="/app/recordings"/>
       <Tile label="Answered" value={day ? `${answerRate}%` : '—'}
         tone={day && answerRate < 70 ? 'warning' : undefined}
         hint={stats?.failed24h ? `${stats.failed24h} failed` : undefined}/>
       <Tile label="Average call" value={formatDuration(stats?.averageSeconds ?? 0)}/>
-      <Tile label="Calls all time" value={(stats?.total ?? 0).toLocaleString()} to="/app/history"/>
+      <Tile label="Calls all time" value={(stats?.total ?? 0).toLocaleString()} to="/app/recordings"/>
       <Tile label="Numbers live" value={`${verified.length}/${lines.length}`}
         hint={lines.length ? undefined : 'none connected'} to="/app/numbers"/>
       <Tile label="Agents" value={agents.length}
@@ -154,7 +154,7 @@ export function DashboardScreen() {
       <div className="card stack">
         <div className="row between">
           <h2 style={{margin: 0}}>Recent calls</h2>
-          <Button small variant="outline" to="/app/history">See all</Button>
+          <Button small variant="outline" to="/app/recordings">See all</Button>
         </div>
         {calls.length === 0
           ? <Empty icon={Phone} title="No calls yet"
@@ -162,7 +162,7 @@ export function DashboardScreen() {
           : <div className="table-wrap"><table className="table stack-on-phone">
               <thead><tr><th>When</th><th>Who</th><th>On</th><th>Length</th><th>Result</th></tr></thead>
               <tbody>{calls.map(call => <tr key={call.id}>
-                <td data-label="When"><Link to={'/app/history/' + call.id}>{formatWhen(call.startedAt)}</Link></td>
+                <td data-label="When"><Link to={'/app/recordings/' + call.id}>{formatWhen(call.startedAt)}</Link></td>
                 <td data-label="Who">
                   <span className="row small" style={{gap: 5}}>
                     {call.direction === 'OUTBOUND' ? <PhoneOutgoing size={12}/> : <PhoneIncoming size={12}/>}

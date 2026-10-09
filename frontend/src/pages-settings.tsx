@@ -272,7 +272,7 @@ function DataTab({company}: {company: Company}) {
         <div>A <b>number</b> and its stored credentials — on the Numbers page.</div>
       </div>
       <div className="row wrap">
-        <Link className="button outline" to="/app/history">Call history</Link>
+        <Link className="button outline" to="/app/recordings">Call history</Link>
         <Link className="button outline" to="/app/knowledge">Knowledge</Link>
         <Link className="button outline" to="/app/numbers">Numbers</Link>
       </div>

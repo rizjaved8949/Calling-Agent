@@ -61,13 +61,20 @@ async def lifespan(_app: FastAPI):
         )
     if not settings.google_oauth_configured:
         log.info("Google OAuth is not configured; companies cannot connect Drive.")
-    if settings.is_production and any(
-        "localhost" in origin or "127.0.0.1" in origin for origin in settings.cors_origins
+    # Only a problem when there is *nothing but* a dev address: FRONTEND_URL
+    # takes a list, and a deployment that names its real origin alongside
+    # localhost is correctly configured. Warning on the mere presence of
+    # localhost cried wolf on every boot of a perfectly good deployment, which
+    # is how a log stops being read.
+    _local = {"localhost", "127.0.0.1", "0.0.0.0"}
+    _is_local = lambda origin: any(host in origin for host in _local)  # noqa: E731
+    if settings.is_production and settings.cors_origins and all(
+        _is_local(origin) for origin in settings.cors_origins
     ):
         log.warning(
-            "FRONTEND_URL still points at a local dev address in production "
-            "(%s) — the real frontend's origin will be rejected by CORS until "
-            "this is set to its actual URL.",
+            "FRONTEND_URL names only local addresses in production (%s) — the "
+            "real frontend's origin will be rejected by CORS until this is set "
+            "to its actual URL.",
             settings.frontend_url,
         )
     log.info("calling-agent api ready (%s)", settings.app_env)

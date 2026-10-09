@@ -248,3 +248,11 @@
   box-shadow: var(--shadow-lift);
   z-index: 5;
 }
+
+/* A table row that opens something. The whole row is the target, not just the
+   one link inside it — a 14px date was a small thing to ask people to hit. */
+.row-link { cursor: pointer; }
+.row-link:hover { background: var(--surface); }
+.row-link:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+/* Buttons inside the row keep their own hit area and stop the row's click. */
+.row-link .icon-btn:hover { background: var(--card); }

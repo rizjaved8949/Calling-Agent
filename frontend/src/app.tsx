@@ -1,6 +1,6 @@
 import React,{useEffect,useMemo,useState} from 'react';
-import {BrowserRouter,Link,NavLink,Navigate,Route,Routes,useLocation,useNavigate} from 'react-router-dom';
-import {Phone,Activity,BookOpen,BrainCircuit,Building2,ChartNoAxesCombined,ChevronDown,Command,Headphones,History,LayoutDashboard,LifeBuoy,ListChecks,Menu,MessageSquare,Mic2,Moon,PhoneOutgoing,Radio,Route as RouteIcon,ServerCog,Settings,ShieldCheck,Sun,Users,X,Search,LogOut,HelpCircle} from 'lucide-react';
+import {BrowserRouter,Link,NavLink,Navigate,Route,Routes,useLocation,useNavigate,useParams} from 'react-router-dom';
+import {AudioLines,Phone,Activity,BookOpen,BrainCircuit,Building2,ChartNoAxesCombined,ChevronDown,Command,Headphones,History,LayoutDashboard,LifeBuoy,ListChecks,Menu,MessageSquare,Mic2,Moon,PhoneOutgoing,Radio,Route as RouteIcon,ServerCog,Settings,ShieldCheck,Sun,Users,X,Search,LogOut,HelpCircle} from 'lucide-react';
 import {api,subscribe,subscribePending} from './lib/api';
 import type {Store,Session,Organization,Role} from './lib/types';
 
@@ -208,11 +208,11 @@ type NavGroup=[string,[React.ComponentType<{size?:number}>,string,string][]][];
 // The order a company sets itself up in: a number, an agent, what it knows.
 const ADMIN_NAV:NavGroup=[
   ['Setup',[[LayoutDashboard,'Dashboard','/app/dashboard'],[Radio,'Numbers','/app/numbers'],[Mic2,'Agents','/app/agents'],[BrainCircuit,'Knowledge','/app/knowledge']]],
-  ['Calls',[[Phone,'Dialer','/app/dialer'],[Activity,'Live','/app/live'],[PhoneOutgoing,'Campaigns','/app/campaigns'],[History,'History','/app/history'],[MessageSquare,'Messages','/app/messages'],[ListChecks,'Unanswered','/app/unanswered']]],
+  ['Calls',[[Phone,'Dialer','/app/dialer'],[Activity,'Live','/app/live'],[PhoneOutgoing,'Campaigns','/app/campaigns'],[AudioLines,'Call recordings','/app/recordings'],[MessageSquare,'Messages','/app/messages'],[ListChecks,'Unanswered','/app/unanswered']]],
   ['Manage',[[Users,'Team','/app/team'],[ChartNoAxesCombined,'Usage','/app/usage'],[Settings,'Settings','/app/settings'],[BookOpen,'Guides','/app/guides']]],
 ];
 const STAFF_NAV:NavGroup=[
-  ['My work',[[Phone,'Dialer','/app/dialer'],[Activity,'Live','/app/live'],[History,'My calls','/app/history']]],
+  ['My work',[[Phone,'Dialer','/app/dialer'],[Activity,'Live','/app/live'],[AudioLines,'Call recordings','/app/recordings']]],
   ['Help me',[[Search,'Customer lookup','/app/lookup'],[HelpCircle,'Ask the documents','/app/ask'],[BookOpen,'Guides','/app/guides']]],
 ];
 const PLATFORM_NAV:NavGroup=[
@@ -254,6 +254,12 @@ function Shell({children,platform=false}:{children:React.ReactNode;platform?:boo
     </div>
     {palette&&<div className="modal-backdrop" onClick={()=>setPalette(false)}><div className="modal" onClick={e=>e.stopPropagation()}><div className="row between"><h2>{t('Go to')}</h2><button className="icon-btn" onClick={()=>setPalette(false)}><X size={18}/></button></div><input autoFocus className="input" value={query} onChange={e=>setQuery(e.target.value)} placeholder={t('Search pages and actions')}/><div className="command-list">{nav.flatMap(x=>x[1]).filter(x=>x[1].toLowerCase().includes(query.toLowerCase())).map(([Icon,label,path])=><button key={path} className="nav-link" style={{width:'100%',border:0,background:'transparent'}} onClick={()=>{navigate(path);setPalette(false);setQuery('')}}><Icon size={18}/>{t(label)}</button>)}</div></div></div>}
   </div>;
+}
+
+/** /app/history/<id> -> /app/recordings/<id>, keeping the call. */
+function HistoryRedirect(){
+  const {id}=useParams();
+  return <Navigate to={'/app/recordings/'+(id??'')} replace/>;
 }
 
 function NotFound(){return <div className="route-loading"><h2>Page not found</h2><p className="muted">That page does not exist. <Link to="/">Go back</Link>.</p></div>}
@@ -339,8 +345,11 @@ function AppRoutes(){
     <Route path="/app/usage" element={<Protected manage><WhenLive real={<UsageScreen/>}><Usage/></WhenLive></Protected>}/>
     <Route path="/app/settings" element={<Protected manage><WhenLive real={<SettingsScreen/>}><SettingsPage/></WhenLive></Protected>}/>
     <Route path="/app/live" element={<Protected><WhenLive real={<LiveCalls/>}><Live/></WhenLive></Protected>}/>
-    <Route path="/app/history" element={<Protected><WhenLive real={<CallHistoryScreen/>}><HistoryPage/></WhenLive></Protected>}/>
-    <Route path="/app/history/:id" element={<Protected><WhenLive real={<CallDetailScreen/>}><CallDetail/></WhenLive></Protected>}/>
+    <Route path="/app/recordings" element={<Protected><WhenLive real={<CallHistoryScreen/>}><HistoryPage/></WhenLive></Protected>}/>
+    <Route path="/app/recordings/:id" element={<Protected><WhenLive real={<CallDetailScreen/>}><CallDetail/></WhenLive></Protected>}/>
+    {/* The tab was called History. Old links still land in the right place. */}
+    <Route path="/app/history" element={<Navigate to="/app/recordings" replace/>}/>
+    <Route path="/app/history/:id" element={<HistoryRedirect/>}/>
     <Route path="/app/guides" element={<Protected><Guides/></Protected>}/>
     <Route path="/app/guides/:slug" element={<Protected><GuideDetail/></Protected>}/>
     <Route path="/app/queue" element={<Protected><WhenLive real={<StaffQueueScreen/>}><StaffQueue/></WhenLive></Protected>}/>
@@ -365,7 +374,7 @@ function AppRoutes(){
     <Route path="/knowledge" element={<Navigate to="/app/knowledge" replace/>}/>
     <Route path="/channels" element={<Navigate to="/app/channels" replace/>}/>
     <Route path="/live" element={<Navigate to="/app/live" replace/>}/>
-    <Route path="/history" element={<Navigate to="/app/history" replace/>}/>
+    <Route path="/history" element={<Navigate to="/app/recordings" replace/>}/>
     <Route path="/messages" element={<Navigate to="/app/messages" replace/>}/>
     <Route path="/guides" element={<Navigate to="/app/guides" replace/>}/>
     <Route path="/team" element={<Navigate to="/app/team" replace/>}/>

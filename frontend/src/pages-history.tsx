@@ -1,5 +1,5 @@
 /**
- * Call history, and one call in full.
+ * Call recordings, and one call in full.
  *
  * Written against the API rather than the prototype's fixture store. The old
  * screen filtered on fields the backend has never returned (`outcome`,
@@ -8,11 +8,11 @@
  * what `GET /api/calls` actually takes, and the recording is playable,
  * downloadable and deletable from the row it belongs to.
  */
-import {useCallback, useEffect, useMemo, useState} from 'react';
+import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {Link, useNavigate, useParams} from 'react-router-dom';
 import {
-  ArrowDownLeft, ArrowLeft, ArrowUpRight, Download, FileText, Mic2, Phone, RefreshCw,
-  Search, Trash2, User,
+  ArrowDownLeft, ArrowLeft, ArrowUpRight, Download, FileText, Loader2, Mic2, Pause, Phone,
+  Play, RefreshCw, Search, Trash2, User,
 } from 'lucide-react';
 import {Badge, Button, Empty, PageHead} from './app';
 import {useApp} from './app-context';
@@ -47,8 +47,54 @@ function HandledBy({call}: {call: WireCall}) {
 // The list
 // ---------------------------------------------------------------------------
 
+/** Buttons inside a clickable row must not also open the row. */
+const stop = (event: React.MouseEvent) => event.stopPropagation();
+
+/**
+ * Playing a recording straight from the list.
+ *
+ * One player for the whole page: starting a second recording stops the first,
+ * because two calls talking over each other is nobody's idea of review. The
+ * URL is minted per call and short-lived, so it is fetched on the click rather
+ * than for all fifty rows up front.
+ */
+function useRowPlayer() {
+  const [playing, setPlaying] = useState('');
+  const [loading, setLoading] = useState('');
+  const audio = useRef<HTMLAudioElement | null>(null);
+
+  useEffect(() => () => {audio.current?.pause(); audio.current = null}, []);
+
+  const toggle = async (callId: string, onError: (message: string) => void) => {
+    if (playing === callId) {
+      audio.current?.pause();
+      setPlaying('');
+      return;
+    }
+    audio.current?.pause();
+    setLoading(callId);
+    try {
+      const url = await callsApi.playbackUrl(callId);
+      const element = new Audio(url);
+      element.onended = () => setPlaying('');
+      element.onerror = () => {setPlaying(''); onError('That recording could not be played.')};
+      audio.current = element;
+      await element.play();
+      setPlaying(callId);
+    } catch (cause) {
+      onError(errorText(cause, 'That recording could not be played.'));
+    } finally {
+      setLoading('');
+    }
+  };
+
+  return {playing, loading, toggle};
+}
+
 export function CallHistoryScreen() {
-  const {t} = useApp();
+  const {t, toast} = useApp();
+  const navigate = useNavigate();
+  const player = useRowPlayer();
   const [confirm, confirmDialog] = useConfirm();
   const [calls, setCalls] = useState<WireCall[] | null>(null);
   const [lines, setLines] = useState<PhoneNumber[]>([]);
@@ -60,6 +106,7 @@ export function CallHistoryScreen() {
   const [lineId, setLineId] = useState('');
   const [search, setSearch] = useState('');
   const [query, setQuery] = useState('');
+  const [recordedOnly, setRecordedOnly] = useState(true);
   const [busy, setBusy] = useState(false);
 
   // Searching is a server-side filter on an exact number, so it waits for the
@@ -90,7 +137,9 @@ export function CallHistoryScreen() {
   // Direction and number are filtered here rather than server-side: the API
   // takes neither, and both are cheap on a page of fifty.
   const shown = useMemo(() => (calls ?? []).filter(c =>
-    (!direction || c.direction === direction) && (!lineId || c.lineId === lineId)), [calls, direction, lineId]);
+    (!direction || c.direction === direction)
+    && (!lineId || c.lineId === lineId)
+    && (!recordedOnly || c.recording.available)), [calls, direction, lineId, recordedOnly]);
 
   const lineLabel = (call: WireCall) => {
     const line = lines.find(l => l.id === call.lineId);
@@ -121,13 +170,15 @@ export function CallHistoryScreen() {
   });
 
   const clearFilters = () => {
-    setStatus(''); setChannel(''); setDirection(''); setLineId(''); setSearch(''); setPage(0);
+    setStatus(''); setChannel(''); setDirection(''); setLineId('');
+    setSearch(''); setRecordedOnly(true); setPage(0);
   };
   const filtered = Boolean(status || channel || direction || lineId || query);
+  const hiddenByRecorded = recordedOnly ? (calls ?? []).length - shown.length : 0;
 
   return <div className="stack">
-    <PageHead eyebrow="Calls" title="Call history"
-      description="Every call this company has made or answered. Open one to read what was said and hear it."
+    <PageHead eyebrow="Calls" title="Call recordings"
+      description="Every recorded call. Open one to play it, read the transcript, download the audio or delete it."
       action={<Button variant="outline" onClick={() => void load()} disabled={busy}>
         <RefreshCw size={15}/> {t('Refresh')}
       </Button>}/>
@@ -156,11 +207,20 @@ export function CallHistoryScreen() {
           <option value="">Any of your numbers</option>
           {lines.map(l => <option key={l.id} value={l.id}>{numberName(l)}</option>)}
         </Select>
+        <Select label="Show" value={recordedOnly ? 'recorded' : 'all'}
+          onChange={v => setRecordedOnly(v === 'recorded')}
+          help="A call with no audio is still listed under “Every call” — it may have failed or gone unanswered.">
+          <option value="recorded">Calls with a recording</option>
+          <option value="all">Every call</option>
+        </Select>
       </div>
-      {filtered && <div className="row small muted" style={{gap: 10}}>
-        <span>{shown.length} {shown.length === 1 ? 'call' : 'calls'} on this page match</span>
-        <button className="link-btn" onClick={clearFilters}>Clear filters</button>
-      </div>}
+      <div className="row small muted wrap" style={{gap: 10}}>
+        <span>{shown.length} {shown.length === 1 ? 'call' : 'calls'} on this page</span>
+        {hiddenByRecorded > 0 && <button className="link-btn" onClick={() => setRecordedOnly(false)}>
+          {hiddenByRecorded} more without a recording — show {hiddenByRecorded === 1 ? 'it' : 'them'}
+        </button>}
+        {filtered && <button className="link-btn" onClick={clearFilters}>Clear filters</button>}
+      </div>
     </div>
 
     {error && <ErrorNote error={error} onRetry={() => void load()}/>}
@@ -168,10 +228,12 @@ export function CallHistoryScreen() {
     {calls === null ? <Loading label="Loading your calls…"/>
       : shown.length === 0
         ? <Empty icon={filtered ? Search : Phone}
-            title={filtered ? 'No calls match' : 'No calls yet'}
+            title={filtered ? 'No calls match' : recordedOnly ? 'No recordings yet' : 'No calls yet'}
             body={filtered
               ? 'Try clearing a filter, or look at an earlier page.'
-              : 'When someone rings a connected number, or your agent calls out, the call appears here with its recording and transcript.'}
+              : recordedOnly
+                ? 'Recorded calls appear here with their audio and transcript. Switch “Show” to every call if you are looking for one that failed or went unanswered.'
+                : 'When someone rings a connected number, or your agent calls out, the call appears here with its recording and transcript.'}
             action={filtered ? <Button variant="outline" onClick={clearFilters}>Clear filters</Button>
               : <Button variant="outline" to="/app/numbers">Connect a number</Button>}/>
         : <div className="card">
@@ -180,8 +242,16 @@ export function CallHistoryScreen() {
                 <th>When</th><th>Who</th><th>On</th><th>Handled by</th>
                 <th>Length</th><th>Result</th><th>Recording</th><th/>
               </tr></thead>
-              <tbody>{shown.map(call => <tr key={call.id}>
-                <td data-label="When"><Link to={'/app/history/' + call.id}>{formatWhen(call.startedAt)}</Link></td>
+              <tbody>{shown.map(call => <tr key={call.id} className="row-link" tabIndex={0}
+                role="link" aria-label={`Open the call with ${call.counterparty}`}
+                onClick={() => navigate('/app/recordings/' + call.id)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    navigate('/app/recordings/' + call.id);
+                  }
+                }}>
+                <td data-label="When">{formatWhen(call.startedAt)}</td>
                 <td data-label="Who">
                   <div className="mono">{call.counterparty || 'unknown'}</div>
                   <Who call={call}/>
@@ -196,21 +266,28 @@ export function CallHistoryScreen() {
                   <Badge tone={statusTone(call.status)}>{STATUS_LABEL[call.status]}</Badge>
                   {call.error && <div className="small muted">{call.error}</div>}
                 </td>
-                <td data-label="Recording">
+                <td data-label="Recording" onClick={stop}>
                   {call.recording.available
                     ? <span className="row" style={{gap: 6}}>
-                        <Badge tone="success">ready</Badge>
-                        <button className="icon-btn" title="Download"
+                        <button className="player-button" style={{width: 32, height: 32}}
+                          disabled={player.loading === call.id}
+                          title={player.playing === call.id ? 'Pause' : 'Play this recording'}
+                          aria-label={player.playing === call.id ? 'Pause' : 'Play this recording'}
+                          onClick={() => void player.toggle(call.id, toast)}>
+                          {player.loading === call.id ? <Loader2 size={14} className="spin"/>
+                            : player.playing === call.id ? <Pause size={14}/> : <Play size={14}/>}
+                        </button>
+                        <button className="icon-btn" title="Download the audio"
                           onClick={() => void callsApi.download(call.id)}><Download size={15}/></button>
-                        <button className="icon-btn" title="Delete recording"
+                        <button className="icon-btn" title="Delete the recording"
                           onClick={() => removeRecording(call)}><Trash2 size={15}/></button>
                       </span>
                     : <span className="small muted">{RECORDING_LABEL[call.recording.state]}</span>}
                 </td>
-                <td data-label="">
+                <td data-label="" onClick={stop}>
                   <div className="row" style={{gap: 6}}>
-                    <Link className="button outline small" to={'/app/history/' + call.id}>Open</Link>
-                    <button className="icon-btn" title="Delete call" onClick={() => remove(call)}>
+                    <Link className="button outline small" to={'/app/recordings/' + call.id}>Open</Link>
+                    <button className="icon-btn" title="Delete the whole call" onClick={() => remove(call)}>
                       <Trash2 size={15}/>
                     </button>
                   </div>
@@ -289,7 +366,7 @@ export function CallDetailScreen() {
     body: <>The whole record — recording, transcript and summary — is deleted for
       everyone. This cannot be undone.</>,
     confirmLabel: 'Delete call',
-    onConfirm: async () => {await callsApi.remove(call.id); navigate('/app/history')},
+    onConfirm: async () => {await callsApi.remove(call.id); navigate('/app/recordings')},
   });
 
   const facts: [string, React.ReactNode][] = [
@@ -310,7 +387,7 @@ export function CallDetailScreen() {
     <PageHead eyebrow="Calls" title={call.counterparty || 'Unknown number'}
       description={`${CHANNEL_LABEL[call.channel] ?? call.channel} · ${formatWhen(call.startedAt)}`}
       action={<div className="row wrap">
-        <Button variant="outline" to="/app/history"><ArrowLeft size={15}/> All calls</Button>
+        <Button variant="outline" to="/app/recordings"><ArrowLeft size={15}/> All calls</Button>
         <Button variant="outline" onClick={removeCall}><Trash2 size={15}/> Delete call</Button>
       </div>}/>
 

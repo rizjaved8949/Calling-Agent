@@ -16,7 +16,7 @@ function fallbackFor(pathname:string):string{
   if(/^\/app\/knowledge\/.+/.test(pathname))return '/app/knowledge';
   if(/^\/app\/channels\/.+/.test(pathname))return '/app/channels';
   if(/^\/app\/campaigns\/.+/.test(pathname))return '/app/campaigns';
-  if(/^\/app\/history\/.+/.test(pathname))return '/app/history';
+  if(/^\/app\/recordings\/.+/.test(pathname))return '/app/recordings';
   if(/^\/app\/guides\/.+/.test(pathname))return '/app/guides';
   if(/^\/platform\/companies\/.+/.test(pathname))return '/platform/companies';
   if(pathname==='/forgot-password')return '/login';

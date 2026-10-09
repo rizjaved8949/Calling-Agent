@@ -813,7 +813,7 @@ export function StaffQueueScreen() {
         : <div className="table-wrap"><table className="table">
             <thead><tr><th>{t('When')}</th><th>{t('Number')}</th><th>{t('Length')}</th><th>{t('Knowledge used')}</th></tr></thead>
             <tbody>{recent.map(c => <tr key={c.id}>
-              <td><Link to={'/app/history/' + c.id}>{when(c.startedAt)}</Link></td>
+              <td><Link to={'/app/recordings/' + c.id}>{when(c.startedAt)}</Link></td>
               <td className="mono">{c.counterparty}</td>
               <td className="mono">{length(c.durationSeconds)}</td>
               <td className="small">{c.knowledgeBaseName || t('Everything uploaded')}</td>
@@ -854,7 +854,7 @@ export function StaffLookupScreen() {
           <div className="table-wrap"><table className="table">
             <thead><tr><th>{t('When')}</th><th>{t('Direction')}</th><th>{t('Length')}</th><th>{t('Knowledge used')}</th></tr></thead>
             <tbody>{matches.map(c => <tr key={c.id}>
-              <td><Link to={'/app/history/' + c.id}>{when(c.startedAt)}</Link></td>
+              <td><Link to={'/app/recordings/' + c.id}>{when(c.startedAt)}</Link></td>
               <td>{c.direction === 'INBOUND' ? t('They called') : t('We called')}</td>
               <td className="mono">{length(c.durationSeconds)}</td>
               <td className="small">{c.knowledgeBaseName || t('Everything uploaded')}</td>

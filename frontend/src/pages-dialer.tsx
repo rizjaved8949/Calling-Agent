@@ -198,7 +198,7 @@ export function DialerScreen() {
           <p className="small muted">{status}</p>
           {phase === 'ended' && <div className="row">
             <Button small variant="outline" onClick={() => {setPhase('idle'); setStatus(''); setCallId('')}}>New call</Button>
-            {callId && <Link className="button small outline" to={'/app/history/' + callId}>View call</Link>}
+            {callId && <Link className="button small outline" to={'/app/recordings/' + callId}>View call</Link>}
           </div>}
         </>}
       </div>
