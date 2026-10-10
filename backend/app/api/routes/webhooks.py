@@ -201,9 +201,76 @@ async def _handle_whatsapp(tenant: Tenant, payload: dict[str, Any]) -> None:
                 log.debug("ignoring WhatsApp field %r", field)
 
 
+# ---------------------------------------------------------------------------
+# Not answering the same message twice
+# ---------------------------------------------------------------------------
+#
+# Meta delivers a webhook more than once. It is documented behaviour — a
+# retry when our 200 is slow, and sometimes a plain duplicate — and it was
+# happening: the same message id arrived twice in the same second, was stored
+# as two messages, and was answered twice by the agent. The caller saw two
+# slightly different replies to one question.
+#
+# Answering in the background already made us fast to acknowledge, which
+# lowers the chance of a retry but cannot rule one out. This rules it out.
+#
+# Two layers, because one duplicate delivery arrives concurrently and the
+# other arrives after a restart:
+#
+#   * an in-process claim, which is atomic under asyncio and catches the two
+#     copies that land in the same second — a database check alone would have
+#     both miss, each reading before the other wrote;
+#   * the stored message, which catches a redelivery minutes later or after a
+#     deploy, when this process has no memory of the first.
+
+_SEEN_TTL_SECONDS = 900.0
+_seen_inbound: dict[str, float] = {}
+
+
+def _claim_inbound(provider_id: str) -> bool:
+    """True the first time this message id is seen, False every time after.
+
+    Synchronous on purpose: between the lookup and the write there must be no
+    await, or two deliveries of the same message both claim it.
+    """
+    now = time.time()
+    if len(_seen_inbound) > 2000:
+        for key, seen in list(_seen_inbound.items()):
+            if now - seen > _SEEN_TTL_SECONDS:
+                _seen_inbound.pop(key, None)
+    previous = _seen_inbound.get(provider_id)
+    if previous is not None and now - previous < _SEEN_TTL_SECONDS:
+        return False
+    _seen_inbound[provider_id] = now
+    return True
+
+
+async def _already_handled(tenant: Tenant, provider_id: str) -> bool:
+    """Whether this message is already stored, from before a restart."""
+    if not provider_id:
+        return False
+    try:
+        found = await call_repo.find_message_by_provider_id(
+            tenant.phone_number_id, provider_id)
+    except Exception:  # noqa: BLE001 — a failed lookup must not drop a message
+        log.exception("could not check whether %s was already handled", provider_id[-12:])
+        return False
+    return found is not None
+
+
 async def _on_messages(tenant: Tenant, value: dict[str, Any]) -> None:
     # Inbound messages.
     for raw in value.get("messages") or []:
+        provider_id = str(raw.get("id") or "")
+        if provider_id and not _claim_inbound(provider_id):
+            log.info("tenant %s: ignoring a repeat delivery of message %s",
+                     tenant.phone_number_id, provider_id[-12:])
+            continue
+        if await _already_handled(tenant, provider_id):
+            log.info("tenant %s: message %s was already handled before a restart",
+                     tenant.phone_number_id, provider_id[-12:])
+            continue
+
         kind = raw.get("type", "text")
         body = ""
         if kind == "text":
@@ -217,7 +284,7 @@ async def _on_messages(tenant: Tenant, value: dict[str, Any]) -> None:
 
         message = Message(
             tenantId=tenant.phone_number_id,
-            providerMessageId=str(raw.get("id") or ""),
+            providerMessageId=provider_id,
             direction=MessageDirection.INBOUND,
             counterparty=f"+{raw.get('from')}" if raw.get("from") else "",
             kind=kind,
