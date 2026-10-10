@@ -1,0 +1,268 @@
+/*
+ * The dialer.
+ *
+ * It was a select, a stretched text input, a 3×4 grid of generic buttons and
+ * a panel beside it — every piece a default component, nothing grouped, and
+ * no indication that the keypad and the call button had anything to do with
+ * each other. It read as a form that happened to contain digits.
+ *
+ * This gives it the shape people already know: one panel that is the handset,
+ * one that is the call. The handset keeps a fixed width because a keypad that
+ * stretches to fill a 1600px monitor stops looking like a keypad.
+ */
+
+.dialer {
+  display: grid;
+  grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
+  gap: 18px;
+  /* Stretched rather than `start`: two panels of different heights beside
+     each other is most of what made this look unfinished. */
+  align-items: stretch;
+}
+
+/* ---- Who does the talking --------------------------------------------- */
+
+.dial-modes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.dial-mode {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  text-align: start;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: var(--card);
+  color: inherit;
+  cursor: pointer;
+  transition: border-color .12s, box-shadow .12s;
+}
+.dial-mode:hover:not(:disabled) { border-color: var(--accent); }
+.dial-mode[aria-pressed="true"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 18%, transparent);
+}
+.dial-mode:disabled { opacity: .55; cursor: not-allowed; }
+.dial-mode-icon {
+  flex: none;
+  width: 38px; height: 38px;
+  border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--surface);
+  color: var(--muted);
+}
+.dial-mode[aria-pressed="true"] .dial-mode-icon {
+  background: color-mix(in oklch, var(--accent) 18%, var(--surface));
+  color: var(--accent);
+}
+.dial-mode strong { display: block; }
+.dial-mode .help { margin-top: 3px; }
+
+/* ---- The handset ------------------------------------------------------- */
+
+.dial-pad {
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* The number being dialled, as a display rather than a text box: it is the
+   one thing on the panel that is being read back rather than filled in. */
+.dial-readout {
+  position: relative;
+  background: var(--surface);
+  border-radius: 12px;
+  padding: 14px 44px 14px 16px;
+  min-height: 62px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.dial-readout input {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--foreground);
+  font-family: "JetBrains Mono", monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 1.5rem;
+  letter-spacing: .03em;
+  text-align: center;
+  min-height: auto;
+  padding: 0;
+}
+.dial-readout input:focus { outline: none; box-shadow: none; border: 0; }
+.dial-readout input::placeholder { color: var(--muted); opacity: .6; }
+.dial-back {
+  position: absolute;
+  inset-inline-end: 8px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 8px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.dial-back:hover:not(:disabled) { background: var(--card); color: var(--foreground); }
+.dial-back:disabled { opacity: 0; pointer-events: none; }
+
+.dial-keys {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 9px;
+}
+.dial-key {
+  aspect-ratio: 1.55;
+  border: 1px solid transparent;
+  border-radius: 11px;
+  background: var(--surface);
+  color: var(--foreground);
+  font-size: 1.3rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  display: grid;
+  place-items: center;
+  line-height: 1;
+  cursor: pointer;
+  transition: background .1s, transform .06s;
+}
+.dial-key small {
+  display: block;
+  font-size: .56rem;
+  font-weight: 800;
+  letter-spacing: .14em;
+  color: var(--muted);
+  margin-top: 3px;
+}
+.dial-key:hover:not(:disabled) { background: var(--card); border-color: var(--border); }
+.dial-key:active:not(:disabled) { transform: scale(.96); }
+.dial-key:disabled { opacity: .4; cursor: not-allowed; }
+
+/* The call button is round and alone, because it is the only thing on the
+   panel you cannot undo. */
+.dial-go {
+  width: 62px; height: 62px;
+  border: 0; border-radius: 50%;
+  display: grid; place-items: center;
+  align-self: center;
+  color: var(--primary-foreground);
+  background: var(--success);
+  cursor: pointer;
+  box-shadow: var(--shadow-soft);
+  transition: filter .12s, transform .06s;
+}
+.dial-go:hover:not(:disabled) { filter: brightness(1.1); }
+.dial-go:active:not(:disabled) { transform: scale(.95); }
+.dial-go:disabled { opacity: .4; cursor: not-allowed; }
+.dial-go.hang { background: var(--destructive); }
+
+/* ---- The call ---------------------------------------------------------- */
+
+.dial-stage {
+  min-height: 340px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 16px;
+  padding: 22px;
+}
+/* Once there is a call to show, the content sits at the top and the
+   transcript takes the room below it. */
+.dial-stage.busy { justify-content: flex-start; }
+.dial-stage-empty {
+  margin: auto;
+  text-align: center;
+  max-width: 42ch;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+.dial-stage-empty p { margin: 0; }
+
+.dial-live {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+  padding: 10px 0 4px;
+}
+.dial-who {
+  font-family: "JetBrains Mono", monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: .02em;
+  overflow-wrap: anywhere;
+}
+.dial-timer {
+  font-family: "JetBrains Mono", monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 2.1rem;
+  font-weight: 700;
+  letter-spacing: -.02em;
+  line-height: 1.1;
+}
+
+/* A ring that pulses while the line is ringing and holds steady once the
+   call connects, so the state is legible without reading the label. */
+.dial-orb {
+  width: 76px; height: 76px;
+  border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--surface);
+  color: var(--muted);
+}
+.dial-orb.ringing {
+  color: var(--warning);
+  box-shadow: 0 0 0 0 color-mix(in oklch, var(--warning) 45%, transparent);
+  animation: dial-ring 1.5s ease-out infinite;
+}
+.dial-orb.connected {
+  color: var(--live);
+  background: color-mix(in oklch, var(--live) 16%, var(--surface));
+  box-shadow: 0 0 0 8px color-mix(in oklch, var(--live) 12%, transparent);
+}
+.dial-orb.ended { color: var(--muted); }
+@keyframes dial-ring {
+  70% { box-shadow: 0 0 0 18px color-mix(in oklch, var(--warning) 0%, transparent); }
+  100% { box-shadow: 0 0 0 0 color-mix(in oklch, var(--warning) 0%, transparent); }
+}
+
+/* What the agent and the caller are saying, while it happens. */
+.dial-transcript {
+  flex: 1;
+  min-height: 0;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--surface);
+  border-radius: 11px;
+  padding: 12px 14px;
+  font-size: .82rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.dial-transcript:empty { display: none; }
+
+.dial-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  font-size: .78rem;
+  color: var(--muted);
+  line-height: 1.55;
+}
+.dial-note svg { flex: none; margin-top: 2px; }
+
+@media (max-width: 900px) {
+  .dialer { grid-template-columns: minmax(0, 1fr); }
+  .dial-modes { grid-template-columns: 1fr; }
+  .dial-pad { max-width: 380px; margin-inline: auto; width: 100%; }
+}

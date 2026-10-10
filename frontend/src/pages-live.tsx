@@ -37,109 +37,6 @@ function clock(seconds: number): string {
   return `${m}:${String(Math.max(0, seconds - m * 60)).padStart(2, '0')}`;
 }
 
-/**
- * Placing a call.
- *
- * WhatsApp and a phone line differ in one way that matters to whoever is
- * looking at this: WhatsApp needs the person's permission first, and Meta
- * refuses without it. So the permission request is a button of its own rather
- * than something hidden inside "call", which would fail for a reason nobody
- * could see.
- */
-function PlaceCall({onPlaced}: {onPlaced: () => void}) {
-  const {t, toast} = useApp();
-  const [number, setNumber] = useState('');
-  const [lines, setLines] = useState<PhoneNumber[]>([]);
-  const [lineId, setLineId] = useState('');
-  const [busy, setBusy] = useState('');
-  useEffect(() => {
-    numberApi.list().then(b => {
-      // Only numbers with an outbound agent: this form puts the agent on the
-      // call. Calling yourself is the Dialer's job.
-      const usable = b.numbers.filter(n => canCallOut(n) && n.outboundAgentId);
-      setLines(usable);
-      if (usable[0]) setLineId(id => id || usable[0].id);
-    }).catch(() => {});
-  }, []);
-  const line = lines.find(l => l.id === lineId);
-  const channel: 'PHONE' | 'WHATSAPP_CALL' = line?.kind === 'whatsapp' ? 'WHATSAPP_CALL' : 'PHONE';
-
-  const call = async () => {
-    if (!number.trim()) {toast(t('Enter a number first.')); return}
-    setBusy('call');
-    try {
-      if (!line) {toast(t('Give a verified number an outbound agent on the Numbers page first.')); return}
-      await numberApi.placeCall({to: number.trim(), channel, lineId: line.id});
-      toast(t('Calling…'));
-      setNumber('');
-      onPlaced();
-    } catch (cause) {
-      toast(cause instanceof Error ? cause.message : t('That call could not be placed.'));
-    } finally {
-      setBusy('');
-    }
-  };
-
-  const askPermission = async () => {
-    if (!number.trim()) {toast(t('Enter a number first.')); return}
-    setBusy('permission');
-    try {
-      await numberApi.askPermission(number.trim(), lineId);
-      toast(t('Asked. They will see a message with an accept button.'));
-    } catch (cause) {
-      toast(cause instanceof Error ? cause.message : t('That request could not be sent.'));
-    } finally {
-      setBusy('');
-    }
-  };
-
-  return <div className="card stack">
-    <div>
-      <strong>{t('Have the agent call someone')}</strong>
-      <div className="help">{t('Your agent does the talking. To speak yourself, use the Dialer.')}</div>
-    </div>
-    {/* Two fields of comparable weight, then the actions. The number field used
-        to take the whole width and push the picker and the button into a
-        corner, which made the choice of number look like an afterthought. */}
-    <div className="field-grid">
-      <div className="field">
-        <label>{t('Number to call')}</label>
-        <input className="input" value={number} inputMode="tel" disabled={Boolean(busy)}
-          placeholder="03001112222" onChange={e => setNumber(e.target.value)}
-          onKeyDown={e => {if (e.key === 'Enter') void call()}}/>
-        <div className="help">{t('A local number is expanded using your country code.')}</div>
-      </div>
-      <div className="field">
-        <label>{t('Call from')}</label>
-        <select className="select" value={lineId} disabled={Boolean(busy) || !lines.length}
-          onChange={e => setLineId(e.target.value)}>
-          {lines.length === 0 && <option value="">{t('No number with an outbound agent')}</option>}
-          {lines.map(l => <option key={l.id} value={l.id}>{l.kind === 'whatsapp' ? 'WhatsApp · ' : 'Phone · '}{numberName(l)}</option>)}
-        </select>
-        <div className="help">
-          {lines.length === 0
-            ? <Link to="/app/numbers">{t('Give a verified number an outbound agent →')}</Link>
-            : t('The agent assigned to this number answers for it.')}
-        </div>
-      </div>
-    </div>
-    <div className="row wrap">
-      <Button onClick={() => void call()} disabled={Boolean(busy) || !number.trim() || !line}>
-        {busy === 'call'
-          ? <><Loader2 size={14} className="spin"/> {t('Calling…')}</>
-          : <><PhoneCall size={14}/> {t('Call')}</>}
-      </Button>
-      {channel === 'WHATSAPP_CALL' && <Button variant="outline" disabled={Boolean(busy)}
-        onClick={() => void askPermission()}>
-        {busy === 'permission' ? t('Asking…') : t('Ask permission first')}
-      </Button>}
-    </div>
-    {channel === 'WHATSAPP_CALL' && <p className="small muted">
-      {t('WhatsApp requires the person to grant permission before a business may call them. Ask first; they only need to accept once.')}
-    </p>}
-  </div>;
-}
-
 export function LiveCalls() {
   const {t, toast, canManage} = useApp();
   const [calls, setCalls] = useState<LiveCall[]>([]);
@@ -210,7 +107,18 @@ export function LiveCalls() {
 
     {error && <div className="notice danger">{error}</div>}
 
-    {canManage && <PlaceCall onPlaced={load}/>}
+    {/* Placing a call lives on the Dialer now, where both ways of making
+        one sit side by side. Two screens offering the same thing is how one
+        of them goes stale. */}
+    <div className="notice">
+      <div className="row between wrap" style={{gap: 12}}>
+        <span>
+          <strong>Want to start a call?</strong> The Dialer does both — you
+          talk to them, or the agent does.
+        </span>
+        <Button variant="outline" to="/app/dialer"><PhoneCall size={15}/> Open the Dialer</Button>
+      </div>
+    </div>
 
     {calls.length === 0 && !loading
       ? <Empty icon={PhoneCall} title="No calls in progress"
