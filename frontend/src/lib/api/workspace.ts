@@ -82,8 +82,27 @@ export type Agent = {
   escalationRules: string;
   ttsVoice: string;
   speakingPace: SpeakingPace;
+  /**
+   * The company's own wording for each part of the instructions. A block
+   * missing or empty means "use the standard wording", which is what every
+   * agent does until somebody edits one.
+   */
+  promptBlocks: Record<string, string>;
+  /** Appended last, so it wins any disagreement with the blocks above. */
+  extraRules: string;
+  /** Replaces the assembled instructions entirely. */
+  promptOverride: string;
   knowledgeBaseId: string;
   createdAt: number;
+};
+
+/** One part of the instructions, and the wording used when it is left alone. */
+export type PromptBlock = {
+  id: string;
+  title: string;
+  help: string;
+  default: string;
+  needsMessaging: boolean;
 };
 
 export type Channel = 'PHONE' | 'WHATSAPP_CALL' | 'WHATSAPP_MESSAGE';
@@ -113,6 +132,16 @@ export type TeamInvite = { token: string; email: string; role: 'owner' | 'staff'
 // ---- Knowledge bases --------------------------------------------------
 
 export const workspace = {
+  /** Every part of the instructions a company may rewrite, with ours. */
+  promptBlocks: () =>
+    request<{ blocks: PromptBlock[]; paceRules: Record<string, string> }>(
+      '/api/agents/prompt-blocks'),
+
+  /** The exact instructions an agent would be given, assembled. */
+  agentPrompt: (agentId: string) =>
+    request<{ instructions: string; characters: number; knowledgeCharacters: number }>(
+      `/api/agents/${agentId}/prompt`),
+
   knowledgeBases: () =>
     request<{ knowledgeBases: KnowledgeBase[]; unfiledCount: number }>('/api/knowledge-bases'),
   createKnowledgeBase: (name: string, purpose: string, isDefault: boolean) =>

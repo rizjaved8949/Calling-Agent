@@ -174,6 +174,18 @@ class Agent(BaseModel):
     tts_voice: str = Field(default="", alias="ttsVoice")
     speaking_pace: SpeakingPace = Field(default=SpeakingPace.NATURAL, alias="speakingPace")
 
+    # ---- The exact instructions -----------------------------------------
+    # Each one overrides a block of the standard prompt; empty means "use the
+    # standard wording", which is what every agent does until somebody edits
+    # one. See `services/agent/prompt.py` for the blocks and the defaults.
+    prompt_blocks: dict[str, str] = Field(default_factory=dict, alias="promptBlocks")
+    # Appended at the very end, so it wins any disagreement with the blocks
+    # above — which is what somebody writing their own rule is asking for.
+    extra_rules: str = Field(default="", alias="extraRules")
+    # Replaces the assembled instructions entirely. For somebody who would
+    # rather write the whole thing than edit ours.
+    prompt_override: str = Field(default="", alias="promptOverride")
+
     # ---- What it knows ---------------------------------------------------
     # Blank means "everything this company has uploaded", which is how a
     # company that never splits its documents keeps working.
@@ -236,6 +248,9 @@ class AgentCreate(BaseModel):
     escalation_rules: str = Field(default="", alias="escalationRules", max_length=2000)
     tts_voice: str = Field(default="", alias="ttsVoice")
     speaking_pace: SpeakingPace = Field(default=SpeakingPace.NATURAL, alias="speakingPace")
+    prompt_blocks: dict[str, str] = Field(default_factory=dict, alias="promptBlocks")
+    extra_rules: str = Field(default="", alias="extraRules", max_length=8000)
+    prompt_override: str = Field(default="", alias="promptOverride", max_length=20000)
     knowledge_base_id: str = Field(default="", alias="knowledgeBaseId")
     status: AgentStatus = AgentStatus.DRAFT
     mode: AgentMode = AgentMode.BOTH
@@ -255,6 +270,10 @@ class AgentUpdate(BaseModel):
     escalation_rules: str | None = Field(default=None, alias="escalationRules", max_length=2000)
     tts_voice: str | None = Field(default=None, alias="ttsVoice")
     speaking_pace: SpeakingPace | None = Field(default=None, alias="speakingPace")
+    prompt_blocks: dict[str, str] | None = Field(default=None, alias="promptBlocks")
+    extra_rules: str | None = Field(default=None, alias="extraRules", max_length=8000)
+    prompt_override: str | None = Field(
+        default=None, alias="promptOverride", max_length=20000)
     knowledge_base_id: str | None = Field(default=None, alias="knowledgeBaseId")
     status: AgentStatus | None = None
     mode: AgentMode | None = None

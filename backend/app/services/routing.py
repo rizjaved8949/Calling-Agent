@@ -162,6 +162,9 @@ def persona_for(tenant: Tenant, resolved: Resolved) -> dict[str, str]:
             "tone": "",
             "escalation": "",
             "pace": "",
+            "promptBlocks": {},
+            "extraRules": "",
+            "promptOverride": "",
         }
     return {
         "greeting": agent.greeting or tenant.agent_greeting,
@@ -174,4 +177,9 @@ def persona_for(tenant: Tenant, resolved: Resolved) -> dict[str, str]:
         "tone": agent.tone_notes,
         "escalation": agent.escalation_rules,
         "pace": agent.speaking_pace.value,
+        # The company's own wording for each block of the prompt, and anything
+        # it added. Empty means "use the standard wording".
+        "promptBlocks": agent.prompt_blocks,
+        "extraRules": agent.extra_rules,
+        "promptOverride": agent.prompt_override,
     }

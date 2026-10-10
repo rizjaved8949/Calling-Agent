@@ -25,11 +25,12 @@ import {auth as firebaseAuth} from './lib/firebase';
 import {createUserWithEmailAndPassword} from 'firebase/auth';
 import {LiveCalls} from './pages-live';
 import {ErrorNote, Loading, Section, Select, TextInput, useConfirm} from './ui';
+import {PromptBlocks} from './agent-prompt';
 
 /** The fields the agent form edits as a draft, saved together on Save. */
 const FORM_FIELDS = [
   'name', 'greeting', 'roleDescription', 'language', 'ttsVoice', 'toneNotes',
-  'escalationRules', 'speakingPace',
+  'escalationRules', 'speakingPace', 'promptBlocks', 'extraRules', 'promptOverride',
 ] as const satisfies readonly (keyof Agent)[];
 
 const CHANNEL_LABEL: Record<Channel, string> = {
@@ -325,6 +326,8 @@ export function AgentDetailScreen() {
           disabled={!canManage} onChange={v => set({escalationRules: v})}
           placeholder="If the caller asks for a manager, or sounds upset, offer a callback."/>
       </Section>
+
+      <PromptBlocks draft={draft} canManage={canManage} agentId={id ?? ''} onSet={set}/>
 
       <Section title="What it knows"
         help="Answers come only from the material you upload. Without any, it offers to take a message rather than invent an answer.">

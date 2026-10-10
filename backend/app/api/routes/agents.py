@@ -129,6 +129,61 @@ async def list_voices(tenant: CurrentTenant) -> dict:
     return voices.catalogue()
 
 
+@router.get("/agents/prompt-blocks")
+async def prompt_blocks(tenant: CurrentTenant) -> dict:
+    """Every part of the instructions a company may rewrite, with ours.
+
+    Mounted above `/agents/{agent_id}` so the path is not swallowed by it.
+    The defaults are sent so the screen can show exactly what an agent is
+    being told when the company has written nothing — which, until this
+    existed, was a few hundred words nobody outside this codebase could read.
+    """
+    from ...services.agent import prompt
+
+    return {"blocks": prompt.catalogue(), "paceRules": prompt.PACE_RULES}
+
+
+@router.get("/agents/{agent_id}/prompt")
+async def preview_prompt(tenant: CurrentTenant, agent_id: str) -> dict:
+    """The exact instructions this agent would be given, assembled.
+
+    Reading back what an agent will actually be told is the only way to tell
+    whether a rule you wrote survived — the knowledge base goes in the middle
+    of it and the ordering around that is load-bearing.
+    """
+    from ...services.agent import prompt
+
+    agent = await repo.get_agent(tenant.phone_number_id, agent_id)
+    if agent is None:
+        raise NotFound("Agent")
+
+    context = await knowledge_repo.context_for(
+        tenant.phone_number_id, agent.knowledge_base_id or None)
+    instructions = prompt.build(
+        persona=agent.role_description or tenant.persona,
+        context=context,
+        written=agent.prompt_blocks,
+        language_rule=(
+            f"Speak {agent.language} unless the caller uses another language, "
+            "in which case follow them."
+            if (agent.language or tenant.language) else ""
+        ),
+        pace=agent.speaking_pace.value,
+        tone=agent.tone_notes,
+        escalation=agent.escalation_rules,
+        extra=agent.extra_rules,
+        override=agent.prompt_override,
+        # Previewed as if it can, so the writing rules are visible to edit
+        # rather than appearing only once a number is connected.
+        can_send_whatsapp=True,
+    )
+    return {
+        "instructions": instructions,
+        "characters": len(instructions),
+        "knowledgeCharacters": len(context or ""),
+    }
+
+
 @router.get("/agents")
 async def list_agents(tenant: CurrentTenant) -> dict:
     return {"agents": [a.public() for a in await repo.list_agents(tenant.phone_number_id)]}

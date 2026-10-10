@@ -27,6 +27,7 @@ from ...repositories import calls as call_repo
 from ...repositories import knowledge
 from .. import recordings as recording_service
 from .. import reports
+from . import prompt
 from . import tools as tool_catalogue
 from .gemini import AgentPersona, LiveSettings
 from .session import CallSession
@@ -123,159 +124,39 @@ async def persona_for(tenant: Tenant, call: Call | None = None) -> AgentPersona:
         call.knowledge_base_name = resolved.knowledge_base_name
         call.resolved_by = resolved.resolved_by
 
-    persona = (voice["persona"] or "").strip() or (
-        "You are the voice assistant answering calls for this business. "
-        "Be warm, brief and practical."
-    )
     language = (voice["language"] or "").strip()
     can_message = bool(call) and await _can_send_whatsapp(tenant)
 
-    # Who it is. Said first, because everything after is about how to behave.
-    opening = [
-        persona,
-        "",
-        # Deliberately naming no organisation. The company's persona above says
-        # who they are, and repeating a name from the account record
-        # contradicted it whenever the two differed — an account called
-        # "Calling Agent" had its university assistant introduce itself as the
-        # assistant for Calling Agent, in the same breath as saying otherwise.
-        "You are a virtual assistant answering on this organisation's behalf. "
-        "You are not a person, and you are not the organisation itself. If "
-        "anyone asks who or what you are, say so plainly and warmly — never "
-        "claim to be human, and never pretend the caller has reached a "
-        "department or an individual.",
-    ]
-
-    if context:
-        material = [
-            "",
-            "## The material you answer from",
-            "Answer only from this. If the answer is not here, say you will "
-            "check and have someone call back — never invent a figure, a date "
-            "or a policy.",
-            "",
-            context,
-        ]
-    else:
-        material = [
-            "",
-            "You have no reference material, so do not state specific facts "
-            "about this business. Offer to take a message instead.",
-        ]
-
-    # Everything below comes *after* the material on purpose. The knowledge
-    # base runs to tens of thousands of characters, and rules placed before it
-    # were followed about two times in five: the agent would say "I have sent
-    # it on WhatsApp" and send nothing. Last word in the prompt wins.
-    conduct = [
-        "",
-        "## How to behave on this call",
-        "",
-        "You are on a telephone call:",
-        "- Speak in short, natural sentences, the way people actually talk.",
-        "- Never read out punctuation, bullet points or formatting. There is "
-        "nothing to look at.",
-        "- Never say a URL or an email address aloud if you can send it instead.",
-        "- One question at a time. Wait for the answer.",
-        "",
-        "Listen, and reply to what was actually said:",
-        "- Acknowledge what they told you before you answer. If they gave you "
-        "their name, use it.",
-        "- Never repeat your opening line. You have already said it.",
-        "- If you did not catch something, say so and ask them to repeat it, "
-        "rather than guessing and answering the wrong question.",
-        "- If they interrupt, stop and listen. What they are saying now matters "
-        "more than what you were saying.",
-        "- Be warm and unhurried. A caller should feel helped, not processed.",
-    ]
-    conduct.append(
-        f"- Speak {_language_name(language)} unless the caller uses another "
-        "language, in which case follow them. Mirror their mix of languages "
-        "rather than forcing one."
-        if language
-        else "- Speak whatever language the caller speaks, and mirror their mix "
-             "of languages rather than forcing one."
+    # Every word of this is now a block a company can read and change; see
+    # `prompt.py`. It used to be a few hundred words of behaviour written
+    # here, which a company could neither see nor argue with.
+    instructions = prompt.build(
+        persona=voice["persona"] or "",
+        context=context,
+        written=voice.get("promptBlocks") or {},
+        language_rule=(
+            f"Speak {_language_name(language)} unless the caller uses another "
+            "language, in which case follow them. Mirror their mix of languages "
+            "rather than forcing one."
+            if language
+            else "Speak whatever language the caller speaks, and mirror their "
+                 "mix of languages rather than forcing one."
+        ),
+        pace=(voice.get("pace") or "").strip(),
+        tone=voice.get("tone") or "",
+        escalation=voice.get("escalation") or "",
+        extra=voice.get("extraRules") or "",
+        override=voice.get("promptOverride") or "",
+        can_send_whatsapp=can_message,
     )
 
-    pace = (voice.get("pace") or "").strip()
-    if pace in _PACE_RULES:
-        conduct.append("- " + _PACE_RULES[pace])
-
-    tone = (voice.get("tone") or "").strip()
-    if tone:
-        conduct += ["", "How this company wants you to sound:", tone]
-
-    escalation = (voice.get("escalation") or "").strip()
-    if escalation:
-        conduct += ["", "When to hand over or follow up:", escalation]
-
-    if can_message:
-        conduct += [
-            "",
-            "### Sending something in writing",
-            "When they ask for anything in writing — a link, an address, a fee, "
-            "a summary — you MUST call the send_whatsapp_message function. It "
-            "is the only way a message is actually sent.",
-            "- You already have the number they are calling from. Never ask for "
-            "it, and never ask which number to use.",
-            "- Never tell a caller you have sent something unless you called "
-            "the function and it confirmed. Saying 'I have sent it' without "
-            "calling it is a lie to someone who will go and look for it.",
-            "- Call the function first, then tell them it is on its way.",
-        ]
-
-    # The company's own words again, at the end. Identity suffers the same
-    # burial as everything else placed before a large knowledge base: a persona
-    # saying "call it the university, not by name" was ignored in favour of the
-    # name used throughout the documents.
-    conduct += ["", "### Who you are, once more", persona]
-
-    conduct += [
-        "",
-        "### What you cannot do",
-        "- You cannot transfer a call, put anyone through, or place them on "
-        "hold. There is no switchboard behind you. Saying \"please hold, I "
-        "will connect you\" leaves a real person waiting on a line where "
-        "nothing will ever happen.",
-        "- When they ask for a human: say plainly that you cannot put them "
-        "through, take their question and their name, and tell them someone "
-        "will call them back. Then end the call.",
-        "- You cannot book, cancel, or change anything, and you cannot check "
-        "the status of an individual application or account.",
-        "- Promise nothing with a time on it — no \"within an hour\", no "
-        "\"by tomorrow\" — unless the material you were given says so.",
-        "",
-        "### Ending the call",
-        "- When their question is answered and they have nothing else, say a "
-        "warm goodbye and call end_call in the same turn.",
-        "- If the call is going nowhere — somebody testing you, saying the same "
-        "thing over and over, being abusive, or silent after you have twice "
-        "asked whether they are there — close it politely and call end_call.",
-        "- Never use end_call to escape a question you cannot answer. Offer to "
-        "have someone call them back instead.",
-    ]
-
     return AgentPersona(
-        instructions="\n".join(opening + material + conduct),
+        instructions=instructions,
         greeting=(voice["greeting"] or "").strip(),
         voice=(voice["ttsVoice"] or "").strip(),
         language=language,
         tools=tool_catalogue.for_call(can_send_whatsapp=can_message),
     )
-
-
-# Said as behaviour rather than a number, because the model has no dial. The
-# effect is real: the same sentence at the wrong speed is the difference
-# between being understood and being asked to repeat it.
-_PACE_RULES = {
-    "slow": "Speak slowly and leave a clear pause between sentences. Say "
-            "numbers, dates and amounts one part at a time, and offer to "
-            "repeat anything the caller might be writing down.",
-    "natural": "Speak at a normal conversational speed — unhurried, but do "
-               "not drag.",
-    "brisk": "Speak briskly and get to the point. Keep answers to a sentence "
-             "or two unless they ask for more. Still slow down for numbers.",
-}
 
 
 # A language tag is for machines. "Speak ur-PK" is not an instruction anyone,
