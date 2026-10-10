@@ -145,3 +145,129 @@ def test_auto_reply_is_off_until_a_company_turns_it_on():
 
 def test_the_switch_is_visible_to_the_settings_screen():
     assert _tenant(autoReply=True).public()["autoReply"] is True
+
+
+# ---------------------------------------------------------------------------
+# The agent that answers the number answers the message
+# ---------------------------------------------------------------------------
+#
+# This used to read the company's tenant-level persona whatever the number
+# said, so the agent chosen for messages contributed its knowledge base and
+# nothing else — the Numbers page promised "this message is answered by X"
+# and then something else answered.
+
+
+def test_the_agents_own_persona_wins_over_the_companys():
+    text = build_instructions(
+        _tenant(persona="You are the company's general assistant."),
+        "",
+        {"persona": "You are Bilal, the Jazz helpline."},
+    )
+    assert text.startswith("You are Bilal, the Jazz helpline.")
+    assert "general assistant" not in text
+
+
+def test_without_an_agent_the_company_persona_is_still_used():
+    """A company that never built an agent keeps working exactly as before."""
+    text = build_instructions(_tenant(persona="You are the clinic."), "", {})
+    assert text.startswith("You are the clinic.")
+
+
+def test_the_agents_tone_and_rules_reach_the_reply():
+    """A company could write "never promise a refund" on its agent and watch
+    the WhatsApp reply promise a refund, because none of this was read."""
+    text = build_instructions(_tenant(), "", {
+        "persona": "You are Bilal.",
+        "tone": "Dry and brief. Never promise a refund.",
+        "escalation": "Anything legal goes to a person.",
+        "extraRules": "Always greet in Urdu first.",
+    })
+    assert "Never promise a refund." in text
+    assert "Anything legal goes to a person." in text
+    assert "Always greet in Urdu first." in text
+
+
+def test_the_agents_language_wins_over_the_companys():
+    text = build_instructions(_tenant(language="en"), "", {"language": "ur-PK"})
+    assert "ur-PK" in text
+
+
+# ---------------------------------------------------------------------------
+# Written, not spoken
+# ---------------------------------------------------------------------------
+
+
+def test_it_is_told_to_write_figures_as_digits():
+    """The persona is shared with the voice agent, which is told to say
+    figures as words so a phone line does not garble them. In writing that
+    produced "ninety-eight percent" where a reader expects 98%."""
+    text = build_instructions(_tenant(), "")
+    assert "digits" in text
+    assert "98%" in text
+
+
+def test_it_is_told_to_finish_its_sentences():
+    assert "mid-sentence" in build_instructions(_tenant(), "")
+
+
+# ---------------------------------------------------------------------------
+# Running out of room
+# ---------------------------------------------------------------------------
+#
+# Measured on a real reply with the 66k-character university knowledge base:
+# 573 of a 600-token budget went on thinking and 23 on the answer, which
+# arrived cut mid-sentence — "you may be eligible for an estimated" — and was
+# sent to the customer, who replied "Estimated what?".
+
+
+class _Candidate:
+    def __init__(self, reason):
+        self.finish_reason = reason
+
+
+class _Response:
+    def __init__(self, reason):
+        self.candidates = [_Candidate(reason)]
+
+
+def test_being_cut_off_is_noticed():
+    from app.services.agent.reply import _ran_out_of_room
+
+    assert _ran_out_of_room(_Response("MAX_TOKENS")) is True
+    assert _ran_out_of_room(_Response("FinishReason.MAX_TOKENS")) is True
+    assert _ran_out_of_room(_Response("STOP")) is False
+    assert _ran_out_of_room(_Response(None)) is False
+
+
+def test_a_cut_off_reply_is_rolled_back_to_its_last_whole_sentence():
+    from app.services.agent.reply import _last_whole_sentence
+
+    cut = ("Fees are 120,000 per semester. With 98% you may be eligible for "
+           "an estimated")
+    assert _last_whole_sentence(cut) == "Fees are 120,000 per semester."
+
+
+def test_a_question_or_exclamation_also_counts_as_finished():
+    from app.services.agent.reply import _last_whole_sentence
+
+    assert _last_whole_sentence("Which programme? And also the fee str") \
+        == "Which programme?"
+    assert _last_whole_sentence("Congratulations! Now about the fee str") \
+        == "Congratulations!"
+
+
+def test_half_a_thought_is_sent_as_nothing_at_all():
+    """The caller treats an empty reply as "the agent had nothing to say",
+    which is better than a sentence that stops in the middle."""
+    from app.services.agent.reply import _last_whole_sentence
+
+    assert _last_whole_sentence("With ninety-eight percent marks you may be") == ""
+    assert _last_whole_sentence("") == ""
+
+
+def test_the_token_budget_leaves_room_for_an_answer():
+    """Thinking comes out of this. 600 was not enough and the proof was a
+    customer asking "Estimated what?"."""
+    from app.services.agent.reply import MAX_OUTPUT_TOKENS
+
+    assert MAX_OUTPUT_TOKENS >= 1200

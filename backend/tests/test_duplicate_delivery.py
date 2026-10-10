@@ -72,7 +72,7 @@ def whatsapp(client, tenant_factory, auth, monkeypatch, fake_db):
 
     replies: list[str] = []
 
-    async def fake_compose(tenant, body, context, history):
+    async def fake_compose(tenant, body, context, history=None, voice=None):
         replies.append(body)
         return f"answer to {body}"
 

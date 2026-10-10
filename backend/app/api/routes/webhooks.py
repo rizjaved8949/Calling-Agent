@@ -341,8 +341,14 @@ async def _auto_reply(tenant: Tenant, incoming: Message) -> None:
             tenant, channel=Channel.WHATSAPP_MESSAGE, direction=SetupDirection.INBOUND
         )
         context = await routing.context_for(tenant, resolved)
+        # The agent's own persona and rules, not just its documents. Taking
+        # only the knowledge meant the agent chosen for messages contributed
+        # its knowledge base and nothing else — the Numbers page promised
+        # "this message is answered by X" and then something else answered.
+        voice = routing.persona_for(tenant, resolved)
         history = await _recent_exchange(tenant.phone_number_id, incoming.counterparty)
-        answer = await reply.compose(tenant, incoming.body, context, history)
+        answer = await reply.compose(
+            tenant, incoming.body, context, history, voice=voice)
         if not answer:
             log.info("tenant %s: nothing to say to %s",
                      tenant.phone_number_id, mask(incoming.counterparty))
