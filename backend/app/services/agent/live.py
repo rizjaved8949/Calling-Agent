@@ -73,10 +73,13 @@ async def live_settings_now(tenant: Tenant | None = None) -> LiveSettings:
     except Exception:  # noqa: BLE001 — never fail a call over a settings read
         log.exception("could not read the platform engine settings")
         chosen = {"model": settings.gemini_live_model,
-                  "apiKey": settings.gemini_api_key.strip()}
+                  "apiKey": settings.gemini_api_key.strip(),
+                  "engine": settings.voice_engine.strip() or "gemini"}
     model = (tenant.engine_model.strip() if tenant else "") or chosen["model"]
     key = (tenant.engine_api_key.strip() if tenant else "") or chosen["apiKey"]
-    return LiveSettings(model=model, api_key=key)
+    return LiveSettings(
+        model=model, api_key=key, engine=str(chosen.get("engine") or "gemini"),
+    )
 
 
 async def persona_for(tenant: Tenant, call: Call | None = None) -> AgentPersona:

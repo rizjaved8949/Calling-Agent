@@ -665,6 +665,12 @@ type Engine = {
   defaultModel: string; keyHint: string; note: string;
   /** Suggestions, not a limit — the model field takes anything typed. */
   models?: string[];
+  /**
+   * Implemented and key-testable, but no call has been placed on it from
+   * this deployment. Not the same as unsupported, and the difference matters
+   * to whoever is about to move their customers onto it.
+   */
+  unproven?: boolean;
 };
 
 type EngineState = {
@@ -762,10 +768,14 @@ export function AdminEngine() {
       <Section title="Engine" help="Only an engine this build can speak to may be selected.">
         <Select label="Provider" value={engine} onChange={setEngine}>
           {state.engines.map(e => <option key={e.id} value={e.id} disabled={!e.supported}>
-            {e.label}{e.supported ? '' : ' — not available in this build'}
+            {e.label}
+            {!e.supported ? ' — not available in this build'
+              : e.unproven ? ' — untried on a live call' : ''}
           </option>)}
         </Select>
-        {chosen && <div className={'notice small ' + (chosen.supported ? '' : 'warning')}>
+        {chosen && <div className={'notice small '
+          + (!chosen.supported ? 'warning' : chosen.unproven ? 'warning' : '')}>
+          {chosen.unproven && <><strong>Not yet proven on a real call.</strong> </>}
           {chosen.note}
         </div>}
       </Section>

@@ -25,7 +25,8 @@ from enum import Enum
 from typing import Any, Awaitable, Callable
 
 from .audio_rate import FRAME_MS, PHONE_RATE, RateConverter, gemini_to_phone
-from .gemini import AgentPersona, AgentUnavailable, GeminiLiveSession, LiveSettings
+from . import engines
+from .gemini import AgentPersona, AgentUnavailable, LiveSettings
 from .pacer import HUMAN_PREROLL_FRAMES, PREROLL_FRAMES, FramePacer
 from .recorder import RECORD_RATE, TwoWayRecorder
 
@@ -83,7 +84,7 @@ class CallSession:
         self._caller_to_record = RateConverter(3, 2) if record else None
         self._agent_to_line = gemini_to_phone()
 
-        self._agent: GeminiLiveSession | None = None
+        self._agent: engines.Session | None = None
         self._agent_task: asyncio.Task | None = None
         self._pacer_task: asyncio.Task | None = None
         self._operator_out: Callable[[bytes], None] | None = None
@@ -118,7 +119,7 @@ class CallSession:
             self._pacer_task = asyncio.create_task(self._run_pacer())
 
     async def _start_agent(self) -> None:
-        self._agent = GeminiLiveSession(
+        self._agent = engines.build(
             self.live_settings,
             self.persona,
             on_audio=self._on_agent_audio,
@@ -131,7 +132,7 @@ class CallSession:
         with contextlib.suppress(asyncio.TimeoutError):
             await self._agent.wait_until_ready(timeout=20)
 
-    async def _supervise(self, agent: GeminiLiveSession) -> None:
+    async def _supervise(self, agent: engines.Session) -> None:
         """Run the model, and end the call rather than leave a silent line.
 
         A caller holding a line with nobody on it, hearing nothing, is worse

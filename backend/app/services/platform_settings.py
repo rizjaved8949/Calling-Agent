@@ -56,13 +56,21 @@ ENGINES: list[dict[str, Any]] = [
     {
         "id": "openai",
         "label": "OpenAI Realtime",
-        "supported": False,
+        "supported": True,
         "defaultModel": "gpt-realtime",
+        "models": ["gpt-realtime", "gpt-4o-realtime-preview"],
         "keyHint": "An OpenAI key, beginning sk-…",
         "note": (
-            "Not wired up in this build. The key can be stored, but calls will "
-            "keep using Gemini until the engine is implemented."
+            "Speech to speech over the Realtime API. Built and tested against "
+            "the protocol, but no call has been placed on it from this "
+            "deployment — press Test, then make one call and listen before "
+            "moving your customers onto it."
         ),
+        # Said separately from `note` so a screen can mark it without having
+        # to read English. It is not "unsupported": the code is here and the
+        # key test is real. It is untried on a live call, which is a different
+        # and smaller thing, and the difference matters to whoever switches.
+        "unproven": True,
     },
 ]
 
@@ -180,6 +188,9 @@ async def check(*, engine: str, model: str, api_key: str = "") -> dict[str, Any]
     if not key:
         return {"ok": False, "detail": "No API key is set, here or in the environment."}
 
+    if engine == "openai":
+        return await _check_openai(key, name)
+
     try:
         from google import genai
 
@@ -203,4 +214,53 @@ async def check(*, engine: str, model: str, api_key: str = "") -> dict[str, Any]
         "ok": True,
         "detail": f"The key works and {name} is available.",
         "model": getattr(described, "name", name) or name,
+    }
+
+
+async def _check_openai(key: str, model: str) -> dict[str, Any]:
+    """Ask OpenAI whether this key works and this model exists.
+
+    The model list rather than a realtime handshake: opening a realtime socket
+    bills for a session and leaves one running, which is a lot to spend on
+    answering "is this key any good?".
+    """
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=20) as http:
+            response = await http.get(
+                "https://api.openai.com/v1/models",
+                headers={"Authorization": f"Bearer {key}"},
+            )
+    except httpx.HTTPError as exc:
+        log.warning("openai check failed: %s", exc)
+        return {"ok": False, "detail": "OpenAI could not be reached."}
+
+    if response.status_code in (401, 403):
+        return {"ok": False, "detail": "OpenAI rejected this API key."}
+    if response.status_code >= 400:
+        return {
+            "ok": False,
+            "detail": f"OpenAI answered {response.status_code}: "
+                      f"{response.text[:140]}",
+        }
+
+    try:
+        names = {m.get("id") for m in (response.json().get("data") or [])}
+    except Exception:  # noqa: BLE001
+        names = set()
+
+    if names and model not in names:
+        return {
+            "ok": False,
+            "detail": f"The key works, but this account cannot see a model called "
+                      f"{model!r}. Check the name, or that your account has "
+                      "Realtime access.",
+        }
+    return {
+        "ok": True,
+        "detail": f"The key works and {model} is available. No call has been "
+                  "placed on this engine yet — make one and listen before "
+                  "moving customers onto it.",
+        "model": model,
     }

@@ -21,6 +21,11 @@ python-multipart==0.0.20
 # over a websocket by this SDK rather than dialled directly by the carrier.
 google-genai==1.68.0
 
+# The OpenAI Realtime engine talks over a raw websocket rather than through an
+# SDK. It arrives with uvicorn[standard] anyway, but this depends on it
+# directly, and a transitive dependency is not a promise.
+websockets==15.0.1
+
 # Resampling between the model's 24 kHz output and the 16 kHz a line carries.
 numpy==2.5.1
 

@@ -139,8 +139,37 @@ def test_a_blank_key_is_not_read_as_clearing_it(client, fake_db):
     assert after["model"] == "m2"
 
 
-def test_an_engine_this_build_cannot_speak_is_refused(client, fake_db):
-    """Storing it would mean every call failing with nothing to say why."""
+def test_openai_can_now_be_chosen(client, fake_db):
+    """It was refused while there was no engine behind it. There is one now,
+    so storing it means calls actually run on it."""
+    saved = client.put("/api/platform/engine", json={
+        "engine": "openai", "model": "gpt-realtime", "apiKey": "sk-test",
+    }, headers=ADMIN)
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["engine"] == "openai"
+    assert saved.json()["supported"] is True
+
+
+def test_openai_is_marked_as_untried_on_a_real_call(client, fake_db):
+    """The code is here and the key test is real, but no call has been placed
+    on it from this deployment. That difference belongs on the screen."""
+    body = client.get("/api/platform/engine", headers=ADMIN).json()
+    openai = next(e for e in body["engines"] if e["id"] == "openai")
+    assert openai["supported"] is True
+    assert openai.get("unproven") is True
+    assert "no call has been placed" in openai["note"]
+
+
+def test_an_engine_this_build_cannot_speak_is_refused(client, fake_db, monkeypatch):
+    """Storing one would mean every call failing with nothing to say why.
+
+    Both listed engines are implemented now, so the guard is exercised by
+    pretending one is not — the branch still has to work for whichever engine
+    is listed before it is finished next time.
+    """
+    from app.services import platform_settings
+
+    monkeypatch.setattr(platform_settings, "SUPPORTED", {"gemini"})
     refused = client.put("/api/platform/engine", json={
         "engine": "openai", "model": "gpt-realtime", "apiKey": "sk-test",
     }, headers=ADMIN)

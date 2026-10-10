@@ -47,6 +47,8 @@ class LiveSettings:
 
     model: str
     api_key: str
+    #: Which engine carries the conversation. See `engines.py`.
+    engine: str = "gemini"
     # Less eager than the default on purpose: on a phone line the agent's own
     # voice leaks back through the caller's handset, and a sensitive detector
     # reads that as the caller speaking and cuts her off mid-sentence.

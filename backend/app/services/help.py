@@ -71,8 +71,23 @@ and a voice (choose a man's or a woman's).
 Changes are held as a draft and saved when you press Save.
 An agent answers only from its knowledge base. With none, it says it will have
 someone call back rather than inventing an answer.
-An agent cannot transfer a call, put anyone on hold, book or cancel anything,
-or look up an individual account.
+
+What an agent is for is a set of tick boxes, not one choice: answer calls that
+come in, make calls out, reply to WhatsApp messages, or any combination. A
+number only offers agents that can do the job being filled.
+
+Under "The exact instructions" every rule the agent is given is shown in plain
+text and can be rewritten — how it speaks, how it listens, what it must not
+promise, when it hangs up, what it says it is. Leave one alone and the standard
+wording is used. "Anything else it must do" is added at the very end, so it
+wins any disagreement with the rest. There is also an override for writing the
+whole prompt yourself, and a preview that shows the exact text the agent is
+given, which is the only way to tell whether a rule survived.
+
+By default an agent cannot transfer a call, put anyone on hold, book or cancel
+anything, or look up an individual account. Those limits are in the "What it
+must not do" block and can be changed, though nothing stops the agent
+promising something it cannot deliver once they are.
 
 # Knowledge
 A knowledge base is a named set of documents, and an agent reads exactly one.
@@ -136,7 +151,8 @@ is a System User token rather than a temporary one.
 A call connects then ends after a second — usually the number is not connected
 on the Numbers page, so there is no audio endpoint for it.
 The caller hears silence — check the speech engine has a key set, under the
-platform portal.
+platform portal, and press Test there to ask the provider whether the key and
+model actually work. Saving a key proves nothing on its own.
 "None of your numbers is verified and allowed to make outbound calls" — the
 number is inbound-only, or not verified.
 WhatsApp "Call already ongoing" — a previous call never settled. It clears by
