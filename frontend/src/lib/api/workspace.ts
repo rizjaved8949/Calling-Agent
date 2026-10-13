@@ -82,6 +82,10 @@ export type Agent = {
   escalationRules: string;
   ttsVoice: string;
   speakingPace: SpeakingPace;
+  /** The exact words to fall back on when the answer is not in the material. */
+  fallbackLine: string;
+  /** How to say names and acronyms aloud. Calls only — nobody reads a sound. */
+  pronunciations: string;
   /**
    * The company's own wording for each part of the instructions. A block
    * missing or empty means "use the standard wording", which is what every

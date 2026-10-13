@@ -24,13 +24,14 @@ import {setAuthToken} from './lib/api';
 import {auth as firebaseAuth} from './lib/firebase';
 import {createUserWithEmailAndPassword} from 'firebase/auth';
 import {LiveCalls} from './pages-live';
-import {ErrorNote, Loading, Section, Select, TextInput, useConfirm} from './ui';
+import {CopyField, ErrorNote, Loading, Modal, Section, Select, TextInput, useConfirm} from './ui';
 import {PromptBlocks} from './agent-prompt';
 
 /** The fields the agent form edits as a draft, saved together on Save. */
 const FORM_FIELDS = [
   'name', 'greeting', 'roleDescription', 'language', 'ttsVoice', 'toneNotes',
-  'escalationRules', 'speakingPace', 'promptBlocks', 'extraRules', 'promptOverride',
+  'escalationRules', 'speakingPace', 'fallbackLine', 'pronunciations',
+  'promptBlocks', 'extraRules', 'promptOverride',
 ] as const satisfies readonly (keyof Agent)[];
 
 const CHANNEL_LABEL: Record<Channel, string> = {
@@ -39,16 +40,6 @@ const CHANNEL_LABEL: Record<Channel, string> = {
 
 function errorText(cause: unknown, fallback: string): string {
   return cause instanceof Error && cause.message ? cause.message : fallback;
-}
-
-function Modal({title, onClose, children}: {title: string; onClose: () => void; children: React.ReactNode}) {
-  return <div className="modal-backdrop" onClick={onClose}>
-    <div className="modal" onClick={e => e.stopPropagation()}>
-      <div className="row between"><h2>{title}</h2>
-        <button className="button outline small" onClick={onClose}><X size={14}/></button></div>
-      {children}
-    </div>
-  </div>;
 }
 
 // ---------------------------------------------------------------------------
@@ -110,7 +101,14 @@ export function AgentsScreen() {
               <p className="small muted">{agent.greeting || t('No opening line yet')}</p>
             </Link>)}
           </div>}
-    {creating && <Modal title={t('Create an agent')} onClose={() => setCreating(false)}>
+    {creating && <Modal title={t('Create an agent')} onClose={() => setCreating(false)}
+      subtitle="Give it a name and say what it is for. Everything else is on the agent's own screen afterwards."
+      footer={<>
+        <Button variant="secondary" onClick={() => setCreating(false)}>{t('Cancel')}</Button>
+        <Button disabled={!name.trim() || channels.length === 0 || busy} onClick={create}>
+          {busy ? <Loader2 size={15} className="spin"/> : t('Create agent')}
+        </Button>
+      </>}>
       <div className="stack">
         <Field label="Agent name" value={name} onChange={setName}
           placeholder="Support, Sales, Admissions…"/>
@@ -132,12 +130,6 @@ export function AgentsScreen() {
           })}
         </div>
         {error && <div className="notice danger">{error}</div>}
-        <div className="row" style={{justifyContent: 'flex-end'}}>
-          <Button variant="secondary" onClick={() => setCreating(false)}>{t('Cancel')}</Button>
-          <Button disabled={!name.trim() || channels.length === 0 || busy} onClick={create}>
-            {busy ? <Loader2 size={15} className="spin"/> : t('Create agent')}
-          </Button>
-        </div>
       </div>
     </Modal>}
   </div>;
@@ -325,6 +317,16 @@ export function AgentDetailScreen() {
         <TextInput label="When to hand off to a person" rows={3} value={draft.escalationRules}
           disabled={!canManage} onChange={v => set({escalationRules: v})}
           placeholder="If the caller asks for a manager, or sounds upset, offer a callback."/>
+        <TextInput label="What to say when it does not know" rows={2}
+          value={draft.fallbackLine ?? ''} disabled={!canManage}
+          onChange={v => set({fallbackLine: v})}
+          placeholder="Let me check that with the team and call you straight back."
+          help="Your own wording, used whenever the answer is not in the knowledge base. Left empty it makes up a new sentence each time."/>
+        <TextInput label="How to say names and acronyms" rows={3}
+          value={draft.pronunciations ?? ''} disabled={!canManage}
+          onChange={v => set({pronunciations: v})}
+          placeholder={'UCP = say it as yoo-see-pee, CNIC = see-nick'}
+          help="Calls only. An acronym read as a word instead of letters is the difference between being understood and being asked to repeat."/>
       </Section>
 
       <PromptBlocks draft={draft} canManage={canManage} agentId={id ?? ''} onSet={set}/>
@@ -418,15 +420,21 @@ export function KnowledgeBasesScreen() {
     {unfiled > 0 && <div className="notice">
       {unfiled} {t('document(s) are not filed under any knowledge base and are read by every agent with no base of its own.')}
     </div>}
-    {creating && <Modal title={t('Create a knowledge base')} onClose={() => setCreating(false)}>
-      <Field label="Name" value={name} onChange={setName} placeholder="Price list, Support handbook…"/>
-      <Field label="What it's for" value={purpose} onChange={setPurpose} placeholder="Optional"/>
-      {error && <div className="notice danger">{error}</div>}
-      <div className="row" style={{justifyContent: 'flex-end', marginTop: 20}}>
+    {creating && <Modal title={t('Create a knowledge base')} onClose={() => setCreating(false)}
+      subtitle="A named set of documents an agent answers from. Upload the files once it exists."
+      footer={<>
         <Button variant="secondary" onClick={() => setCreating(false)}>{t('Cancel')}</Button>
         <Button disabled={!name.trim() || busy} onClick={create}>
           {busy ? <Loader2 size={15} className="spin"/> : t('Create')}
         </Button>
+      </>}>
+      <div className="stack">
+        <Field label="Name" value={name} onChange={setName}
+          placeholder="Price list, Support handbook…"/>
+        <Field label="What it's for" value={purpose} onChange={setPurpose}
+          placeholder="Fees, timings and admissions questions"
+          help="Shown when choosing between several, which is the moment the difference matters."/>
+        {error && <div className="notice danger">{error}</div>}
       </div>
     </Modal>}
   </div>;
@@ -650,7 +658,15 @@ export function CallSetupsScreen() {
               {canManage && <Button small variant="outline" onClick={() => void remove(s)}><Trash2 size={14}/></Button>}
             </div>
           </div>)}</div>}
-    {creating && <Modal title={t('Create a call setup')} onClose={() => setCreating(false)}>
+    {creating && <Modal title={t('Create a call setup')} onClose={() => setCreating(false)}
+      subtitle="Which agent answers on which channel, in which direction."
+      footer={<>
+        <Button variant="secondary" onClick={() => setCreating(false)}>{t('Cancel')}</Button>
+        <Button disabled={busy} onClick={create}>
+          {busy ? <Loader2 size={15} className="spin"/> : t('Create')}
+        </Button>
+      </>}>
+      <div className="stack">
       <Field label="Name" value={form.name} onChange={v => setForm({...form, name: v})} placeholder="Incoming calls"/>
       <div className="field"><label>{t('Number')}</label>
         <select className="select" value={form.channel} onChange={e => setForm({...form, channel: e.target.value as Channel})}>
@@ -672,9 +688,6 @@ export function CallSetupsScreen() {
           {bases.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
         </select></div>
       {error && <div className="notice danger">{error}</div>}
-      <div className="row" style={{justifyContent: 'flex-end', marginTop: 20}}>
-        <Button variant="secondary" onClick={() => setCreating(false)}>{t('Cancel')}</Button>
-        <Button disabled={busy} onClick={create}>{busy ? <Loader2 size={15} className="spin"/> : t('Create')}</Button>
       </div>
     </Modal>}
     {confirmDialog}
@@ -757,22 +770,26 @@ export function TeamScreen() {
         {isOwner && <Button small variant="outline" onClick={() => revokeInvite(i.token, i.email)}><X size={14}/> {t('Revoke')}</Button>}
       </div>)}
     </div>}
-    {inviting && <Modal title={t('Invite someone')} onClose={() => setInviting(false)}>
-      <Field label="Email" type="email" value={email} onChange={setEmail} placeholder="colleague@yourcompany.com"/>
-      <p className="small muted">{t('They join as staff: they can place and receive calls and messages, but cannot change settings, credentials or the team.')}</p>
-      {error && <div className="notice danger">{error}</div>}
-      <div className="row" style={{justifyContent: 'flex-end', marginTop: 20}}>
+    {inviting && <Modal title={t('Invite someone')} onClose={() => setInviting(false)}
+      subtitle="No email is sent — you get a link to pass on yourself."
+      footer={<>
         <Button variant="secondary" onClick={() => setInviting(false)}>{t('Cancel')}</Button>
         <Button disabled={!email.includes('@') || busy} onClick={invite}>
           {busy ? <Loader2 size={15} className="spin"/> : t('Create invitation')}
         </Button>
+      </>}>
+      <div className="stack">
+        <Field label="Email" type="email" value={email} onChange={setEmail}
+          placeholder="colleague@yourcompany.com"/>
+        <p className="small muted" style={{margin: 0}}>{t('They join as staff: they can place and receive calls and messages, but cannot change settings, credentials or the team.')}</p>
+        {error && <div className="notice danger">{error}</div>}
       </div>
     </Modal>}
-    {linkFor && <Modal title={t('Share this link')} onClose={() => setLinkFor('')}>
-      <p className="small muted">{t('There is no email delivery set up yet, so send this to them yourself — WhatsApp, Slack, however you usually reach them.')}</p>
-      <div className="row" style={{gap: 8}}>
-        <code className="small" style={{flex: 1, overflowWrap: 'anywhere', padding: '10px 12px', background: 'var(--surface-2, #f3f3f3)', borderRadius: 8}}>{linkFor}</code>
-        <Button small onClick={() => { navigator.clipboard?.writeText(linkFor); toast(t('Copied')) }}><Copy size={14}/></Button>
+    {linkFor && <Modal title={t('Share this link')} onClose={() => setLinkFor('')}
+      footer={<Button onClick={() => setLinkFor('')}>{t('Done')}</Button>}>
+      <div className="stack">
+        <p className="small muted" style={{margin: 0}}>{t('There is no email delivery set up yet, so send this to them yourself — WhatsApp, Slack, however you usually reach them.')}</p>
+        <CopyField value={linkFor}/>
       </div>
     </Modal>}
     {confirmDialog}

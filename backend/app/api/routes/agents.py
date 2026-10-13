@@ -173,6 +173,8 @@ async def preview_prompt(tenant: CurrentTenant, agent_id: str) -> dict:
         escalation=agent.escalation_rules,
         extra=agent.extra_rules,
         override=agent.prompt_override,
+        fallback_line=agent.fallback_line,
+        pronunciations=agent.pronunciations,
         # Previewed as if it can, so the writing rules are visible to edit
         # rather than appearing only once a number is connected.
         can_send_whatsapp=True,

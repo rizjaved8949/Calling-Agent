@@ -74,6 +74,7 @@ def build_instructions(
     tone = str(voice.get("tone") or "").strip()
     escalation = str(voice.get("escalation") or "").strip()
     extra = str(voice.get("extraRules") or "").strip()
+    fallback = str(voice.get("fallbackLine") or "").strip()
 
     rules = [
         persona,
@@ -100,6 +101,13 @@ def build_instructions(
     else:
         rules.append("Reply in whatever language the person wrote in.")
 
+    if fallback:
+        rules += [
+            "",
+            "When the answer is not in your material, reply with this, in "
+            "these words:",
+            fallback,
+        ]
     if tone:
         rules += ["", "How this company wants you to sound:", tone]
     if escalation:

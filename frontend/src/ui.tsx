@@ -8,6 +8,7 @@
  * these look like everything else.
  */
 import React, {useCallback, useEffect, useRef, useState} from 'react';
+import {createPortal} from 'react-dom';
 import {AlertTriangle, Check, Copy, Loader2, Pause, Play, X} from 'lucide-react';
 
 // ---------------------------------------------------------------------------
@@ -45,7 +46,14 @@ export function Modal({title, subtitle, onClose, children, footer, width = 560}:
     };
   }, [onClose]);
 
-  return <div className="modal-backdrop" onClick={onClose}>
+  // Rendered into `body` rather than where it was written. A dialog belongs
+  // to the window, and anything `position: fixed` is sized against its nearest
+  // transformed ancestor rather than the viewport — so one `transform`
+  // anywhere above it, even an identity one left behind by a finished
+  // animation, silently shrinks the backdrop to the size of a page section
+  // and cuts the buttons off. That is not a thing a dialog should be able to
+  // catch from its surroundings.
+  return createPortal(<div className="modal-backdrop" onClick={onClose}>
     <div className="modal modal-panel" ref={panel} tabIndex={-1} role="dialog" aria-modal="true"
       aria-label={title} style={{width: `min(100%, ${width}px)`}} onClick={e => e.stopPropagation()}>
       <div className="modal-head">
@@ -58,7 +66,7 @@ export function Modal({title, subtitle, onClose, children, footer, width = 560}:
       <div className="modal-body">{children}</div>
       {footer && <div className="modal-foot">{footer}</div>}
     </div>
-  </div>;
+  </div>, document.body);
 }
 
 // ---------------------------------------------------------------------------

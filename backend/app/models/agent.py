@@ -174,6 +174,16 @@ class Agent(BaseModel):
     tts_voice: str = Field(default="", alias="ttsVoice")
     speaking_pace: SpeakingPace = Field(default=SpeakingPace.NATURAL, alias="speakingPace")
 
+    # ---- Two things that are awkward to say in prose ---------------------
+    # The exact words to fall back on. Companies care about this one: "I will
+    # check and have someone call you back" is a brand sentence, and left to
+    # itself the model invents a new wording every time.
+    fallback_line: str = Field(default="", alias="fallbackLine")
+    # How to say names and acronyms aloud. Only means anything on a call —
+    # "UCP" read as a word rather than three letters is the difference between
+    # being understood and being asked to repeat.
+    pronunciations: str = ""
+
     # ---- The exact instructions -----------------------------------------
     # Each one overrides a block of the standard prompt; empty means "use the
     # standard wording", which is what every agent does until somebody edits
@@ -248,6 +258,8 @@ class AgentCreate(BaseModel):
     escalation_rules: str = Field(default="", alias="escalationRules", max_length=2000)
     tts_voice: str = Field(default="", alias="ttsVoice")
     speaking_pace: SpeakingPace = Field(default=SpeakingPace.NATURAL, alias="speakingPace")
+    fallback_line: str = Field(default="", alias="fallbackLine", max_length=500)
+    pronunciations: str = Field(default="", max_length=2000)
     prompt_blocks: dict[str, str] = Field(default_factory=dict, alias="promptBlocks")
     extra_rules: str = Field(default="", alias="extraRules", max_length=8000)
     prompt_override: str = Field(default="", alias="promptOverride", max_length=20000)
@@ -270,6 +282,8 @@ class AgentUpdate(BaseModel):
     escalation_rules: str | None = Field(default=None, alias="escalationRules", max_length=2000)
     tts_voice: str | None = Field(default=None, alias="ttsVoice")
     speaking_pace: SpeakingPace | None = Field(default=None, alias="speakingPace")
+    fallback_line: str | None = Field(default=None, alias="fallbackLine", max_length=500)
+    pronunciations: str | None = Field(default=None, max_length=2000)
     prompt_blocks: dict[str, str] | None = Field(default=None, alias="promptBlocks")
     extra_rules: str | None = Field(default=None, alias="extraRules", max_length=8000)
     prompt_override: str | None = Field(

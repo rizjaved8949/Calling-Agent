@@ -77,8 +77,18 @@
 .nav-link svg, .icon-btn svg { transition: color .16s ease, transform .16s ease; }
 .nav-link:hover svg { transform: translateX(1px); }
 
-/* Content arriving should settle, not snap. */
-.app .content > * { animation: rise .26s ease both; }
+/* Content arriving should settle, not snap.
+
+   `backwards`, never `both`. `both` keeps the last keyframe applied after the
+   animation ends, and "transform: none" in a keyframe computes as an identity
+   matrix rather than as no transform at all — which still makes the element a
+   containing block for every `position: fixed` descendant. Every page wraps
+   itself in a `.stack` directly under `.content`, so every dialog in the app
+   was being sized against that stack instead of the window: measured at
+   1128x340 where the window was 1440x900, with the buttons cut off below.
+   `backwards` applies the opening frame before it starts, which is all this
+   needed, and leaves nothing behind. */
+.app .content > * { animation: rise .26s ease backwards; }
 @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
 @media (prefers-reduced-motion: reduce) {

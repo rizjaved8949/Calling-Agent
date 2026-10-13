@@ -207,3 +207,67 @@ def test_a_live_call_uses_the_companys_wording(fake_db, tenant_factory, auth, cl
     assert "Refer to the doctor as Dr Sahib." in persona.instructions
     # Replaced, not appended beside ours.
     assert "call end_call in the same turn" not in persona.instructions
+
+
+# ---------------------------------------------------------------------------
+# Two things that are awkward to say in prose
+# ---------------------------------------------------------------------------
+
+
+def test_the_fallback_line_is_used_in_the_companys_own_words():
+    """"I will check and have someone call you back" is a brand sentence.
+    Left to itself the model invents a new wording every time."""
+    text = _built(fallback_line="I'll check with the team and call you back.")
+    assert "I'll check with the team and call you back." in text
+
+
+def test_a_pronunciation_guide_reaches_a_call():
+    """"UCP" read as a word rather than three letters is the difference
+    between being understood and being asked to repeat."""
+    text = _built(pronunciations="UCP = say it as yoo-see-pee")
+    assert "yoo-see-pee" in text
+
+
+def test_both_come_after_the_material():
+    text = _built(context="x" * 3000, fallback_line="Call you back.",
+                  pronunciations="UCP = yoo-see-pee")
+    material = text.index("## The material you answer from")
+    assert text.index("Call you back.") > material
+    assert text.index("yoo-see-pee") > material
+
+
+def test_neither_appears_when_left_empty():
+    text = _built(fallback_line="   ", pronunciations="")
+    assert "say this, in these words" not in text
+    assert "How to say these aloud" not in text
+
+
+def test_a_written_reply_takes_the_fallback_but_not_the_pronunciation(fake_db):
+    """How to *say* something has no business in something that is read."""
+    from app.models.tenant import Tenant
+    from app.services.agent.reply import build_instructions
+
+    text = build_instructions(
+        Tenant(phoneNumberId="1"), "",
+        {"persona": "P", "fallbackLine": "I'll check and come back to you.",
+         "pronunciations": "UCP = yoo-see-pee"},
+    )
+    assert "I'll check and come back to you." in text
+    assert "yoo-see-pee" not in text
+
+
+def test_the_fields_survive_a_round_trip(client, tenant_factory, auth):
+    _, key = tenant_factory("111", "Acme")
+    agent_id = client.post("/api/agents", headers=auth(key),
+                           json={"name": "A"}).json()["id"]
+    saved = client.patch(f"/api/agents/{agent_id}", headers=auth(key), json={
+        "fallbackLine": "Let me check and call you back.",
+        "pronunciations": "UCP = yoo-see-pee",
+    })
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["fallbackLine"] == "Let me check and call you back."
+    assert saved.json()["pronunciations"] == "UCP = yoo-see-pee"
+
+    shown = client.get(f"/api/agents/{agent_id}/prompt", headers=auth(key)).json()
+    assert "Let me check and call you back." in shown["instructions"]
+    assert "yoo-see-pee" in shown["instructions"]

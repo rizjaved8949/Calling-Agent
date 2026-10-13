@@ -165,6 +165,8 @@ def persona_for(tenant: Tenant, resolved: Resolved) -> dict[str, str]:
             "promptBlocks": {},
             "extraRules": "",
             "promptOverride": "",
+            "fallbackLine": "",
+            "pronunciations": "",
         }
     return {
         "greeting": agent.greeting or tenant.agent_greeting,
@@ -182,4 +184,6 @@ def persona_for(tenant: Tenant, resolved: Resolved) -> dict[str, str]:
         "promptBlocks": agent.prompt_blocks,
         "extraRules": agent.extra_rules,
         "promptOverride": agent.prompt_override,
+        "fallbackLine": agent.fallback_line,
+        "pronunciations": agent.pronunciations,
     }

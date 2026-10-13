@@ -224,6 +224,8 @@ def build(
     escalation: str = "",
     extra: str = "",
     override: str = "",
+    fallback_line: str = "",
+    pronunciations: str = "",
     can_send_whatsapp: bool = False,
 ) -> str:
     """The whole instruction text for one call.
@@ -271,6 +273,20 @@ def build(
     if pace in PACE_RULES:
         out.append("- " + PACE_RULES[pace])
 
+    if pronunciations.strip():
+        out += [
+            "",
+            "How to say these aloud. Read them this way however they are "
+            "spelled in the material:",
+            pronunciations.strip(),
+        ]
+    if fallback_line.strip():
+        out += [
+            "",
+            "When the answer is not in your material, say this, in these "
+            "words, and then offer to take a message:",
+            fallback_line.strip(),
+        ]
     if tone.strip():
         out += ["", "How this company wants you to sound:", tone.strip()]
     if escalation.strip():

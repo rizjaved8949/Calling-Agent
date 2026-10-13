@@ -150,6 +150,8 @@ async def persona_for(tenant: Tenant, call: Call | None = None) -> AgentPersona:
         escalation=voice.get("escalation") or "",
         extra=voice.get("extraRules") or "",
         override=voice.get("promptOverride") or "",
+        fallback_line=voice.get("fallbackLine") or "",
+        pronunciations=voice.get("pronunciations") or "",
         can_send_whatsapp=can_message,
     )
 
