@@ -271,3 +271,130 @@ def test_the_token_budget_leaves_room_for_an_answer():
     from app.services.agent.reply import MAX_OUTPUT_TOKENS
 
     assert MAX_OUTPUT_TOKENS >= 1200
+
+
+# ---------------------------------------------------------------------------
+# Shortening a long reply without butchering it
+# ---------------------------------------------------------------------------
+#
+# The old trim looked only for ". " — a full stop followed by a space. An
+# answer to a multi-part question separates its parts with blank lines, so its
+# periods are followed by newlines and that search finds almost nothing:
+# measured on a real four-part Jazz answer, the last ". " within 900
+# characters was at position 141. So the reply was either cut back to a
+# seventh of itself or chopped at exactly 900 characters in the middle of a
+# word — "I will check and have some", sent to a customer.
+
+
+def _trim(text, limit=None):
+    from app.services.agent.reply import MAX_REPLY_CHARS, _trim_to
+
+    return _trim_to(text, limit or MAX_REPLY_CHARS)
+
+
+def test_a_short_reply_is_left_alone():
+    assert _trim("All done.") == "All done."
+
+
+def test_a_long_reply_is_cut_at_a_finished_sentence():
+    text = "This is a sentence. " * 200
+    out = _trim(text)
+    assert out.endswith("sentence.")
+    assert len(out) <= 1200
+
+
+def test_a_multipart_answer_is_not_cut_back_to_its_first_line():
+    """Its periods are followed by newlines, not spaces. The old search found
+    one at position 141 and threw away the rest."""
+    text = "Short intro. " + ("Bundle line with no period\n\n" * 60)
+    out = _trim(text)
+    assert len(out) > 1000, f"kept only {len(out)} characters"
+
+
+def test_a_reply_is_never_cut_in_the_middle_of_a_word():
+    out = _trim("supercalifragilistic " * 200)
+    assert out.endswith("…")
+    assert out[:-1].endswith("supercalifragilistic")
+
+
+def test_an_ellipsis_marks_a_reply_that_was_cut_short():
+    """Cut at a word boundary it would otherwise read as a finished thought."""
+    assert _trim("word " * 400).endswith("…")
+
+
+def test_an_urdu_full_stop_counts_as_the_end_of_a_sentence():
+    """These replies answer in the language they were asked in, and Urdu does
+    not use a full stop."""
+    text = "Balance check karne ke liye *111* dial karein۔ " * 40
+    out = _trim(text)
+    assert out.endswith("۔")
+
+
+def test_a_question_or_exclamation_ends_a_sentence_too():
+    text = "Which programme did you mean? " * 100
+    assert _trim(text).endswith("?")
+
+
+def test_the_trim_never_exceeds_the_limit():
+    for text in ("x" * 5000, "word " * 500, "Sentence. " * 300):
+        assert len(_trim(text)) <= 1201
+
+
+def test_a_decimal_point_is_not_mistaken_for_a_sentence_end():
+    """"91.3 out of 100" must not be cut to "91." — the period has no space
+    after it, which is exactly what the lookahead is for."""
+    from app.services.agent.reply import _whole_sentences
+
+    assert _whole_sentences("The score is 91.3 out of 100") == ""
+    assert _whole_sentences("The score is 91.3 out of 100. Next") \
+        == "The score is 91.3 out of 100."
+
+
+def test_the_cap_leaves_room_for_a_multipart_answer():
+    """A real four-part question got a complete, useful 818-character answer.
+    A cap that butchers that is worse than one that lets it breathe."""
+    from app.services.agent.reply import MAX_REPLY_CHARS
+
+    assert MAX_REPLY_CHARS >= 1000
+
+
+# ---------------------------------------------------------------------------
+# The persona, said again after the material
+# ---------------------------------------------------------------------------
+#
+# The same burial the voice prompt suffers. A persona placed before tens of
+# thousands of characters loses to them: the university agent is told to say
+# "the university" rather than name it, while its own material names it 177
+# times, and the name reached the customer in 1 reply in 21 with the rule only
+# at the top. None in 21 with it repeated after.
+
+
+def test_the_persona_is_repeated_after_the_material():
+    text = build_instructions(
+        _tenant(persona="You are the clinic. Never name it."),
+        "MATERIAL: the clinic is called Acme Health. " * 50,
+    )
+    assert text.count("You are the clinic. Never name it.") == 2
+    assert text.rfind("You are the clinic") > text.find("MATERIAL")
+
+
+def test_the_repeat_says_which_wins():
+    """The material describes the business and will word things its own way.
+    Without this the agent has two sources and no order between them."""
+    text = build_instructions(_tenant(persona="Say 'the clinic'."), "material " * 100)
+    assert "The material describes the business; this describes you." in text
+
+
+def test_an_agents_persona_is_the_one_repeated():
+    text = build_instructions(
+        _tenant(persona="the company default"), "material " * 100,
+        {"persona": "You are Bilal."},
+    )
+    assert text.count("You are Bilal.") == 2
+    assert "the company default" not in text
+
+
+def test_nothing_is_repeated_when_there_is_no_material():
+    """There is nothing to be buried by, so saying it twice is just noise."""
+    text = build_instructions(_tenant(persona="You are the clinic."), "")
+    assert text.count("You are the clinic.") == 1

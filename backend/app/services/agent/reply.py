@@ -33,6 +33,7 @@ complete sentence rather than sent half-written.
 from __future__ import annotations
 
 import logging
+import re
 
 from ...config import settings
 from ...models.tenant import Tenant
@@ -42,7 +43,7 @@ log = logging.getLogger(__name__)
 # Enough for a useful answer, short enough to read on a phone. Meta's own cap
 # is 4096, but an agent that writes four thousand characters is not answering,
 # it is reciting.
-MAX_REPLY_CHARS = 900
+MAX_REPLY_CHARS = 1200
 
 # Thinking tokens come out of this budget. With it at 600 and thinking on,
 # 573 went on reasoning and 23 on the answer, which arrived cut mid-sentence.
@@ -115,6 +116,18 @@ def build_instructions(
             "honour.",
             "",
             knowledge,
+            # Said again, after the material, for the same reason the voice
+            # prompt repeats it: a persona placed before tens of thousands of
+            # characters is buried by them. Measured on the university agent,
+            # whose persona says to call it "the university" while its own
+            # material names it 177 times — the name leaked into one reply in
+            # five with the rule only at the top.
+            "",
+            "### Who you are, once more",
+            persona,
+            "Follow this even where the material above words things "
+            "differently. The material describes the business; this describes "
+            "you.",
         ]
     else:
         rules += [
@@ -217,21 +230,49 @@ def _ran_out_of_room(response) -> bool:
     return False
 
 
+#: A sentence ends on one of these followed by a space or the end of the text.
+#: `۔` is the Urdu full stop, which these replies use whenever the caller does.
+_SENTENCE_END = re.compile(r"[.!?۔](?=\s|$)")
+
+
+def _whole_sentences(text: str, limit: int | None = None) -> str:
+    """The longest prefix of `text` that ends on a finished sentence."""
+    window = text if limit is None else text[:limit]
+    ends = [m.end() for m in _SENTENCE_END.finditer(window)]
+    return window[: ends[-1]].strip() if ends else ""
+
+
 def _last_whole_sentence(text: str) -> str:
-    """Everything up to the last sentence that actually finished."""
-    cut = max(text.rfind(". "), text.rfind("? "), text.rfind("! "),
-              text.rfind("."), text.rfind("?"), text.rfind("!"))
-    if cut <= 0:
-        # Nothing finished. Better to say nothing than half a thought: the
-        # caller treats "" as "the agent had nothing to say".
-        return ""
-    return text[: cut + 1].strip()
+    """Everything up to the last sentence that actually finished.
+
+    Empty when nothing finished. Better to say nothing than half a thought:
+    the caller treats "" as "the agent had nothing to say".
+    """
+    return _whole_sentences(text)
 
 
 def _trim_to(text: str, limit: int) -> str:
-    """Cut at a sentence rather than mid-word."""
-    cut = text.rfind(". ", 0, limit)
-    return text[: cut + 1] if cut > limit // 2 else text[:limit]
+    """Shorten to `limit`, never mid-word.
+
+    The old version looked only for ". " — a full stop followed by a space.
+    An answer to a multi-part question separates its parts with blank lines,
+    so a period is followed by a newline and that search finds nothing useful:
+    measured on a real four-part Jazz answer, the last ". " in 900 characters
+    was at position 141, so the reply was either cut back to a seventh of
+    itself or chopped at exactly 900 characters in the middle of a word. That
+    is the "I will check and have some" a customer was sent.
+
+    So: the last finished sentence if that keeps most of the answer, otherwise
+    the last whole word with an ellipsis, which at least reads as cut short
+    rather than as a thought that stopped.
+    """
+    if len(text) <= limit:
+        return text
+    whole = _whole_sentences(text, limit)
+    if len(whole) >= limit // 2:
+        return whole
+    spare = text.rfind(" ", 0, limit - 1)
+    return (text[:spare].rstrip(" ,;:") if spare > 0 else text[: limit - 1]) + "…"
 
 
 _UNKNOWN_MARK = "NOT-IN-MATERIAL"

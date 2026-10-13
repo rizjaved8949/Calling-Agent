@@ -193,15 +193,47 @@ async def check(*, engine: str, model: str, api_key: str = "") -> dict[str, Any]
 
     try:
         from google import genai
+        from google.genai import types
 
         client = genai.Client(api_key=key)
-        # The cheapest question that still proves the key is accepted and the
-        # model exists: ask the provider to describe the model itself.
-        described = await client.aio.models.get(model=name)
+        # Deliberately a real generation, not a model lookup. Describing a
+        # model costs nothing and therefore proves nothing: a key whose
+        # account has run out of credit describes models perfectly happily and
+        # then fails on the first word of the first call. That is exactly how
+        # a depleted project passed this check and went to production, where
+        # callers got silence. One token is cheap; being wrong about this is
+        # not.
+        async def one_token(model: str):
+            return await client.aio.models.generate_content(
+                model=model,
+                contents=[types.Content(role="user", parts=[types.Part(text="hi")])],
+                config=types.GenerateContentConfig(
+                    max_output_tokens=8,
+                    thinking_config=types.ThinkingConfig(thinking_budget=0),
+                ),
+            )
+
+        if _is_streaming_only(name):
+            # A live model answers only over a bidirectional socket, and
+            # opening one bills for a session and leaves it running — far too
+            # much to spend on "is this key any good?". So: confirm the model
+            # exists, then prove the account can actually pay for a token by
+            # spending one on the text model, which shares the same billing.
+            await client.aio.models.get(model=name)
+            answer = await one_token(settings.gemini_text_model)
+        else:
+            answer = await one_token(name)
     except Exception as exc:  # noqa: BLE001 — the provider's refusal is the answer
         detail = str(exc)
         lowered = detail.lower()
-        if "api key" in lowered or "api_key" in lowered or "unauthenticated" in lowered:
+        if any(w in lowered for w in ("depleted", "402", "billing", "insufficient")):
+            said = ("This key is valid but its Google account has no credit "
+                    "left, so every call would connect to silence. Top up the "
+                    "project at ai.studio/projects.")
+        elif any(w in lowered for w in ("quota", "resource_exhausted", "429")):
+            said = "This key is over its quota right now. Try again shortly."
+        elif any(w in lowered for w in ("api key", "api_key", "unauthenticated",
+                                        "permission_denied", "401", "403")):
             said = "The provider rejected this API key."
         elif "not found" in lowered or "404" in lowered:
             said = f"The provider does not know a model called {name!r}."
@@ -210,11 +242,23 @@ async def check(*, engine: str, model: str, api_key: str = "") -> dict[str, Any]
         log.warning("engine check failed (%s): %s", type(exc).__name__, detail[:200])
         return {"ok": False, "detail": said}
 
+    spoke = (getattr(answer, "text", "") or "").strip()
     return {
         "ok": True,
-        "detail": f"The key works and {name} is available.",
-        "model": getattr(described, "name", name) or name,
+        "detail": f"The key works, {name} answered, and the account has credit.",
+        "model": name,
+        "said": spoke[:40],
     }
+
+
+def _is_streaming_only(model: str) -> bool:
+    """Whether this model answers only over a live bidirectional socket.
+
+    `generate_content` on one of these fails with a 400 that says nothing
+    about the key, which would report a perfectly good key as broken.
+    """
+    lowered = (model or "").lower()
+    return "live" in lowered or "realtime" in lowered
 
 
 async def _check_openai(key: str, model: str) -> dict[str, Any]:

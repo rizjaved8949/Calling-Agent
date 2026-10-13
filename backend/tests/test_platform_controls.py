@@ -257,3 +257,86 @@ def test_a_companys_engine_key_is_sealed_in_the_row(client, tenant_factory, fake
                  headers=ADMIN)
     stored = fake_db._table("voice_tenants")["994"]["data"]
     assert stored["engineApiKey"] != "AIza-sealed-8888", "the key was stored in the clear"
+
+
+# ---------------------------------------------------------------------------
+# Testing a key means testing that it can actually answer
+# ---------------------------------------------------------------------------
+#
+# The first version of this asked the provider to describe the model, which
+# costs nothing and therefore proves nothing. A key whose Google account has
+# run out of credit describes models perfectly happily and then fails on the
+# first word of the first call — which is how a depleted project passed the
+# check, went to production, and left callers listening to silence.
+
+
+def test_a_streaming_model_is_recognised():
+    """`generate_content` on a live model fails with a 400 about the model,
+    not the key, so a perfectly good key would be reported as broken."""
+    from app.services.platform_settings import _is_streaming_only
+
+    assert _is_streaming_only("gemini-3.1-flash-live-preview") is True
+    assert _is_streaming_only("gpt-realtime") is True
+    assert _is_streaming_only("gemini-3.5-flash") is False
+    assert _is_streaming_only("") is False
+
+
+@pytest.mark.parametrize("message, expected", [
+    ("402 RESOURCE_EXHAUSTED prepayment credits are depleted", "no credit left"),
+    ("Please go to billing to manage your project", "no credit left"),
+    ("429 RESOURCE_EXHAUSTED quota exceeded", "over its quota"),
+    ("400 INVALID_ARGUMENT API key not valid", "rejected this API key"),
+    ("401 UNAUTHENTICATED", "rejected this API key"),
+    ("404 NOT_FOUND Model is not found", "does not know a model"),
+])
+def test_each_refusal_is_explained_in_its_own_words(message, expected, monkeypatch):
+    """"The request failed" sends somebody to check a key that was never
+    wrong. Running out of credit and mistyping a key need different answers."""
+    import asyncio
+
+    from app.services import platform_settings
+
+    class Boom:
+        def __init__(self, *a, **k):
+            pass
+
+        @property
+        def aio(self):
+            return self
+
+        @property
+        def models(self):
+            return self
+
+        async def get(self, **kw):
+            raise RuntimeError(message)
+
+        async def generate_content(self, **kw):
+            raise RuntimeError(message)
+
+    import google.genai as genai
+    monkeypatch.setattr(genai, "Client", Boom)
+
+    async def fixed_current():
+        return {"engine": "gemini", "model": "gemini-3.5-flash",
+                "apiKey": "k", "source": "test"}
+
+    monkeypatch.setattr(platform_settings, "current", fixed_current)
+    got = asyncio.run(platform_settings.check(
+        engine="gemini", model="gemini-3.5-flash", api_key="k"))
+    assert got["ok"] is False
+    assert expected in got["detail"], got["detail"]
+
+
+def test_a_key_with_nothing_set_anywhere_says_so(monkeypatch):
+    import asyncio
+
+    from app.services import platform_settings
+
+    async def nothing():
+        return {"engine": "gemini", "model": "m", "apiKey": "", "source": "none"}
+
+    monkeypatch.setattr(platform_settings, "current", nothing)
+    got = asyncio.run(platform_settings.check(engine="gemini", model="m", api_key=""))
+    assert got["ok"] is False
+    assert "No API key" in got["detail"]
