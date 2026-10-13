@@ -145,6 +145,10 @@ class CallSession:
         except AgentUnavailable as exc:
             if self.handler is Handler.AGENT and not self._closed:
                 log.error("call %s: %s", self.call_id, exc)
+                # Recorded so the operator sees it on the platform screen
+                # rather than hearing about it from a customer.
+                from .. import platform_settings
+                platform_settings.note_failure(str(exc))
                 await self.end(str(exc))
 
     async def _run_pacer(self) -> None:

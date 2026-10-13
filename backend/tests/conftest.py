@@ -148,6 +148,7 @@ def fake_db(monkeypatch) -> FakeSupabase:
         "app.repositories.numbers",
         "app.repositories.support",
         "app.security.superadmin",
+        "app.services.platform_settings",
         "app.services.storage",
     ):
         module = importlib.import_module(name)

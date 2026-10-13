@@ -77,6 +77,33 @@ ENGINES: list[dict[str, Any]] = [
 SUPPORTED = {e["id"] for e in ENGINES if e["supported"]}
 
 
+# The last time a real call or reply could not reach the engine, and why.
+#
+# Kept because the operator found out the engine was dead from a customer,
+# not from this product: a key with no credit answers every settings screen
+# cheerfully and fails only on the call itself. Held in memory rather than
+# written to the database — one process serves these, a restart clearing it is
+# harmless, and the next failure records it again within seconds.
+_last_failure: dict[str, Any] | None = None
+
+
+def note_failure(reason: str) -> None:
+    """A call or a reply could not reach the engine. Never raises."""
+    global _last_failure
+    _last_failure = {"at": time.time(), "reason": (reason or "unknown")[:200]}
+    log.error("speech engine unavailable: %s", reason)
+
+
+def note_success() -> None:
+    """The engine answered, so whatever was wrong is over."""
+    global _last_failure
+    _last_failure = None
+
+
+def last_failure() -> dict[str, Any] | None:
+    return dict(_last_failure) if _last_failure else None
+
+
 def _now() -> float:
     return time.monotonic()
 
@@ -135,6 +162,9 @@ async def public() -> dict[str, Any]:
         "source": live["source"],
         "engines": ENGINES,
         "supported": live["engine"] in SUPPORTED,
+        # What customers are actually hitting, which a key that merely exists
+        # tells nobody.
+        "lastFailure": last_failure(),
     }
 
 
@@ -240,9 +270,11 @@ async def check(*, engine: str, model: str, api_key: str = "") -> dict[str, Any]
         else:
             said = detail[:200]
         log.warning("engine check failed (%s): %s", type(exc).__name__, detail[:200])
+        note_failure(said)
         return {"ok": False, "detail": said}
 
     spoke = (getattr(answer, "text", "") or "").strip()
+    note_success()
     return {
         "ok": True,
         "detail": f"The key works, {name} answered, and the account has credit.",

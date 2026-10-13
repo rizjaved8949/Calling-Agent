@@ -340,3 +340,94 @@ def test_a_key_with_nothing_set_anywhere_says_so(monkeypatch):
     got = asyncio.run(platform_settings.check(engine="gemini", model="m", api_key=""))
     assert got["ok"] is False
     assert "No API key" in got["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Telling the operator the engine is down
+# ---------------------------------------------------------------------------
+#
+# A key that exists, is accepted and names a real model still fails every call
+# if the account behind it has no credit. The first anybody knew about that
+# was a customer complaining, because every settings screen answered happily.
+
+
+@pytest.fixture(autouse=True)
+def _forget_failures():
+    from app.services import platform_settings
+
+    platform_settings.note_success()
+    yield
+    platform_settings.note_success()
+
+
+def test_a_failure_is_recorded_and_readable():
+    from app.services import platform_settings
+
+    assert platform_settings.last_failure() is None
+    platform_settings.note_failure("the model is out of quota")
+    recorded = platform_settings.last_failure()
+    assert recorded["reason"] == "the model is out of quota"
+    assert recorded["at"] > 0
+
+
+def test_a_long_reason_is_cut_rather_than_stored_whole():
+    from app.services import platform_settings
+
+    platform_settings.note_failure("x" * 900)
+    assert len(platform_settings.last_failure()["reason"]) <= 200
+
+
+def test_success_clears_it():
+    from app.services import platform_settings
+
+    platform_settings.note_failure("gone wrong")
+    platform_settings.note_success()
+    assert platform_settings.last_failure() is None
+
+
+def test_the_platform_screen_is_told(client, fake_db):
+    """So it appears where the operator already looks, not somewhere they
+    would have to think to go."""
+    from app.services import platform_settings
+
+    platform_settings.note_failure("the account has no credit")
+    body = client.get("/api/platform/engine", headers=ADMIN).json()
+    assert body["lastFailure"]["reason"] == "the account has no credit"
+
+    platform_settings.note_success()
+    assert client.get("/api/platform/engine", headers=ADMIN).json()["lastFailure"] is None
+
+
+def test_a_failing_key_test_raises_the_alarm_itself(client, fake_db, monkeypatch):
+    from app.services import platform_settings
+
+    class Boom:
+        def __init__(self, *a, **k):
+            pass
+
+        @property
+        def aio(self):
+            return self
+
+        @property
+        def models(self):
+            return self
+
+        async def generate_content(self, **kw):
+            raise RuntimeError("402 prepayment credits are depleted")
+
+        async def get(self, **kw):
+            raise RuntimeError("402 prepayment credits are depleted")
+
+    import google.genai as genai
+    monkeypatch.setattr(genai, "Client", Boom)
+
+    async def fixed():
+        return {"engine": "gemini", "model": "gemini-3.5-flash",
+                "apiKey": "k", "source": "test"}
+
+    monkeypatch.setattr(platform_settings, "current", fixed)
+    refused = client.post("/api/platform/engine/test", headers=ADMIN,
+                          json={"engine": "gemini", "model": "gemini-3.5-flash"})
+    assert refused.json()["ok"] is False
+    assert "no credit left" in platform_settings.last_failure()["reason"]

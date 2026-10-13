@@ -91,6 +91,21 @@ function EngineBanner() {
   if (!state) return null;
 
   const wrong = !state.keySet || !state.supported;
+  const failure = state.lastFailure;
+  if (failure) return <><EngineFailure failure={failure}/>
+    <div className="card row between wrap" style={{gap: 14}}>
+      <div className="row" style={{gap: 12}}>
+        <Cpu size={20} color="var(--muted)"/>
+        <div>
+          <strong>Speech engine — {state.engine}{state.model ? ` · ${state.model}` : ''}</strong>
+          <div className="small muted">
+            API key {state.keyHint} in place, from {state.source}.
+          </div>
+        </div>
+      </div>
+      <Button variant="outline" to="/platform/engine">Change the key or model</Button>
+    </div></>;
+
   return <div className={'card row between wrap' + (wrong ? ' notice danger' : '')} style={{gap: 14}}>
     <div className="row" style={{gap: 12}}>
       <Cpu size={20} color={wrong ? 'var(--destructive)' : 'var(--accent)'}/>
@@ -106,6 +121,35 @@ function EngineBanner() {
     <Button variant={wrong ? '' : 'outline'} to="/platform/engine">
       {state.keySet ? 'Change the key or model' : 'Set the API key'}
     </Button>
+  </div>;
+}
+
+/**
+ * What customers are actually hitting.
+ *
+ * A key that exists, is accepted and names a real model still fails every
+ * call if the account behind it has no credit — and the first anybody knew
+ * about that was a customer complaining. This says it on the screen the
+ * operator lands on, and clears itself the moment a call or a Test succeeds.
+ */
+function EngineFailure({failure}: {failure: {at: number; reason: string}}) {
+  const when = new Date(failure.at * 1000);
+  const minutes = Math.round((Date.now() - failure.at * 1000) / 60000);
+  return <div className="notice danger">
+    <div className="row between wrap" style={{gap: 12}}>
+      <span className="row" style={{gap: 10, alignItems: 'flex-start'}}>
+        <CircleAlert size={17}/>
+        <span>
+          <strong>Calls are failing right now.</strong> {failure.reason}
+          <div className="small muted" style={{marginTop: 3}}>
+            Last seen {minutes < 1 ? 'just now' : `${minutes} min ago`}
+            {' · '}{when.toLocaleTimeString()}. This clears itself as soon as a
+            call or a key test succeeds.
+          </div>
+        </span>
+      </span>
+      <Button to="/platform/engine"><Plug size={15}/> Test the key</Button>
+    </div>
   </div>;
 }
 
@@ -676,6 +720,12 @@ type Engine = {
 type EngineState = {
   engine: string; model: string; keySet: boolean; keyHint: string;
   source: string; engines: Engine[]; supported: boolean;
+  /**
+   * The last time a real call or reply could not reach the engine. A key that
+   * merely exists tells nobody what customers are hitting — a key with no
+   * credit answers every settings screen cheerfully and fails on the call.
+   */
+  lastFailure?: {at: number; reason: string} | null;
 };
 
 /**

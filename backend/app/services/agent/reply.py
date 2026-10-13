@@ -214,7 +214,15 @@ async def compose(
         except Exception as second:  # noqa: BLE001 — a failed reply must not break the webhook
             log.warning("tenant %s: could not compose a reply (%s: %s)",
                         tenant.phone_number_id, type(second).__name__, str(second)[:160])
-            return ""
+            from .. import platform_settings
+            platform_settings.note_failure(
+                f"a WhatsApp reply failed: {type(second).__name__}")
+            # The engine is unreachable, so there is nothing to compose with.
+            # Somebody who messaged a business and got silence assumes it is
+            # broken, so send the sentence the company wrote for exactly this
+            # — and only that sentence. Inventing one on their behalf while
+            # the model is down is how an outage becomes a wrong promise.
+            return fallback_when_unavailable(voice)
 
     text = (getattr(response, "text", "") or "").strip()
     if _ran_out_of_room(response):
@@ -224,6 +232,16 @@ async def compose(
     if len(text) > MAX_REPLY_CHARS:
         text = _trim_to(text, MAX_REPLY_CHARS)
     return text
+
+
+def fallback_when_unavailable(voice: dict | None) -> str:
+    """What to send when the engine cannot be reached at all.
+
+    The company's own sentence, or nothing. Nothing is the right answer when
+    they have not written one: a message invented here would be this codebase
+    speaking to their customer in their name.
+    """
+    return str((voice or {}).get("fallbackLine") or "").strip()
 
 
 def _ran_out_of_room(response) -> bool:

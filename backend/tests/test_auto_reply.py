@@ -398,3 +398,27 @@ def test_nothing_is_repeated_when_there_is_no_material():
     """There is nothing to be buried by, so saying it twice is just noise."""
     text = build_instructions(_tenant(persona="You are the clinic."), "")
     assert text.count("You are the clinic.") == 1
+
+
+# ---------------------------------------------------------------------------
+# When the engine cannot be reached at all
+# ---------------------------------------------------------------------------
+
+
+def test_the_companys_own_sentence_is_sent_when_the_model_is_down():
+    """Somebody who messages a business and gets silence assumes it is
+    broken. The company wrote a sentence for exactly this."""
+    from app.services.agent.reply import fallback_when_unavailable
+
+    assert fallback_when_unavailable({"fallbackLine": "Let me check and come back."}) \
+        == "Let me check and come back."
+
+
+def test_nothing_is_sent_when_they_wrote_nothing():
+    """A sentence invented here would be this codebase speaking to their
+    customer, in their name, while the model is down."""
+    from app.services.agent.reply import fallback_when_unavailable
+
+    assert fallback_when_unavailable({}) == ""
+    assert fallback_when_unavailable(None) == ""
+    assert fallback_when_unavailable({"fallbackLine": "   "}) == ""
