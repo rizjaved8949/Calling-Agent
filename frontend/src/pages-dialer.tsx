@@ -119,7 +119,7 @@ export function DialerScreen() {
         if (forMode === 'agent') {
           // Nothing to join. The call runs on the server and this is only a
           // window onto it.
-          if (!s.live) {
+          if (s.over) {
             finish(s.status === 'NO_ANSWER' ? 'Nobody answered.'
               : s.error ? `The call failed: ${s.error}` : 'The call ended.');
             return;
@@ -137,6 +137,8 @@ export function DialerScreen() {
         if (audio.current) {
           // Still polled while talking: the customer hanging up ends the
           // session on the server, and this is how the browser hears of it.
+          // Safe to read `live` here — we only get here having joined one, so
+          // its disappearance really is the far end going away.
           if (!s.live) finish('They hung up.');
           return;
         }
@@ -157,7 +159,13 @@ export function DialerScreen() {
           }
           return;
         }
-        if (!s.live) {
+        // Only a *finished* call ends this. A call with no session yet is one
+        // nobody has picked up: for a human call the session is created when
+        // the line is answered, so until then there is nothing to join and
+        // nothing wrong. Reading the missing session as an ending hung up on
+        // every outgoing call about a second and a half after placing it,
+        // while the far end was still ringing.
+        if (s.over) {
           finish(s.status === 'NO_ANSWER' ? 'Nobody answered.'
             : s.error ? `The call failed: ${s.error}` : 'The call ended.');
         } else {

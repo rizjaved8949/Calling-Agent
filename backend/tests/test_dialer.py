@@ -164,3 +164,72 @@ def test_a_human_call_needs_no_outbound_agent(client, tenant_factory, auth, monk
         "to": "+923334445555", "channel": "PHONE", "human": True,
     }, headers=auth(key))
     assert allowed.status_code == 201
+
+
+def test_a_ringing_call_is_not_reported_as_over(client, tenant_factory, auth, monkeypatch):
+    """The dialer hung up on every call it placed, about a second after placing it.
+
+    `live` says whether there is audio to join, and for a human call the
+    session is only created when somebody answers. The dialer read that
+    missing session as "the call ended" and tore down a call that was still
+    ringing in the other person's hand — they would answer to silence, having
+    already been hung up on.
+
+    So the session now says plainly whether the call is *over*, which is a
+    different question from whether it is joinable, and that is what the
+    dialer acts on.
+    """
+    from app.services import lines, telephony
+
+    async def verified(_tenant):
+        return "ok"
+    monkeypatch.setattr(lines, "_verify_infobip", verified)
+
+    _, key = tenant_factory("952")
+    number = client.post("/api/numbers", json={
+        "kind": "sim", "phoneNumber": "+923001114444", "mode": "outbound",
+        "infobipApiKey": "k-12345678", "infobipBaseUrl": "x.api.infobip.com",
+    }, headers=auth(key)).json()
+
+    async def fake_place(self, to, *, from_number=""):
+        return {"id": "provider-ring"}
+    monkeypatch.setattr(telephony.Infobip, "place_call", fake_place)
+
+    placed = client.post("/api/calls", json={
+        "to": "+923334446666", "channel": "PHONE", "lineId": number["id"],
+        "human": True,
+    }, headers=auth(key))
+    assert placed.status_code == 201, placed.text
+    call_id = placed.json()["id"]
+
+    session = client.get(f"/api/calls/{call_id}/session", headers=auth(key))
+    assert session.status_code == 200, session.text
+    body = session.json()
+
+    assert body["status"] == "RINGING"
+    assert body["live"] is False, "nobody has answered, so there is no audio yet"
+    assert body["over"] is False, "a ringing call has not ended"
+
+
+def test_a_finished_call_is_reported_as_over(client, tenant_factory, auth, monkeypatch):
+    """The other half: once it really has ended, the dialer must be told."""
+    import time as _time
+
+    from app.models.call import Call, CallStatus, Channel, Direction
+    from app.repositories import calls as call_repo
+
+    tenant, key = tenant_factory("953")
+    call = Call(
+        tenantId=tenant.phone_number_id,
+        channel=Channel.PHONE,
+        direction=Direction.OUTBOUND,
+        status=CallStatus.COMPLETED,
+        counterparty="+923334447777",
+        startedAt=_time.time(),
+        mode="human",
+    )
+    asyncio.run(call_repo.save_call(call))
+
+    body = client.get(f"/api/calls/{call.id}/session", headers=auth(key)).json()
+    assert body["over"] is True
+    assert body["live"] is False

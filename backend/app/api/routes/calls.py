@@ -21,6 +21,7 @@ from ...models.call import (
     Direction,
     OutboundCallRequest,
     RecordingState,
+    TERMINAL_STATUSES,
 )
 from ...repositories import calls as call_repo
 from ...security import playback
@@ -141,6 +142,12 @@ async def call_session(tenant: CurrentTenant, call_id: str) -> dict:
         "callId": call.id,
         "status": call.status.value,
         "live": session is not None,
+        # Whether the call is *finished*, which is not the same question as
+        # whether it is live. A call this process has placed but nobody has
+        # answered yet is neither: it is ringing, with no session to join.
+        # The dialer read the absence of a session as an ending and hung up on
+        # a phone that was still ringing in someone's hand.
+        "over": call.status in TERMINAL_STATUSES,
         "error": call.error or None,
         "operatorToken": (
             playback.mint(tenant.phone_number_id, call.id, ttl=3600) if session else None

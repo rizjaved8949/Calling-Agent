@@ -75,7 +75,10 @@ export type NumberPatch = NumberCredentials & {
 export type CallSession = {
   callId: string;
   status: string;
+  /** There is audio to join right now. False while the call is still ringing. */
   live: boolean;
+  /** The call has reached a final state. This, not `live`, means "ended". */
+  over: boolean;
   error: string | null;
   operatorToken: string | null;
   transcript: string | null;
