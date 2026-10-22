@@ -19,11 +19,23 @@ services:
     runtime: docker
     rootDir: backend
     dockerfilePath: ./Dockerfile
-    # Free, with one consequence worth knowing: a free service spins down after
-    # ~15 minutes without traffic and takes roughly a minute to wake. A webhook
-    # that arrives while it is asleep is waiting on that cold start, and Meta
-    # does not wait a minute for a call webhook. Fine for a demo; move to
-    # starter before a customer's calls depend on it.
+    # Free, with two consequences worth knowing.
+    #
+    # It spins down after ~15 minutes without traffic and takes roughly a
+    # minute to wake. A webhook arriving in that minute waits out the cold
+    # start, and Meta does not wait a minute for a call webhook — the call is
+    # simply lost. KEEPALIVE_SECONDS below holds the instance open, but note
+    # what that cannot do: the timer sleeps with the process, so it prevents
+    # idling rather than rescuing an instance already asleep. It also burns
+    # free instance hours around the clock (750/month across the account, and
+    # 24/7 is ~730), so a second free service will run the pool dry.
+    #
+    # It is also a fraction of a CPU, shared. Ten concurrent calls is the
+    # documented limit here and it has not been load-tested on this plan.
+    #
+    # Starter ($7/month) removes both problems: it never sleeps, which makes
+    # the keepalive unnecessary, and it has the headroom the call path wants.
+    # Move to it before a customer's calls depend on this.
     plan: free
     # Nearest region to the numbers being called keeps the round trip short.
     region: singapore
@@ -72,6 +84,17 @@ services:
       # ---- Set here, because they are not secret ---------------------------
       - key: APP_ENV
         value: production
+      # How many calls one instance carries before it refuses the next with a
+      # reason. Ten is what the free plan's share of a CPU was sized against;
+      # a paid plan can take more, and this is the one number to raise.
+      - key: MAX_CONCURRENT_CALLS
+        value: "10"
+      # Calls our own /health on a timer so the free plan's idle timer never
+      # reaches fifteen minutes. Set this to 0 on any paid plan: a paid
+      # instance does not sleep, so the requests are pure noise. It cannot
+      # wake an instance that is already asleep — see services/keepalive.py.
+      - key: KEEPALIVE_SECONDS
+        value: "600"
       # Render provides the service's own URL. Meta, Infobip and Google all
       # need an absolute address, and the Google OAuth redirect is derived from
       # this one — so getting it from Render keeps it right across renames.

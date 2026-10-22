@@ -94,12 +94,22 @@ async def lifespan(_app: FastAPI):
 
     reaping = asyncio.create_task(reaper.run_forever())
 
+    # On a plan that stops an idle instance, the next call's webhook waits out
+    # a cold start that the caller's provider will not wait for. Off unless
+    # configured — see services/keepalive.py.
+    from .services import keepalive
+
+    pinging = asyncio.create_task(keepalive.run_forever())
+
     try:
         yield
     finally:
-        reaping.cancel()
+        for task in (reaping, pinging):
+            task.cancel()
         with __import__("contextlib").suppress(asyncio.CancelledError, Exception):
             await reaping
+        with __import__("contextlib").suppress(asyncio.CancelledError, Exception):
+            await pinging
         # A call still running when the process goes away would otherwise
         # leave a row IN_PROGRESS forever and its recording unwritten.
         from .services.agent import live

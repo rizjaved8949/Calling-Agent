@@ -135,7 +135,16 @@ async def infobip_media(socket: WebSocket):
     stop = asyncio.Event()
     log.info("call %s: carrier audio socket attached", call_id)
 
-    session = await live.start(tenant, call, out, keepalive=True)
+    try:
+        session = await live.start(tenant, call, out, keepalive=True)
+    except live.AtCapacity as exc:
+        # Closed deliberately rather than left to raise: an exception out of a
+        # websocket handler drops the socket with no code, and the carrier
+        # retries it. A close says "not now" once.
+        log.warning("call %s: %s", call_id, exc)
+        await socket.close(code=4503)
+        await live.finish(tenant, call_id, str(exc))
+        return
     pump = asyncio.create_task(_pump(socket, out, stop))
     reason = "the carrier closed the audio socket"
     frames = 0

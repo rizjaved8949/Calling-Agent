@@ -16,6 +16,7 @@ from fastapi import APIRouter
 from ...config import settings
 from ...db.supabase import supabase
 from ...security.secret_box import encryption_configured
+from ...services import keepalive
 from ...services.agent import live, whatsapp_media
 from ...services.audio import ffmpeg_available
 
@@ -56,5 +57,13 @@ async def health() -> dict:
             # websocket carries PCM directly — so they are listed apart.
             "carrierMedia": True,
             "callsInProgress": live.active(),
+            # How many more this process will take before it starts refusing.
+            # Visible here so headroom can be read off the health check during
+            # a busy period, rather than inferred from a call that failed.
+            "callCapacity": live.capacity(),
+            "atCapacity": live.at_capacity(),
+            # Whether this instance is keeping itself awake, which is only
+            # meaningful on a plan that stops an idle service.
+            "keepalive": keepalive.should_run(),
         },
     }

@@ -48,6 +48,20 @@ class Settings(BaseSettings):
     # Where webhooks are delivered. Meta and Infobip both need an absolute URL.
     public_base_url: str = ""
 
+    # ---- Capacity ---------------------------------------------------------
+    # How many calls this process will carry at once. The eleventh is refused
+    # with a reason rather than admitted to make all eleven stutter: a caller
+    # who is turned away can ring back, where ten callers hearing broken audio
+    # are ten complaints. Raise it once a plan with more CPU is in place.
+    max_concurrent_calls: int = 10
+
+    # How often to call our own /health, in seconds. Render's free plan stops
+    # an instance after ~15 minutes without traffic, and the next webhook then
+    # waits out a cold start — which Meta will not do for a call. Zero turns
+    # this off, which is the right setting on any paid plan, where the
+    # instance never sleeps and this is pure noise.
+    keepalive_seconds: int = 600
+
     # ---- Persistence ------------------------------------------------------
     # Supabase is the system of record: voice_tenants, voice_calls and
     # voice_messages. The service key bypasses row-level security, which is why

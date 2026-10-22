@@ -45,6 +45,33 @@ def active() -> int:
     return len(_sessions)
 
 
+class AtCapacity(RuntimeError):
+    """This process is already carrying as many calls as it will take.
+
+    Raised rather than returned because every caller of `start` already settles
+    a call it could not answer — the carrier leg is terminated and the row is
+    marked failed — so a refusal travels the same path as any other reason the
+    agent could not come up.
+    """
+
+
+def capacity() -> int:
+    """How many calls may run at once. Zero or less means no limit."""
+    return settings.max_concurrent_calls
+
+
+def at_capacity() -> bool:
+    """True when one more call would take this process past its limit.
+
+    Checked before a call is admitted rather than discovered while it runs.
+    Audio is a real-time workload: a process that accepts more conversations
+    than it can carry does not slow down politely, it breaks every one of them
+    at once, and the caller hears it.
+    """
+    limit = capacity()
+    return limit > 0 and len(_sessions) >= limit
+
+
 def live_settings() -> LiveSettings:
     """The engine from the server's environment.
 
@@ -313,6 +340,14 @@ async def warm_up(tenant: Tenant, call: Call, *, keepalive: bool = True) -> None
     """
     if call.id in _sessions:
         return
+    if at_capacity():
+        # Warming is an optimisation, so this is not an error: the call has not
+        # arrived yet and may never. `start` decides whether it is admitted.
+        log.info(
+            "call %s: not warming the agent up, %d calls already running",
+            call.id, len(_sessions),
+        )
+        return
     if call.mode == "human":
         # A dialer call is a person talking to a person. Warming a model for it
         # would put an agent on a line the employee is about to speak on.
@@ -355,6 +390,19 @@ async def start(
             call.recording_state = RecordingState.PENDING
         await call_repo.save_call(call)
         return existing
+
+    # Past the warmed-session check above, so a call that was warmed while
+    # there was room is still answered: it is already counted, and refusing it
+    # here would drop a caller the carrier has connected.
+    if at_capacity():
+        log.warning(
+            "call %s refused: %d calls already running, the limit is %d",
+            call.id, len(_sessions), capacity(),
+        )
+        raise AtCapacity(
+            f"This number is carrying {len(_sessions)} calls at once, which is "
+            "all it is configured to take. Please ring back in a moment."
+        )
 
     human = call.mode == "human"
     session = CallSession(
