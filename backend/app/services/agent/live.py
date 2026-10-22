@@ -363,6 +363,21 @@ async def warm_up(tenant: Tenant, call: Call, *, keepalive: bool = True) -> None
             on_transcript=lambda who, text: None,
             on_tool=_tool_handler(tenant, call),
         )
+        # Checked again, because building that session awaited the database
+        # twice and the line can connect in the meantime. `start` finds no
+        # session, makes its own, and attaches it to the carrier — and this
+        # assignment used to overwrite it.
+        #
+        # What that cost: the real conversation ran on a session nothing was
+        # tracking, while the one that got settled, recorded and transcribed
+        # was this one, which had only ever spoken its own greeting. The call
+        # sounded perfect and the recording stopped after the intro.
+        if call.id in _sessions:
+            log.info("call %s: the line connected while warming; standing down",
+                     call.id)
+            with contextlib.suppress(Exception):
+                await session.end("superseded by the live session")
+            return
         _sessions[call.id] = session
         await session.start(paced=False)
         log.info("call %s: the agent is connected and waiting for the line", call.id)
