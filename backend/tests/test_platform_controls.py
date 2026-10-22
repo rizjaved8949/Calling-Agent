@@ -431,3 +431,27 @@ def test_a_failing_key_test_raises_the_alarm_itself(client, fake_db, monkeypatch
                           json={"engine": "gemini", "model": "gemini-3.5-flash"})
     assert refused.json()["ok"] is False
     assert "no credit left" in platform_settings.last_failure()["reason"]
+
+
+def test_each_engine_says_where_to_get_a_key_and_pay_for_it(client):
+    """Two links, because they are two errands.
+
+    Making a key and putting credit on it happen in different places, and the
+    second is the one people are sent back for: a key with no credit behind it
+    saves cleanly, passes anything that costs nothing, and fails on the first
+    real call -- which is exactly how a whole afternoon gets spent looking for
+    a bug in the call path.
+    """
+    body = client.get("/api/platform/engine", headers=ADMIN).json()
+    engines = {e["id"]: e for e in body["engines"]}
+
+    assert engines["gemini"]["keyUrl"] == "https://aistudio.google.com/apikey"
+    assert engines["gemini"]["billingUrl"] == "https://ai.studio/projects"
+    assert engines["openai"]["keyUrl"] == "https://platform.openai.com/api-keys"
+
+    for engine in engines.values():
+        for field in ("keyUrl", "billingUrl"):
+            assert engine[field].startswith("https://"), (
+                f"{engine['id']}.{field} must be a full https URL, "
+                "because the screen renders it as a link"
+            )

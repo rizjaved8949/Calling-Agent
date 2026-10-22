@@ -11,8 +11,8 @@
 import {useCallback, useEffect, useState} from 'react';
 import {Link, useNavigate, useParams} from 'react-router-dom';
 import {
-  ArrowLeft, Building2, CheckCircle2, CircleAlert, Copy, Cpu, KeyRound, Loader2, Plug, Plus,
-  RefreshCw, ServerCog, Trash2, XCircle,
+  ArrowLeft, Building2, CheckCircle2, CircleAlert, Copy, Cpu, ExternalLink, KeyRound, Loader2,
+  Plug, Plus, RefreshCw, ServerCog, Trash2, XCircle,
 } from 'lucide-react';
 import {Badge, Button, Empty, PageHead} from './app';
 import {useApp} from './app-context';
@@ -707,6 +707,10 @@ export function AdminHealth() {
 type Engine = {
   id: string; label: string; supported: boolean;
   defaultModel: string; keyHint: string; note: string;
+  /** Where to create a key for this provider. */
+  keyUrl?: string;
+  /** Where to put credit on it, which is a different errand from making one. */
+  billingUrl?: string;
   /** Suggestions, not a limit — the model field takes anything typed. */
   models?: string[];
   /**
@@ -848,6 +852,26 @@ export function AdminEngine() {
           help={state.keySet
             ? `In use, from ${state.source}. Type a new one to replace it.`
             : chosen?.keyHint}/>
+
+        {/* Both errands, named separately. Making a key and paying for it are
+            different jobs in different places, and the second is the one
+            people are sent back for: a key with no credit behind it stores
+            fine, tests fine against anything free, and fails on the first
+            real call. */}
+        {(chosen?.keyUrl || chosen?.billingUrl) && (
+          <div className="row wrap" style={{gap: 10, alignItems: 'center'}}>
+            {chosen?.keyUrl && (
+              <a className="small" href={chosen.keyUrl} target="_blank" rel="noreferrer noopener">
+                <ExternalLink size={13}/> Create a {chosen.label} key
+              </a>
+            )}
+            {chosen?.billingUrl && (
+              <a className="small" href={chosen.billingUrl} target="_blank" rel="noreferrer noopener">
+                <ExternalLink size={13}/> Add credit or check billing
+              </a>
+            )}
+          </div>
+        )}
 
         <div className="row wrap">
           <Button disabled={!dirty || busy} onClick={() => void save()}>

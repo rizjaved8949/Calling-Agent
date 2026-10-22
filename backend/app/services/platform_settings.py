@@ -51,6 +51,12 @@ ENGINES: list[dict[str, Any]] = [
             "gemini-2.5-flash-native-audio-preview-09-2025",
         ],
         "keyHint": "A Google AI Studio key, beginning AIza…",
+        # Where to go and get one, and where to pay for it. Two links rather
+        # than one because they are two different errands and the second is
+        # the one people are sent back for: a key with no credit behind it
+        # passes every check that costs nothing and fails on the first call.
+        "keyUrl": "https://aistudio.google.com/apikey",
+        "billingUrl": "https://ai.studio/projects",
         "note": "The only engine this build speaks. Native speech to speech.",
     },
     {
@@ -60,6 +66,8 @@ ENGINES: list[dict[str, Any]] = [
         "defaultModel": "gpt-realtime",
         "models": ["gpt-realtime", "gpt-4o-realtime-preview"],
         "keyHint": "An OpenAI key, beginning sk-…",
+        "keyUrl": "https://platform.openai.com/api-keys",
+        "billingUrl": "https://platform.openai.com/settings/organization/billing",
         "note": (
             "Speech to speech over the Realtime API. Built and tested against "
             "the protocol, but no call has been placed on it from this "
