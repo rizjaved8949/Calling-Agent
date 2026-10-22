@@ -109,6 +109,17 @@ export function DialerScreen() {
     setStatus(text);
   }, []);
 
+  /** How a finished call is described, in the words a non-technical user uses. */
+  const endingFor = (s: {status: string; error: string | null}) => {
+    if (s.error) return `The call failed: ${s.error}`;
+    switch (s.status) {
+      case 'NO_ANSWER': return 'Nobody answered.';
+      case 'FAILED': return 'The call did not go through.';
+      case 'HANDED_OFF': return 'Handed over to a person.';
+      default: return 'The call ended.';
+    }
+  };
+
   const watch = (id: string, forMode: Mode) => {
     stopPolling();
     poll.current = setInterval(async () => {
@@ -116,20 +127,31 @@ export function DialerScreen() {
         const s = await api.callSession(id);
         if (s.transcript) setTranscript(s.transcript);
 
+        // One place that turns the call's real status into words, so the
+        // screen never sits on a stale label while the call moves on without
+        // it. Agent calls in particular used to show nothing at all between
+        // being placed and being answered.
+        if (s.over) {
+          finish(endingFor(s));
+          return;
+        }
+
         if (forMode === 'agent') {
           // Nothing to join. The call runs on the server and this is only a
           // window onto it.
-          if (s.over) {
-            finish(s.status === 'NO_ANSWER' ? 'Nobody answered.'
-              : s.error ? `The call failed: ${s.error}` : 'The call ended.');
-            return;
-          }
+          //
+          // Set unconditionally rather than guarded on `phase`: this closure
+          // was made when the call was placed and its `phase` is frozen at
+          // that moment, so reading it here would always say "ringing".
           if (s.status === 'IN_PROGRESS') {
-            // Set unconditionally rather than guarded on `phase`: this closure
-            // was made when the call was placed and its `phase` is frozen at
-            // that moment, so reading it here would always say "ringing".
             setPhase('connected');
-            setStatus('The agent is talking to them.');
+            setStatus('Answered — the agent is talking to them.');
+          } else if (s.status === 'RINGING') {
+            setPhase('ringing');
+            setStatus('Ringing — waiting for them to pick up…');
+          } else {
+            setPhase('dialing');
+            setStatus('Placing the call…');
           }
           return;
         }
@@ -159,18 +181,21 @@ export function DialerScreen() {
           }
           return;
         }
-        // Only a *finished* call ends this. A call with no session yet is one
-        // nobody has picked up: for a human call the session is created when
-        // the line is answered, so until then there is nothing to join and
-        // nothing wrong. Reading the missing session as an ending hung up on
-        // every outgoing call about a second and a half after placing it,
-        // while the far end was still ringing.
-        if (s.over) {
-          finish(s.status === 'NO_ANSWER' ? 'Nobody answered.'
-            : s.error ? `The call failed: ${s.error}` : 'The call ended.');
-        } else {
+        // Not over (checked above) and nothing to join yet. For a human call
+        // the session is created when the line is answered, so until then
+        // there is nothing to join and nothing wrong — reading that missing
+        // session as an ending is what used to hang up on every outgoing call
+        // a second and a half after placing it, while the far end was still
+        // ringing in somebody's hand.
+        if (s.status === 'IN_PROGRESS') {
           setPhase('ringing');
-          setStatus('Ringing…');
+          setStatus('They answered — opening your microphone…');
+        } else if (s.status === 'RINGING') {
+          setPhase('ringing');
+          setStatus('Ringing — waiting for them to pick up…');
+        } else {
+          setPhase('dialing');
+          setStatus('Placing the call…');
         }
       } catch {/* a missed poll is retried on the next tick */}
     }, 1500);
