@@ -25,7 +25,9 @@ SEND_WHATSAPP_MESSAGE: dict[str, Any] = {
     "description": (
         "Send a WhatsApp message to the person you are on the call with. Use this "
         "whenever they ask for something in writing — a link, an address, a price "
-        "list, a summary of what you agreed. Do NOT ask them for their number: you "
+        "list, a summary of what you agreed. Saying yes is not sending: the message "
+        "goes only when you call this, so call it in the same turn you agree, "
+        "before any goodbye. Do NOT ask them for their number: you "
         "already have it. Only pass 'to' if they explicitly ask you to send it to a "
         "different number and read that number out to you."
     ),
@@ -55,6 +57,10 @@ END_CALL: dict[str, Any] = {
     "name": "end_call",
     "description": (
         "End the call. Say your goodbye first, in the same turn, then call this. "
+        "Never call this while something you agreed to send is still unsent: if "
+        "they asked for anything in writing and you said yes, call "
+        "send_whatsapp_message and let it confirm before you end. Agreeing and "
+        "then ending leaves them waiting for a message that never comes. "
         "Use it when the caller's question is answered and they have nothing further, "
         "when they say goodbye, or when the call is going nowhere — somebody testing "
         "you, repeating themselves, being abusive, or silent after you have twice "

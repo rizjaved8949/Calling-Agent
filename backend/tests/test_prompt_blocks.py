@@ -271,3 +271,49 @@ def test_the_fields_survive_a_round_trip(client, tenant_factory, auth):
     shown = client.get(f"/api/agents/{agent_id}/prompt", headers=auth(key)).json()
     assert "Let me check and call you back." in shown["instructions"]
     assert "yoo-see-pee" in shown["instructions"]
+
+
+def test_the_agent_is_told_not_to_hang_up_on_an_unsent_promise():
+    """What happened on a real call: the caller asked for the fees on WhatsApp,
+    the agent said "جی بالکل" and ended the call. Nothing was sent.
+
+    The tool was offered and working -- the agent simply treated agreeing as
+    doing, and treated the request as the end of the conversation. Both
+    instructions now say otherwise, because this failure is invisible from
+    our side: the call looks perfect and the caller is left waiting.
+    """
+    from app.services.agent import prompt
+
+    text = prompt.build(persona="You answer calls.", context="Fees are 50,000.",
+                        can_send_whatsapp=True)
+
+    assert "Agreeing is not sending" in text
+    assert "still undone" in " ".join(text.split())
+    assert "only then say goodbye" in text
+
+
+def test_the_end_call_tool_itself_carries_the_same_warning():
+    """The prompt is read once; the tool description is read at the moment of
+    choosing. The rule has to be in both."""
+    from app.services.agent import tools
+
+    assert "unsent" in tools.END_CALL["description"]
+    assert "send_whatsapp_message" in tools.END_CALL["description"]
+    assert "Saying yes is not sending" in tools.SEND_WHATSAPP_MESSAGE["description"]
+
+
+def test_the_ending_rule_never_names_a_tool_the_caller_may_not_have():
+    """The ending rules go to every company, including SIM-only ones.
+
+    An earlier version of this guard named send_whatsapp_message there, which
+    told a company with no WhatsApp number about a function it does not have
+    -- the exact way an agent comes to promise something it cannot do.
+    """
+    from app.services.agent import prompt
+
+    text = prompt.build(persona="You answer calls.", context="",
+                        can_send_whatsapp=False)
+    assert "send_whatsapp_message" not in text
+    assert "still undone" in " ".join(text.split()), (
+        "the promise guard must still be given, just without the tool name"
+    )

@@ -116,7 +116,13 @@ WRITING = Block(
         "- Never tell a caller you have sent something unless you called the "
         "function and it confirmed. Saying 'I have sent it' without calling it "
         "is a lie to someone who will go and look for it.\n"
-        "- Call the function first, then tell them it is on its way."
+        "- Call the function first, then tell them it is on its way.\n"
+        "- **Agreeing is not sending.** 'Yes, of course', 'جی بالکل', 'sure, "
+        "I'll send it' are words. The message leaves only when you call the "
+        "function. If you agree and do not call it, they are left waiting for "
+        "something that is never coming.\n"
+        "- A request to send something is not the end of the call. Send it, "
+        "wait for the confirmation, say it is sent — and only then say goodbye."
     ),
 )
 
@@ -150,6 +156,13 @@ ENDING = Block(
         "### Ending the call\n"
         "- When their question is answered and they have nothing else, say a "
         "warm goodbye and call end_call in the same turn.\n"
+        # Deliberately not naming the messaging function: this block goes to
+        # every company, including those with no WhatsApp number, and naming a
+        # tool they do not have is how an agent comes to offer it.
+        "- **Never end the call while something you agreed to do is still "
+        "undone.** If you said you would send something, do it and let it "
+        "confirm before you say goodbye. Agreeing and then hanging up leaves "
+        "them waiting for something that was never coming.\n"
         "- If the call is going nowhere — somebody testing you, saying the same "
         "thing over and over, being abusive, or silent after you have twice "
         "asked whether they are there — close it politely and call end_call.\n"
