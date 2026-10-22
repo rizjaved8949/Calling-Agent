@@ -96,18 +96,6 @@ export function AuthScreen({mode}:{mode:'login'|'signup'|'forgot'|'verify'|'invi
       else{setError(friendlyAuthError(cause));setBusy(false)}
     }
   }
-  // Real accounts, real credentials — not fixtures. Whoever clicks these signs
-  // into the actual "Calling Agent" demo company, which can place real calls
-  // and send real WhatsApp messages. Kept here deliberately for showing the
-  // product around without typing a password each time.
-  // Each demo seat carries its own password: the employee account is a
-  // separate person with a separate login, not the owner's with a different
-  // label, and sharing one password between them was only ever a shortcut.
-  async function demoLogin(email:string,password:string){
-    setError('');setBusy(true);
-    try{finish(await loginWithEmail(email,password))}
-    catch(cause){setError(friendlyAuthError(cause));setBusy(false)}
-  }
   function submitMock(e:React.FormEvent){
     e.preventDefault();
     if(mode==='forgot'){navigate('/verify');return}
@@ -140,15 +128,6 @@ export function AuthScreen({mode}:{mode:'login'|'signup'|'forgot'|'verify'|'invi
       {(mode==='login'||mode==='signup')&&!needsCompanyName&&(LIVE
         ?<button className="button outline" type="button" disabled={busy} onClick={submitGoogle}>{t('Continue with Google')}</button>
         :<button className="button outline" type="button" onClick={()=>{setSession({email:'demo@example.com',name:'Demo User',userId:'user-1',orgId:store.organizations[0].id,portal:'company'});navigate('/app/dashboard')}}>{t('Continue with Google')}</button>)}
-      {mode==='login'&&LIVE&&!needsCompanyName&&<div className="demo-logins">
-        <div className="small muted">{t('Or try the live demo — real data, not a fixture')}</div>
-        <div className="demo-row">
-          <button className="button outline small" type="button" disabled={busy}
-            onClick={()=>void demoLogin('admin@amgoc.us','Demo@1234')}>{t('Demo: company owner')}</button>
-          <button className="button outline small" type="button" disabled={busy}
-            onClick={()=>void demoLogin('mazanshakir@gmail.com','Employee@169')}>{t('Demo: employee')}</button>
-        </div>
-      </div>}
       {mode==='login'&&!LIVE&&<div className="demo-logins"><div className="small muted">{t('Or open one of the three portals')}</div><div className="demo-row"><button className="button outline small" type="button" onClick={()=>{setSession({email:'samira@northstar.edu',name:'Samira Khan',userId:'user-1',orgId:'org-northstar',portal:'company'});navigate('/app/dashboard')}}>{t('Company admin')}</button><button className="button outline small" type="button" onClick={()=>{setSession({email:'omar@northstar.edu',name:'Omar Farooq',userId:'user-2',orgId:'org-northstar',portal:'company'});navigate('/app/queue')}}>{t('Company staff')}</button><button className="button outline small" type="button" onClick={()=>{api.setProfile('user-platform');setSession({email:'ops@platform.internal',name:'Platform Operations',userId:'user-platform',orgId:'org-northstar',portal:'platform',platformRole:'superadmin'});navigate('/platform/companies')}}>{t('Platform (us)')}</button></div></div>}
     </form>}
     {!needsCompanyName&&<div className="row between small" style={{marginTop:24}}><Link to={mode==='login'?'/signup':'/login'}>{t(mode==='login'?'Create an account':'Sign in')}</Link><Link to="/forgot-password">{t('Forgot password?')}</Link></div>}
