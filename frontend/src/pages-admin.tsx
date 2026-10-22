@@ -135,6 +135,10 @@ function EngineBanner() {
 function EngineFailure({failure}: {failure: {at: number; reason: string}}) {
   const when = new Date(failure.at * 1000);
   const minutes = Math.round((Date.now() - failure.at * 1000) / 60000);
+  // A money problem is not fixed on this screen, so when that is what went
+  // wrong the billing page is offered directly. Testing the key again would
+  // only confirm what the message already says.
+  const aboutMoney = /credit|spending cap/i.test(failure.reason);
   return <div className="notice danger">
     <div className="row between wrap" style={{gap: 12}}>
       <span className="row" style={{gap: 10, alignItems: 'flex-start'}}>
@@ -148,7 +152,15 @@ function EngineFailure({failure}: {failure: {at: number; reason: string}}) {
           </div>
         </span>
       </span>
-      <Button to="/platform/engine"><Plug size={15}/> Test the key</Button>
+      <span className="row wrap" style={{gap: 8}}>
+        {aboutMoney && (
+          <a className="button outline small" href="https://ai.studio/projects"
+             target="_blank" rel="noreferrer noopener">
+            <ExternalLink size={14}/> Open billing
+          </a>
+        )}
+        <Button to="/platform/engine"><Plug size={15}/> Test the key</Button>
+      </span>
     </div>
   </div>;
 }

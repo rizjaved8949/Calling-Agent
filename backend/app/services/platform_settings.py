@@ -95,8 +95,44 @@ SUPPORTED = {e["id"] for e in ENGINES if e["supported"]}
 _last_failure: dict[str, Any] | None = None
 
 
+def explain(detail: str, model: str = "") -> str:
+    """The provider's refusal, in words an operator can act on.
+
+    A live call reports its failure as the raw text of whatever the SDK threw
+    — "1011 None. Your prepayment credits are depleted..." — which names the
+    cause but buries it. The operator's screen should say what is wrong and
+    what to do about it, in the same words whether it was found by pressing
+    Test or by a caller hearing silence.
+    """
+    lowered = (detail or "").lower()
+    if "spending cap" in lowered or "spending limit" in lowered:
+        # Deliberately apart from "quota": a quota clears by waiting, a cap
+        # never does. Telling somebody to try again shortly would be wrong.
+        return ("This project has hit its monthly spending cap, so the agent "
+                "cannot speak. Raise the cap at ai.studio/projects — this is "
+                "a limit you set, not an empty account.")
+    if any(w in lowered for w in ("depleted", "402", "billing", "insufficient",
+                                  "no credit")):
+        return ("This Google account has no credit left, so every call will "
+                "connect to silence. Top up the project at ai.studio/projects.")
+    if any(w in lowered for w in ("quota", "resource_exhausted", "429")):
+        return "This key is over its quota right now. Try again shortly."
+    if any(w in lowered for w in ("api key", "api_key", "unauthenticated",
+                                  "permission_denied", "401", "403")):
+        return "The provider rejected this API key."
+    if "not found" in lowered or "404" in lowered:
+        return (f"The provider does not know a model called {model!r}."
+                if model else "The provider does not know that model.")
+    return (detail or "unknown")[:200]
+
+
 def note_failure(reason: str) -> None:
-    """A call or a reply could not reach the engine. Never raises."""
+    """A call or a reply could not reach the engine. Never raises.
+
+    Stored exactly as given. A caller holding the provider's raw text puts it
+    through `explain` first, so what reaches this is already the sentence the
+    operator should read.
+    """
     global _last_failure
     _last_failure = {"at": time.time(), "reason": (reason or "unknown")[:200]}
     log.error("speech engine unavailable: %s", reason)
@@ -263,20 +299,7 @@ async def check(*, engine: str, model: str, api_key: str = "") -> dict[str, Any]
             answer = await one_token(name)
     except Exception as exc:  # noqa: BLE001 — the provider's refusal is the answer
         detail = str(exc)
-        lowered = detail.lower()
-        if any(w in lowered for w in ("depleted", "402", "billing", "insufficient")):
-            said = ("This key is valid but its Google account has no credit "
-                    "left, so every call would connect to silence. Top up the "
-                    "project at ai.studio/projects.")
-        elif any(w in lowered for w in ("quota", "resource_exhausted", "429")):
-            said = "This key is over its quota right now. Try again shortly."
-        elif any(w in lowered for w in ("api key", "api_key", "unauthenticated",
-                                        "permission_denied", "401", "403")):
-            said = "The provider rejected this API key."
-        elif "not found" in lowered or "404" in lowered:
-            said = f"The provider does not know a model called {name!r}."
-        else:
-            said = detail[:200]
+        said = explain(detail, model=name)
         log.warning("engine check failed (%s): %s", type(exc).__name__, detail[:200])
         note_failure(said)
         return {"ok": False, "detail": said}

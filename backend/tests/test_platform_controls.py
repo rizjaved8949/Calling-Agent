@@ -455,3 +455,46 @@ def test_each_engine_says_where_to_get_a_key_and_pay_for_it(client):
                 f"{engine['id']}.{field} must be a full https URL, "
                 "because the screen renders it as a link"
             )
+
+
+def test_a_call_that_fails_for_money_says_so_in_plain_words():
+    """The operator screen must name the cause, not quote the SDK.
+
+    A live call reports its failure as whatever the client threw -- "1011
+    None. Your prepayment credits are depleted..." -- which names the cause
+    but buries it. The same failure found by pressing Test was already
+    readable; found by a caller hearing silence it was not.
+    """
+    from app.services import platform_settings as ps
+
+    ps.note_failure(ps.explain(
+        "1011 None. Your prepayment credits are depleted. "
+        "Please go to AI Studio at https://ai.studio/projects"))
+    reason = ps.last_failure()["reason"]
+    assert "no credit left" in reason
+    assert "ai.studio/projects" in reason, "it must say where to go"
+    ps.note_success()
+    assert ps.last_failure() is None
+
+
+def test_a_spending_cap_is_not_reported_as_a_quota():
+    """A quota clears by waiting. A cap never does, so the advice differs."""
+    from app.services import platform_settings as ps
+
+    ps.note_failure(ps.explain(
+        "1011 None. Your project has exceeded its monthly spending cap."))
+    reason = ps.last_failure()["reason"]
+    assert "spending cap" in reason
+    assert "Raise the cap" in reason
+    assert "try again shortly" not in reason.lower(), (
+        "waiting does not clear a cap, and saying so sends the operator away "
+        "to wait for something that will never happen"
+    )
+    ps.note_success()
+
+
+def test_a_rejected_key_and_an_unknown_model_are_told_apart():
+    from app.services import platform_settings as ps
+
+    assert "rejected this API key" in ps.explain("400 API key not valid")
+    assert "does not know a model" in ps.explain("404 model not found", model="x-1")

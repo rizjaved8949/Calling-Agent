@@ -215,8 +215,10 @@ async def compose(
             log.warning("tenant %s: could not compose a reply (%s: %s)",
                         tenant.phone_number_id, type(second).__name__, str(second)[:160])
             from .. import platform_settings
+            # The provider's own words where it gave any, so "no credit" is
+            # reported as no credit rather than as an exception class name.
             platform_settings.note_failure(
-                f"a WhatsApp reply failed: {type(second).__name__}")
+                f"a WhatsApp reply failed: {platform_settings.explain(str(second))}")
             # The engine is unreachable, so there is nothing to compose with.
             # Somebody who messaged a business and got silence assumes it is
             # broken, so send the sentence the company wrote for exactly this

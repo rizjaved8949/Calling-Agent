@@ -8,3 +8,8 @@ data/
 # Local server logs from a probe run
 live.log
 live.err
+
+# Backups of .env are still .env: same secrets, different name.
+.env.backup*
+.env.*.backup
+.env.bak

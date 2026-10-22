@@ -146,9 +146,13 @@ class CallSession:
             if self.handler is Handler.AGENT and not self._closed:
                 log.error("call %s: %s", self.call_id, exc)
                 # Recorded so the operator sees it on the platform screen
-                # rather than hearing about it from a customer.
+                # rather than hearing about it from a customer. Explained
+                # first: what arrives here is the provider's own text — "1011
+                # None. Your prepayment credits are depleted..." — which names
+                # the cause but buries it, and this is the one reading an
+                # operator gets when nobody pressed Test.
                 from .. import platform_settings
-                platform_settings.note_failure(str(exc))
+                platform_settings.note_failure(platform_settings.explain(str(exc)))
                 await self.end(str(exc))
 
     async def _run_pacer(self) -> None:
