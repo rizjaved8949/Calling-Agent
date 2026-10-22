@@ -34,9 +34,20 @@ from .whatsapp import WhatsApp, to_e164
 
 log = logging.getLogger(__name__)
 
-# How long to let a call live before moving on. A call nobody answers rings
-# out; one that connects ends on its own and this never fires.
+# How long to wait for somebody to pick up. A call nobody answers rings out
+# well inside this; it is a backstop for a carrier that never reports the end.
 MAX_CALL_SECONDS = 240
+
+# How long a conversation may run once it has been answered, before this stops
+# supervising it and hangs it up.
+#
+# Separate from the ring timeout, and that separation is the point. One
+# deadline used to cover both, so a call still being talked on after four
+# minutes was recorded as "the call did not finish in time" -- a good, long
+# conversation filed as a failure -- and the campaign dialled the next person
+# while the first was still connected, which is exactly the one-call-at-a-time
+# rule this dialler exists to keep.
+MAX_TALK_SECONDS = 30 * 60
 
 _runners: dict[str, asyncio.Task] = {}
 
@@ -251,6 +262,7 @@ async def _call_one(tenant: Tenant, campaign: Campaign, contact) -> None:
     # supervising the call any more, so it is ended rather than left running.
     final_state, note = ContactState.FAILED, "the call did not finish in time"
     deadline = time.time() + MAX_CALL_SECONDS
+    answered = False
     try:
         while time.time() < deadline:
             await asyncio.sleep(5)
@@ -266,6 +278,20 @@ async def _call_one(tenant: Tenant, campaign: Campaign, contact) -> None:
                 )
                 note = current.error or ""
                 break
+            if current.answered_at and not answered:
+                # They picked up, so the ring timeout no longer applies: what
+                # is left is a conversation, and conversations are allowed to
+                # run long. Waiting it out is what keeps the next call from
+                # being placed on top of this one.
+                answered = True
+                deadline = current.answered_at + MAX_TALK_SECONDS
+        else:
+            # Fell out on time rather than on an ending. A call still up at
+            # this point is one nothing is going to settle, and leaving it
+            # running would hold a line, a session slot and a carrier leg.
+            if answered:
+                final_state, note = ContactState.DONE, "the call ran unusually long"
+            await _hang_up(tenant, call)
     except asyncio.CancelledError:
         await _hang_up(tenant, call)
         await _update_contact(tenant, campaign.id, contact.number,

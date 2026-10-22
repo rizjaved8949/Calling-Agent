@@ -8,6 +8,8 @@ been. Both are pinned here.
 """
 from __future__ import annotations
 
+import contextlib
+
 import pytest
 
 ADMIN = {"X-Admin-Key": "test-admin-key"}
@@ -463,3 +465,67 @@ def _another_tenant():
 
     return Tenant(phoneNumberId="801", defaultCountryCode="92",
                   infobipApiKey="k", infobipBaseUrl="https://x", infobipPhoneNumber="+9251")
+
+
+async def test_a_long_conversation_is_not_recorded_as_a_failure(runner, monkeypatch):
+    """One deadline used to cover both ringing and talking.
+
+    So a call still being spoken on after four minutes was written down as
+    "the call did not finish in time" -- a good, long conversation filed as a
+    failure -- and the loop moved on to dial the next person while the first
+    was still connected, which is the one-call-at-a-time rule this dialler
+    exists to keep.
+
+    Answering now moves the deadline: what is left is a conversation, and a
+    conversation is allowed to run long.
+    """
+    import asyncio
+    import time as _time
+
+    from app.models.campaign import ContactState
+    from app.models.call import CallStatus
+    from app.repositories import calls as call_repo
+    from app.repositories import campaigns as repo
+
+    module, carrier = runner
+    # The ring timeout expires almost at once, and is then passed by the polls
+    # below. Only the answered-call extension can keep this call alive.
+    monkeypatch.setattr(module, "MAX_CALL_SECONDS", 0.05)
+    monkeypatch.setattr(module, "MAX_TALK_SECONDS", 60.0)
+
+    # Answered immediately, still talking for several polls, then it ends well.
+    # Driven here rather than by the clock so the test does not race.
+    real_get = call_repo.get_call
+    polls = {"n": 0}
+
+    async def talking(tenant_id, call_id):
+        call = await real_get(tenant_id, call_id)
+        if call is None:
+            return None
+        polls["n"] += 1
+        call.answered_at = call.answered_at or _time.time()
+        call.status = CallStatus.COMPLETED if polls["n"] >= 5 else CallStatus.IN_PROGRESS
+        return call
+
+    monkeypatch.setattr(call_repo, "get_call", talking)
+    monkeypatch.setattr(module.call_repo, "get_call", talking)
+
+    campaign = await _campaign("+923001115555")
+    task = asyncio.create_task(module._run(_tenant(), campaign.id))
+    try:
+        await asyncio.wait_for(task, timeout=10)
+    except (asyncio.TimeoutError, asyncio.CancelledError):
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
+
+    assert polls["n"] >= 5, (
+        "the wait gave up while the call was still being talked on "
+        f"(only {polls['n']} polls)"
+    )
+    fresh = await repo.get("800", campaign.id)
+    contact = fresh.contacts[0]
+    assert contact.state is ContactState.DONE, (
+        f"an answered call was filed as {contact.state} ({contact.note!r})"
+    )
+    assert len(carrier.placed) == 1, "a second call was placed over a live one"
