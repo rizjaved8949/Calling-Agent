@@ -630,8 +630,23 @@ async def _fail_call(tenant: Tenant, call: Call, reason: str) -> None:
         await call_repo.save_call(call)
 
 
+#: Every key a carrier has been seen to put the event's name under. Checked in
+#: order and the first non-empty one wins.
+#
+#: Worth the breadth: an event whose name we cannot read is answered 200 and
+#: dropped, which looks from the outside exactly like the carrier never sending
+#: it. An inbound call then rings and nobody ever picks up, and there is
+#: nothing in our data to say why -- the one failure that costs an afternoon.
+_EVENT_NAME_KEYS = ("name", "type", "eventType", "event", "notificationType",
+                    "callEventType", "messageType")
+
+
 def name_of(event: dict[str, Any]) -> str:
-    return str(event.get("name") or event.get("type") or "").upper()
+    for key in _EVENT_NAME_KEYS:
+        value = event.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip().upper()
+    return ""
 
 
 def _digits(value: str) -> str:
@@ -759,9 +774,26 @@ async def _handle_infobip(tenant: Tenant, payload: dict[str, Any]) -> None:
             continue
         properties = event.get("properties") or {}
         call_payload = properties.get("call") or event.get("call") or {}
-        provider_call_id = str(call_payload.get("id") or event.get("callId") or "")
+        provider_call_id = str(
+            call_payload.get("id") or event.get("callId") or event.get("id") or ""
+        )
         if not provider_call_id:
+            log.warning(
+                "Infobip event with no call id, ignored. Keys: %s",
+                sorted(event)[:12],
+            )
             continue
+
+        # Said out loud, because the alternative is what this cost once: the
+        # carrier delivers, we answer 200, the event is dropped for want of a
+        # name we did not recognise, and an inbound call rings out with
+        # nothing anywhere to explain it.
+        if not name_of(event):
+            log.warning(
+                "Infobip event for call %s carries no recognisable event name. "
+                "Keys: %s",
+                provider_call_id, sorted(event)[:12],
+            )
 
         call = await call_repo.find_by_provider_id(tenant.phone_number_id, provider_call_id)
         if call is None:
@@ -790,7 +822,10 @@ async def _handle_infobip(tenant: Tenant, payload: dict[str, Any]) -> None:
             log.info("inbound SIM call %s from %s", call.id, mask(caller))
             asyncio.create_task(_answer_inbound(tenant, call))
 
-        name = str(event.get("name") or event.get("type") or "").upper()
+        # The same reader as above, rather than a second spelling of it: the
+        # two drifting apart is how an event gets a row created and then never
+        # progresses past RINGING.
+        name = name_of(event)
         if name in {"CALL_ESTABLISHED", "CALL_ANSWERED"}:
             # On an outbound call this is the person picking up, and the moment
             # to put the agent on. An inbound call was bridged when it arrived,

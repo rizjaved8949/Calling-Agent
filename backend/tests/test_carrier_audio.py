@@ -294,3 +294,42 @@ async def test_a_company_with_no_numbers_answers_as_it_always_did(fake_db):
     call = Call(tenantId="co-5", channel=Channel.PHONE, direction=Direction.INBOUND,
                 counterparty="+92319")
     assert await _inbound_allowed_for(tenant, call) is True
+
+
+def test_an_inbound_call_is_recognised_whatever_the_name_field_is_called():
+    """An event whose name we cannot read is answered 200 and dropped.
+
+    From the outside that is indistinguishable from the carrier never sending
+    it: the phone rings, nobody picks up, and there is nothing in our data to
+    say why. Infobip was seen to label the event `eventType`, which this read
+    as nameless and binned.
+    """
+    from app.api.routes.webhooks import name_of
+
+    for key in ("name", "type", "eventType", "event", "notificationType"):
+        assert name_of({key: "CALL_RECEIVED"}) == "CALL_RECEIVED", (
+            f"an event labelled {key!r} was not recognised"
+        )
+
+    # Case and whitespace are the carrier's business, not ours.
+    assert name_of({"eventType": " call_established "}) == "CALL_ESTABLISHED"
+
+    # Nothing readable must stay falsy, so the caller can say so in the log
+    # rather than guessing at an event it cannot name.
+    assert name_of({"somethingElse": "CALL_RECEIVED"}) == ""
+    assert name_of({}) == ""
+
+
+def test_the_two_readings_of_an_event_name_cannot_drift():
+    """The handler reads the name twice: once to decide whether to create the
+    call, once to decide what the event means. Two spellings of that is how a
+    call gets created and then never progresses past RINGING."""
+    import inspect
+
+    from app.api.routes import webhooks
+
+    source = inspect.getsource(webhooks._handle_infobip)
+    assert 'event.get("name")' not in source, (
+        "parse the event name through name_of, not by hand"
+    )
+    assert source.count("name_of(event)") >= 2
