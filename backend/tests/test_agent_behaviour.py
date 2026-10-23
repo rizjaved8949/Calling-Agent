@@ -341,3 +341,45 @@ def test_a_voice_the_list_does_not_describe_is_still_accepted():
     assert voices.known("Kore")
     assert voices.known("Sulafat"), "a real engine voice was treated as unknown"
     assert not voices.known("NotAVoice")
+
+
+def test_the_spoken_language_reaches_the_session_config():
+    """The transcript came back in Hindi for an Urdu call.
+
+    Urdu and Hindi are the same spoken language to a recogniser, so with no
+    language code in the session it picks, and it picks Devanagari. The call
+    sounds perfect and the transcript is unreadable to the people whose call
+    it was. The agent's language was stored all along -- it was only ever
+    used to write an English sentence into the prompt.
+    """
+    from app.services.agent.gemini import language_code
+
+    assert language_code("ur-PK") == "ur-PK"
+    assert language_code("ur") == "ur"
+    assert language_code("ur_PK") == "ur-PK", "underscores are a common typo"
+    assert language_code("  en-GB  ") == "en-GB"
+
+
+def test_a_language_that_is_not_a_tag_is_dropped_rather_than_sent():
+    """This goes into the session config. A stray word in the language box
+    would be refused by the provider and take down every call on that agent:
+    losing the tag costs a transcript in the wrong script, sending a bad one
+    costs the call."""
+    from app.services.agent.gemini import language_code
+
+    for bad in ("Urdu please", "", "   ", "ur-PK; drop", "a", "x" * 40):
+        assert language_code(bad) == "", f"{bad!r} should not reach the provider"
+
+
+def test_language_survives_an_agent_with_no_voice_chosen():
+    """The speech config used to be built only when a voice was set, so an
+    agent left on the default voice lost its language too."""
+    from app.services.agent.gemini import AgentPersona, GeminiLiveSession, LiveSettings
+
+    session = GeminiLiveSession(
+        settings=LiveSettings(model="m", api_key=""),
+        persona=AgentPersona(instructions="", greeting="", voice="", language="ur-PK"),
+    )
+    assert session.persona.language == "ur-PK"
+    from app.services.agent.gemini import language_code
+    assert language_code(session.persona.language) == "ur-PK"

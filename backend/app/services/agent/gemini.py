@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
@@ -74,6 +75,22 @@ PACE_TURN_FACTOR = {
     "natural": 1.0,
     "brisk": 0.7,      # answers sooner, at the cost of cutting in more
 }
+
+
+#: A language tag the speech API will accept: "ur", "ur-PK", "zh-Hant-TW".
+_LANGUAGE_TAG = re.compile(r"^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8}){0,2}$")
+
+
+def language_code(value: str) -> str:
+    """The persona's language as a tag, or "" if it is not one.
+
+    Checked rather than passed through, because this goes into the session
+    config: a stray word typed into the language box would be rejected by the
+    provider and take down every call on that agent. Losing the tag costs a
+    transcript in the wrong script; sending a bad one costs the call.
+    """
+    tag = (value or "").strip().replace("_", "-")
+    return tag if _LANGUAGE_TAG.match(tag) else ""
 
 
 def turn_timing(pace: str, *, prefix_ms: int, silence_ms: int) -> tuple[int, int]:
@@ -209,10 +226,24 @@ class GeminiLiveSession:
                 }
             },
         }
+        # Voice and language travel together, and the language is why: Urdu
+        # and Hindi are the same spoken language to a recogniser, so without
+        # being told which one this is it picks, and it picks Devanagari. The
+        # call sounds perfect and the transcript comes back in the wrong
+        # script — unreadable to the very people whose call it was.
+        #
+        # Built when either is set, not only when a voice is: an agent that
+        # left the voice on its default was losing the language too.
+        speech: dict[str, Any] = {}
         if self.persona.voice:
-            config["speech_config"] = {
-                "voice_config": {"prebuilt_voice_config": {"voice_name": self.persona.voice}}
+            speech["voice_config"] = {
+                "prebuilt_voice_config": {"voice_name": self.persona.voice}
             }
+        spoken = language_code(self.persona.language)
+        if spoken:
+            speech["language_code"] = spoken
+        if speech:
+            config["speech_config"] = speech
         if self.persona.tools:
             config["tools"] = [{"function_declarations": self.persona.tools}]
 

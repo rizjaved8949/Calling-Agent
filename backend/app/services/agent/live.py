@@ -168,10 +168,19 @@ async def persona_for(tenant: Tenant, call: Call | None = None) -> AgentPersona:
         language_rule=(
             f"Speak {_language_name(language)} unless the caller uses another "
             "language, in which case follow them. Mirror their mix of languages "
-            "rather than forcing one."
+            "rather than forcing one. "
+            # Said because it is routinely got wrong: Urdu and Hindi are one
+            # spoken language and two scripts, so anything written down —
+            # a WhatsApp message, a transcript line — comes back in whichever
+            # the model reached for, and Devanagari is unreadable to the
+            # people whose call it was.
+            f"When you write anything, write {_language_name(language)} in its "
+            "own script, the one its readers actually use. Never transliterate "
+            "it into another script, and never use Devanagari for Urdu."
             if language
             else "Speak whatever language the caller speaks, and mirror their "
-                 "mix of languages rather than forcing one."
+                 "mix of languages rather than forcing one. Write each language "
+                 "in its own script rather than transliterating it."
         ),
         pace=(voice.get("pace") or "").strip(),
         # Derived from the chosen voice rather than asked for separately: the
