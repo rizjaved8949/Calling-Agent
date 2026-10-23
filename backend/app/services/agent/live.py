@@ -490,9 +490,20 @@ async def finish(tenant: Tenant, call_id: str, reason: str = "") -> None:
         if audio:
             # Transcoded and stored by the same path a browser upload takes, so
             # there is one answer to "where do recordings go".
-            call = await recording_service.store_audio(
-                tenant, call, audio, "audio/wav", transcode=True
-            )
+            try:
+                call = await recording_service.store_audio(
+                    tenant, call, audio, "audio/wav", transcode=True
+                )
+            except Exception:  # noqa: BLE001
+                # Storing is the one step that reaches the network, and the
+                # row must not go down with it: without this, a bucket having
+                # a bad minute cost the call its status and its transcript
+                # too, and the record said the call never ended.
+                log.exception("call %s: the recording could not be stored", call_id)
+                call.recording_state = RecordingState.FAILED
+                call.recording_error = "The recording could not be stored."
+                with contextlib.suppress(Exception):
+                    await call_repo.save_call(call)
         else:
             if call.recording_state is RecordingState.PENDING:
                 call.recording_state = RecordingState.ABSENT

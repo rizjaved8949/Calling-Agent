@@ -167,14 +167,25 @@ class CallSession:
             return None
         self._closed = True
         self.ended_reason = reason
-        if self._agent:
-            self._agent.close()
+        # Every step between here and harvesting the recording is wrapped,
+        # because the recording is the one thing that cannot be recreated.
+        # The conversation is already on disk by this point; an exception
+        # while shutting the model down used to throw it away and leave the
+        # call marked as having no audio at all.
+        with contextlib.suppress(Exception):
+            if self._agent:
+                self._agent.close()
         for task in (self._agent_task, self._pacer_task):
             if task:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await task
-        audio = self._recorder.finish() if self._recorder else None
+
+        audio = None
+        try:
+            audio = self._recorder.finish() if self._recorder else None
+        except Exception:  # noqa: BLE001
+            log.exception("call %s: the recording could not be mixed", self.call_id)
         if self.on_ended:
             with contextlib.suppress(Exception):
                 await self.on_ended(reason)
