@@ -357,3 +357,34 @@ def test_the_agent_is_told_not_to_ask_twice():
     assert "Remember everything they have already told you" in text
     assert "Never ask for any of it a second time" in text
     assert "not a script to read in order" in text
+
+
+def test_identity_comes_from_the_persona_not_the_material():
+    """Asked "which university is this?", the agent named the one in its KB.
+
+    It was not being disobedient. The corpus is UCP's: its name, its website
+    and its email are on nearly every page, so the most available answer to
+    "who is this?" is the wrong one. The persona said to present only as "a
+    university" and the material out-shouted it.
+
+    Identity has to be sourced explicitly, and the leak closed: a website or
+    an email domain names an organisation just as surely as its name does.
+    """
+    from app.services.agent import prompt
+
+    text = " ".join(prompt.build(
+        persona="You are the assistant for a university. Never name the university.",
+        context=("UNIVERSITY OF CENTRAL PUNJAB. Helpline 0800-00827. "
+                 "admissions@ucp.edu.pk. ucp.edu.pk. UCP is ranked highly."),
+    ).split())
+
+    assert "Who you are comes from these instructions, never from your reference material" in text
+    assert "not the name that happens to appear most often in your documents" in text
+    # The spelling-it-differently loophole. A live probe against the real
+    # corpus got the name right six times and then handed over
+    # admissions@ucp.edu.pk, so the address case is pinned by name.
+    assert "A name is a name however it is spelled" in text
+    assert "an email address and a website *are* its name, written down" in text
+    assert "what is your admissions email?" in text
+    # And it must not paper over the gap with an invention.
+    assert "Do not invent a different name" in text
