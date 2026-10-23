@@ -233,3 +233,52 @@ def test_a_finished_call_is_reported_as_over(client, tenant_factory, auth, monke
     body = client.get(f"/api/calls/{call.id}/session", headers=auth(key)).json()
     assert body["over"] is True
     assert body["live"] is False
+
+
+def test_pace_decides_how_long_a_silence_may_run():
+    """The dial that sets how fast the agent speaks also sets how long it
+    waits before answering, because to a caller those are one thing: how
+    hurried this feels. An agent told to speak slowly and then to interrupt
+    after half a second is not slow, it is rude.
+    """
+    from app.services.agent.gemini import turn_timing
+
+    base = {"prefix_ms": 300, "silence_ms": 700}
+    _, slow = turn_timing("slow", **base)
+    _, natural = turn_timing("natural", **base)
+    _, brisk = turn_timing("brisk", **base)
+
+    assert slow > natural > brisk, "pace must move the turn window"
+    assert natural == 700, "an unset pace must leave the deployment's own value"
+    assert turn_timing("", **base)[1] == 700
+    assert turn_timing("nonsense", **base)[1] == 700, "an unknown pace is not a guess"
+
+
+def test_the_turn_window_is_clamped():
+    """These come from a settings file somebody can edit. Zero means the agent
+    talks over every breath; ten seconds means it never answers."""
+    from app.services.agent.gemini import turn_timing
+
+    assert turn_timing("brisk", prefix_ms=0, silence_ms=0)[1] >= 200
+    assert turn_timing("slow", prefix_ms=99_999, silence_ms=99_999)[1] <= 5_000
+    assert turn_timing("natural", prefix_ms=0, silence_ms=700)[0] >= 50
+
+
+async def test_a_call_takes_its_turn_window_from_the_agent():
+    """Applied where the line's settings and the agent's pace meet, so every
+    way of starting a call gets it rather than three places remembering to."""
+    from app.services.agent.gemini import AgentPersona, LiveSettings
+    from app.services.agent.session import CallSession
+
+    def _make(pace: str) -> LiveSettings:
+        engine = LiveSettings(model="m", api_key="")
+        CallSession(
+            "pace-call",
+            send_to_caller=lambda _f: None,
+            live_settings=engine,
+            persona=AgentPersona(instructions="", greeting="", pace=pace),
+            record=False,
+        )
+        return engine
+
+    assert _make("slow").vad_silence_ms > _make("brisk").vad_silence_ms

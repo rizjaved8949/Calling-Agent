@@ -48,6 +48,21 @@ class Settings(BaseSettings):
     # Where webhooks are delivered. Meta and Infobip both need an absolute URL.
     public_base_url: str = ""
 
+    # ---- Turn taking ------------------------------------------------------
+    # How long the caller must be quiet before the agent decides they have
+    # finished, and how much audio before that counts as the start of speech.
+    #
+    # The whole budget for "why did it take so long to answer me" is this
+    # silence window, plus the pacer's jitter buffer, plus the model's own
+    # thinking. Only the first is worth tuning per deployment, and it is the
+    # one that cannot be guessed from a desk: a line with delay on it, or a
+    # language where people pause mid-sentence, wants longer. Too short and
+    # the agent talks over the caller; too long and it feels slow.
+    #
+    # These are the defaults. An agent's pace setting adjusts them per agent.
+    vad_prefix_ms: int = 300
+    vad_silence_ms: int = 700
+
     # ---- Capacity ---------------------------------------------------------
     # How many calls this process will carry at once. The eleventh is refused
     # with a reason rather than admitted to make all eleven stutter: a caller

@@ -26,7 +26,7 @@ from typing import Any, Awaitable, Callable
 
 from .audio_rate import FRAME_MS, PHONE_RATE, RateConverter, gemini_to_phone
 from . import engines
-from .gemini import AgentPersona, AgentUnavailable, LiveSettings
+from .gemini import AgentPersona, AgentUnavailable, LiveSettings, turn_timing
 from .pacer import HUMAN_PREROLL_FRAMES, PREROLL_FRAMES, FramePacer
 from .recorder import RECORD_RATE, TwoWayRecorder
 
@@ -61,6 +61,19 @@ class CallSession:
         self.on_transcript = on_transcript
         self.on_tool = on_tool
         self.on_ended = on_ended
+
+        # How long to let the caller's silence run before answering. Set here
+        # because this is the one place that holds both the line's settings
+        # and the agent's pace, so every way of starting a call — inbound,
+        # outbound, the browser test socket — gets the same treatment rather
+        # than three places remembering to do it.
+        from ...config import settings as _settings
+
+        live_settings.vad_prefix_ms, live_settings.vad_silence_ms = turn_timing(
+            persona.pace,
+            prefix_ms=_settings.vad_prefix_ms,
+            silence_ms=_settings.vad_silence_ms,
+        )
 
         # A call an employee placed from the dialer: a person from the start,
         # no model, and when they leave the call ends rather than an agent

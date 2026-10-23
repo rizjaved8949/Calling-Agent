@@ -193,6 +193,7 @@ async def persona_for(tenant: Tenant, call: Call | None = None) -> AgentPersona:
         greeting=(voice["greeting"] or "").strip(),
         voice=(voice["ttsVoice"] or "").strip(),
         language=language,
+        pace=(voice.get("pace") or "").strip(),
         tools=tool_catalogue.for_call(can_send_whatsapp=can_message),
     )
 

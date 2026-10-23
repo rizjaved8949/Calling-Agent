@@ -38,6 +38,10 @@ class AgentPersona:
     greeting: str = ""
     voice: str = ""
     language: str = ""
+    #: Carried here rather than only in the prompt: pace decides how fast the
+    #: agent speaks *and* how long it waits before answering, and the second
+    #: is a setting on the line rather than a sentence in the instructions.
+    pace: str = ""
     tools: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -54,6 +58,36 @@ class LiveSettings:
     # reads that as the caller speaking and cuts her off mid-sentence.
     vad_prefix_ms: int = 300
     vad_silence_ms: int = 700
+
+
+#: How much longer or shorter to wait for the caller to finish, by pace.
+#:
+#: The same dial that decides how fast the agent speaks decides how long it
+#: lets a silence run before answering, because to a caller they are one
+#: thing: how hurried this feels. An agent told to speak slowly and then
+#: interrupt after half a second is not slow, it is rude.
+#:
+#: Multipliers rather than fixed values, so a deployment that has tuned the
+#: base for its own line keeps that tuning when an agent is set to "slow".
+PACE_TURN_FACTOR = {
+    "slow": 1.4,       # for callers who pause to think, and poor lines
+    "natural": 1.0,
+    "brisk": 0.7,      # answers sooner, at the cost of cutting in more
+}
+
+
+def turn_timing(pace: str, *, prefix_ms: int, silence_ms: int) -> tuple[int, int]:
+    """(prefix, silence) in milliseconds for this agent's pace.
+
+    Clamped, because these come from a settings file somebody can edit: a
+    silence window of zero means the agent talks over every breath, and one of
+    ten seconds means it never answers at all.
+    """
+    factor = PACE_TURN_FACTOR.get((pace or "").strip().lower(), 1.0)
+    return (
+        max(50, min(2_000, round(prefix_ms))),
+        max(200, min(5_000, round(silence_ms * factor))),
+    )
 
 
 class AgentUnavailable(RuntimeError):
