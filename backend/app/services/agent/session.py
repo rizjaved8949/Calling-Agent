@@ -84,9 +84,13 @@ class CallSession:
         self.transcript: list[tuple[str, str]] = []
         self.ended_reason = ""
 
+        # Everything the far end hears goes through `_to_line`, which is also
+        # where it is recorded. Recording what was *sent* rather than what the
+        # model produced is the whole point: see `_to_line`.
+        self._transport = send_to_caller
         # A human's voice needs almost no buffering; the model's needs some.
         self._pacer = FramePacer(
-            send_to_caller,
+            self._to_line,
             keepalive=keepalive,
             preroll=HUMAN_PREROLL_FRAMES if human else PREROLL_FRAMES,
         )
@@ -95,6 +99,9 @@ class CallSession:
         # caller is upsampled once here rather than the agent downsampled on
         # every burst.
         self._caller_to_record = RateConverter(3, 2) if record else None
+        # Its own converter, not the caller's: each carries filter state
+        # across frames, and sharing one would smear the two voices together.
+        self._line_to_record = RateConverter(3, 2) if record else None
         self._agent_to_line = gemini_to_phone()
 
         self._agent: engines.Session | None = None
@@ -127,9 +134,31 @@ class CallSession:
         agent has already said is still queued, so it plays from its first
         word rather than being cut into.
         """
-        self._pacer.send = send_to_caller
+        self._transport = send_to_caller
         if self._pacer_task is None and not self._closed:
             self._pacer_task = asyncio.create_task(self._run_pacer())
+
+    def _to_line(self, frame: bytes) -> None:
+        """One 20 ms frame to the far end — and to the recording.
+
+        The recording is taken here, at the moment a frame actually goes down
+        the line, rather than when the model produced it. The model answers in
+        bursts: a five second reply arrives in a few hundred milliseconds, and
+        recording it on arrival wrote five seconds of speech into a fraction
+        of a second of timeline. The agent's track then ran ahead of the
+        clock, so it never padded for the silences in between, and every reply
+        landed earlier than the last until the two voices sat on top of each
+        other.
+
+        Taking it here also fixes barge-in for free. When the caller cuts in,
+        the queued frames are dropped and never reach the line — and now never
+        reach the recording either, instead of being mixed over the caller
+        saying the thing that interrupted.
+        """
+        self._transport(frame)
+        if self._recorder and self._line_to_record:
+            with contextlib.suppress(Exception):
+                self._recorder.feed("agent", self._line_to_record.process(frame))
 
     async def _start_agent(self) -> None:
         self._agent = engines.build(
@@ -229,18 +258,19 @@ class CallSession:
     def _on_agent_audio(self, pcm24: bytes, _rate: int) -> None:
         if self._closed or self.handler is not Handler.AGENT:
             return
-        if self._recorder:
-            self._recorder.feed("agent", pcm24)
+        # Not recorded here. This is the model's burst, not the line's
+        # timeline — `_to_line` records each frame as it actually goes out.
         self._pacer.offer(self._agent_to_line.process(pcm24))
 
     def feed_operator(self, pcm16: bytes) -> None:
         """A frame from the person who took the call, at 16 kHz."""
         if self._closed or self.handler is not Handler.OPERATOR or not pcm16:
             return
-        if self._recorder:
-            # Recorded on the agent's track: from the caller's point of view
-            # there is one voice answering, whoever it belongs to.
-            self._recorder.feed("agent", RateConverter(3, 2).process(pcm16))
+        # Recorded by `_to_line` on its way out, on the agent's track: from
+        # the caller's point of view there is one voice answering, whoever it
+        # belongs to. Recording it here as well would write it twice, and the
+        # old code built a fresh converter per frame, which loses the filter
+        # state between them and adds a click at every boundary.
         self._pacer.offer(pcm16)
 
     async def hand_over(self, send_to_operator: Callable[[bytes], None]) -> None:

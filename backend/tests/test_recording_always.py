@@ -166,3 +166,108 @@ async def test_nothing_is_recorded_when_the_company_asked_for_none():
     for _ in range(50):
         session.feed_caller(FRAME)
     assert await session.end("done") is None
+
+
+class _SpyRecorder:
+    """Notes what was fed, and when, without writing anything."""
+
+    def __init__(self) -> None:
+        self.fed: list[tuple[str, int]] = []
+        self.closed = False
+
+    def feed(self, side: str, pcm16: bytes) -> None:
+        self.fed.append((side, len(pcm16)))
+
+    def finish(self):
+        self.closed = True
+        return None
+
+    def bytes_for(self, side: str) -> int:
+        return sum(n for s, n in self.fed if s == side)
+
+
+async def test_the_agent_is_recorded_as_it_is_played_not_as_it_arrives():
+    """The model answers in bursts: a five second reply arrives in a fraction
+    of a second. Recording it on arrival wrote the whole reply into that
+    fraction of the timeline, so the agent's track ran ahead of the clock,
+    never padded for the silences between replies, and every answer landed
+    earlier than the last until the two voices sat on top of each other.
+    """
+    session = _session()
+    spy = _SpyRecorder()
+    session._recorder = spy
+
+    clock = {"t": 0.0}
+    session._pacer.clock = lambda: clock["t"]
+
+    # A whole reply from the model, all at once.
+    session._on_agent_audio(b"\x05\x06" * 24_000, 24_000)     # 2s at 24 kHz
+    assert spy.bytes_for("agent") == 0, (
+        "the model's burst was recorded on arrival instead of on the line"
+    )
+
+    # Now let the line drain, a frame at a time.
+    for _ in range(10):
+        clock["t"] += 0.02
+        session._pacer.tick()
+
+    assert spy.bytes_for("agent") > 0, "nothing was recorded as it played"
+    # One frame of line audio becomes one frame upsampled to the record rate;
+    # ten ticks must not have released the whole two-second reply.
+    assert spy.bytes_for("agent") < 24_000 * 2, (
+        "the whole reply went into the recording at once, which is the bug"
+    )
+    await session.end("done")
+
+
+async def test_audio_the_caller_never_heard_is_not_recorded():
+    """Barge-in. The caller cuts in, the queued frames are dropped and never
+    reach the line — so they must not reach the recording either, mixed over
+    the caller saying the very thing that interrupted."""
+    session = _session()
+    spy = _SpyRecorder()
+    session._recorder = spy
+
+    clock = {"t": 0.0}
+    session._pacer.clock = lambda: clock["t"]
+
+    session._on_agent_audio(b"\x05\x06" * 24_000, 24_000)
+    session._on_interrupted()          # the caller cut in before a single tick
+
+    for _ in range(10):
+        clock["t"] += 0.02
+        session._pacer.tick()
+
+    spoken = spy.bytes_for("agent")
+    # Keepalive silence may still go down the line; real speech must not.
+    assert all(side != "agent" or n <= FRAME_BYTES * 2 for side, n in spy.fed)
+    assert spoken <= FRAME_BYTES * 12, (
+        f"{spoken} bytes of dropped speech reached the recording"
+    )
+    await session.end("done")
+
+
+async def test_the_operator_is_recorded_once_not_twice():
+    """Their voice is recorded on its way out, like the agent's. Recording it
+    where it arrives as well would write every word twice."""
+    session = _session(human=True)
+    spy = _SpyRecorder()
+    session._recorder = spy
+
+    clock = {"t": 0.0}
+    session._pacer.clock = lambda: clock["t"]
+
+    for _ in range(5):
+        session.feed_operator(FRAME)
+    before = spy.bytes_for("agent")
+    assert before == 0, "the operator was recorded before anything was sent"
+
+    for _ in range(10):
+        clock["t"] += 0.02
+        session._pacer.tick()
+
+    sent = session._pacer.frames_sent
+    assert sent, "nothing was released to the line"
+    # One frame out, one frame recorded — not two.
+    assert spy.bytes_for("agent") <= sent * FRAME_BYTES * 2
+    await session.end("done")
