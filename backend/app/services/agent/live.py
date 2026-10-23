@@ -28,6 +28,7 @@ from ...repositories import knowledge
 from .. import recordings as recording_service
 from .. import reports
 from . import prompt
+from . import voices
 from . import tools as tool_catalogue
 from .gemini import AgentPersona, LiveSettings
 from .session import CallSession
@@ -173,6 +174,11 @@ async def persona_for(tenant: Tenant, call: Call | None = None) -> AgentPersona:
                  "mix of languages rather than forcing one."
         ),
         pace=(voice.get("pace") or "").strip(),
+        # Derived from the chosen voice rather than asked for separately: the
+        # two have to agree, and a second setting is a second thing to get
+        # wrong. A woman's voice saying "main karta hoon" is audibly wrong to
+        # every Urdu speaker and invisible in an English transcript.
+        voice_gender=voices.gender_of(voice.get("ttsVoice") or ""),
         tone=voice.get("tone") or "",
         escalation=voice.get("escalation") or "",
         extra=voice.get("extraRules") or "",

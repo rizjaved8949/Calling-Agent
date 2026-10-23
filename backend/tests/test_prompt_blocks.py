@@ -388,3 +388,68 @@ def test_identity_comes_from_the_persona_not_the_material():
     assert "what is your admissions email?" in text
     # And it must not paper over the gap with an invention.
     assert "Do not invent a different name" in text
+
+
+def test_the_agent_speaks_in_the_gender_of_its_own_voice():
+    """A woman's voice saying "main karta hoon" is wrong to every Urdu speaker
+    on the line, and invisible to an English reader of the transcript.
+
+    Taken from the voice already chosen rather than asked for separately: the
+    two must agree, and a second setting is a second thing to get wrong.
+    """
+    from app.services.agent import prompt, voices
+
+    assert voices.gender_of("Aoede") == "female"
+    assert voices.gender_of("Kore") == "female"
+    assert voices.gender_of("Puck") == "male"
+    assert voices.gender_of("Umbriel") == "", "ungrouped voices must not guess"
+
+    female = prompt.build(persona="You answer calls.", context="",
+                          voice_gender="female")
+    assert "karti hoon" in female and "kar sakti hoon" in female
+    assert 'never \u201ckarta hoon\u201d' in female or "never" in female
+
+    male = prompt.build(persona="You answer calls.", context="",
+                        voice_gender="male")
+    assert "karta hoon" in male
+
+    # The caller's gender is not guessable from a voice or a name.
+    for text in (female, male):
+        assert "You do not know whether the caller is a man or a woman" in text
+        assert "never guess" in text
+
+    # An unknown voice says nothing about gender rather than guessing wrong.
+    silent = prompt.build(persona="You answer calls.", context="", voice_gender="")
+    assert "karti hoon" not in silent and "karta hoon" not in silent
+
+
+def test_the_goodbye_is_said_once():
+    """It closed, then closed again, while the caller waited to find out
+    whether the call was over."""
+    from app.services.agent import prompt
+
+    text = " ".join(prompt.build(persona="You answer calls.", context="").split())
+    assert "Say goodbye once" in text
+    assert "do not say it again" in text
+    assert "A question is not an ending" in text
+
+
+def test_the_right_figure_is_used_when_several_are_given():
+    """The caller gave matric and intermediate marks; the agent answered on
+    matric, which was both older and lower. The caller cannot tell."""
+    from app.services.agent import prompt
+
+    text = " ".join(prompt.build(persona="You answer calls.", context="").split())
+    assert "When they give you more than one figure, use the right one" in text
+    assert "say which you used" in text
+    assert "most recent qualification" in text
+
+
+def test_an_unanswerable_question_becomes_a_real_promise():
+    from app.services.agent import prompt
+
+    text = " ".join(prompt.build(persona="You answer calls.", context="",
+                                 can_send_whatsapp=True).split())
+    assert "pass the question to the team" in text
+    assert "the answer will come to them on WhatsApp" in text
+    assert "call send_whatsapp_message with their question written out" in text

@@ -66,3 +66,20 @@ def catalogue() -> dict[str, Any]:
 
 def known(name: str) -> bool:
     return name.strip() in ALL_NAMES
+
+
+def gender_of(name: str) -> str:
+    """"female", "male", or "" when this voice is not one we have grouped.
+
+    Not cosmetic. In Urdu, Hindi, Punjabi and Arabic the verb agrees with the
+    speaker, so an agent with a woman's voice saying "karta hoon" is audibly
+    wrong in a way no English-speaking reviewer would catch. The voice is
+    already chosen on the settings screen, so the grammar can follow it rather
+    than being a second thing to remember.
+    """
+    chosen = name.strip().lower()
+    if any(chosen == voice.lower() for voice, _ in FEMALE):
+        return "female"
+    if any(chosen == voice.lower() for voice, _ in MALE):
+        return "male"
+    return ""
