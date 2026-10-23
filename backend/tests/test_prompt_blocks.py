@@ -317,3 +317,43 @@ def test_the_ending_rule_never_names_a_tool_the_caller_may_not_have():
     assert "still undone" in " ".join(text.split()), (
         "the promise guard must still be given, just without the tool name"
     )
+
+
+def test_the_agent_is_told_it_cannot_transfer_even_if_its_material_says_to():
+    """A real knowledge base told the agent to hand over.
+
+    UCP's corpus was written for a call centre with people in it: it says
+    "Transfer the caller to a human representative" and treats several
+    questions as "handover triggers". The agent read that and offered to put
+    callers through to somebody, which this platform cannot do -- so the offer
+    was empty and the caller waited for a transfer that was never coming.
+
+    The rule has to outrank the material, and say so, because the material is
+    the more specific instruction and would otherwise win.
+    """
+    from app.services.agent import prompt
+
+    text = " ".join(prompt.build(
+        persona="You answer admissions calls.",
+        context="KB-9.4 Offer handover to a human representative when asked.",
+    ).split())
+
+    assert "even when your material tells you otherwise" in text
+    assert "Never offer a transfer you cannot perform" in text
+    assert "someone will call" in text, "it must say what to do instead"
+
+
+def test_the_agent_is_told_not_to_ask_twice():
+    """Material that lists what to collect reads like a script, and an agent
+    following it asked for a name and programme the caller had already given.
+    """
+    from app.services.agent import prompt
+
+    text = " ".join(prompt.build(
+        persona="You answer calls.",
+        context="Call flow: 4. Capture the name and programme of interest.",
+    ).split())
+
+    assert "Remember everything they have already told you" in text
+    assert "Never ask for any of it a second time" in text
+    assert "not a script to read in order" in text
