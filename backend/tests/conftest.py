@@ -294,4 +294,48 @@ def firebase(monkeypatch):
     monkeypatch.setattr(user_repo, "consume_invite", fake_consume_invite)
     monkeypatch.setattr(user_repo, "list_invites", fake_list_invites)
     monkeypatch.setattr(user_repo, "revoke_invite", fake_revoke_invite)
+
+    # ---- the Admin SDK itself --------------------------------------------
+    # Creating a company owner goes through Firebase directly rather than
+    # through the helpers above, and left unfaked it reaches the real
+    # project. That is how this fixture read on a developer's machine, where
+    # the console-downloaded key sits in `google/` and `firebase_configured`
+    # is therefore true: the suite was quietly creating real users in a live
+    # Firebase project. On CI, where that untracked folder cannot exist, the
+    # same route answered 503 "sign-in is not configured" and the test failed
+    # — which it had done on every commit since the workflow was added.
+    #
+    # Faked here so the route is exercised in full and reaches nobody's
+    # Google account, whoever runs it.
+    from firebase_admin import auth as fb_auth
+
+    from app.services import firebase as firebase_service
+
+    accounts: dict[str, Any] = {}
+
+    class _Account:
+        def __init__(self, uid: str, email: str) -> None:
+            self.uid = uid
+            self.email = email
+
+    def fake_get_user_by_email(email: str, app: Any = None) -> Any:
+        account = accounts.get(email)
+        if account is None:
+            raise fb_auth.UserNotFoundError(f"no user for {email}")
+        return account
+
+    def fake_create_user(*, email: str, password: str = "", display_name: str = "",
+                         email_verified: bool = False, app: Any = None) -> Any:
+        accounts[email] = _Account(f"uid-{len(accounts) + 1}", email)
+        return accounts[email]
+
+    def fake_update_user(uid: str, app: Any = None, **_changes: Any) -> Any:
+        return next((a for a in accounts.values() if a.uid == uid), None)
+
+    monkeypatch.setattr(firebase_service, "configured", lambda: True)
+    monkeypatch.setattr(firebase_service, "_app", lambda: object())
+    monkeypatch.setattr(fb_auth, "get_user_by_email", fake_get_user_by_email)
+    monkeypatch.setattr(fb_auth, "create_user", fake_create_user)
+    monkeypatch.setattr(fb_auth, "update_user", fake_update_user)
+
     return users
