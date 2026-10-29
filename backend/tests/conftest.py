@@ -9,6 +9,7 @@ syntax, which is where a tenant-isolation bug would actually show up.
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
@@ -125,7 +126,7 @@ def _reset_rate_limits():
 
 
 @pytest.fixture
-def fake_db(monkeypatch) -> FakeSupabase:
+def fake_db(monkeypatch) -> Iterator[FakeSupabase]:
     import importlib
 
     from app.db import supabase as supabase_module
