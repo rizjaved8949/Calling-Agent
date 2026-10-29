@@ -89,12 +89,22 @@ services:
       # a paid plan can take more, and this is the one number to raise.
       - key: MAX_CONCURRENT_CALLS
         value: "10"
-      # Calls our own /health on a timer so the free plan's idle timer never
-      # reaches fifteen minutes. Set this to 0 on any paid plan: a paid
-      # instance does not sleep, so the requests are pure noise. It cannot
-      # wake an instance that is already asleep — see services/keepalive.py.
+      # Off, and off is the default now because turning it on cost this
+      # account every service it had.
+      #
+      # It calls our own /health on a timer so a free instance never reaches
+      # its fifteen-minute idle timeout. That works, and the cost of it
+      # working is that the instance then runs around the clock: roughly 730
+      # hours a month against a 750-hour allowance shared by every free
+      # service on the account. The allowance ran out and Render suspended
+      # all seven of them, backend included.
+      #
+      # On a paid instance leave it at 0 — a paid instance never sleeps, so
+      # the pings are pure noise. Only set it above 0 on a free instance that
+      # is the *only* free service on the account, and even then know that it
+      # is spending the whole monthly allowance to do it.
       - key: KEEPALIVE_SECONDS
-        value: "600"
+        value: "0"
       # Render provides the service's own URL. Meta, Infobip and Google all
       # need an absolute address, and the Google OAuth redirect is derived from
       # this one — so getting it from Render keeps it right across renames.

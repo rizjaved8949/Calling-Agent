@@ -9,7 +9,9 @@ data/
 live.log
 live.err
 
-# Backups of .env are still .env: same secrets, different name.
-.env.backup*
-.env.*.backup
-.env.bak
+# Anything shaped like an env file holds the real credentials, whatever it is
+# called — a backup, a copy made to paste into a host, a dated snapshot. One
+# of these was very nearly committed, so the rule is the shape, not the name.
+.env*
+# Except the one that exists to be read: names only, no values.
+!.env.example
