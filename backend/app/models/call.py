@@ -124,7 +124,16 @@ class Call(BaseModel):
     line_id: str = Field(default="", alias="lineId")
     # "ai": the agent talks. "human": an employee placed it from the web
     # dialer and talks through their browser; no model is started.
-    mode: str = "ai"
+    #
+    # Stored as `callMode`, not `mode`. The older TypeScript dashboard reads
+    # `mode` as who handled the call ("agent"/"operator"), and the repository
+    # writes that legacy alias over the canonical fields on every save
+    # (`repositories/calls._legacy_aliases`). Sharing the key meant every
+    # saved dialer call came back as "agent", so the AI answered calls an
+    # employee had placed to make themselves. Rows from before this read
+    # their legacy `mode` here, which is never "human": exactly how they
+    # behaved already.
+    mode: str = Field(default="ai", alias="callMode")
     # The person who placed a human call, so "My calls" can find it.
     placed_by: str = Field(default="", alias="placedBy")
 

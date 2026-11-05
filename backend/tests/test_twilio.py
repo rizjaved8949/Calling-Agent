@@ -1270,10 +1270,40 @@ def test_a_campaign_on_a_twilio_line_dials_through_twilio(dialer, fake_db, monke
     assert any(r.url.path.endswith(f"/Calls/{CALL_SID}.json") for r in dialer["api"].requests)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "Existing bug, not Twilio's: calls.save_call writes the legacy alias "
-    "'mode' (= handled_by, 'agent') over Call.mode, so a dialer call reads "
-    "back as 'agent' and the AI answers it. Remove this mark with the fix."))
+def _answer_and_stream(client, call_id: str) -> tuple[str, str]:
+    """Twilio reporting the dialer's call picked up: (socket path, token)."""
+    answered = _twilio_post(client, f"/api/webhooks/twilio/outbound/tw1/{call_id}",
+                            {"CallSid": CALL_SID, "CallStatus": "in-progress",
+                             "Direction": "outbound-api"})
+    url, token = _stream_of(answered.text)
+    return url.removeprefix("wss://api.example.com"), token
+
+
+def test_an_ai_twilio_dialer_call_connects_the_agent(client, dialer, fake_db, monkeypatch):
+    from app.api.routes import media
+    from app.services.agent.session import CallSession, Handler
+    from tests.test_call_mode import _wait_for_session
+
+    monkeypatch.setattr(media, "_twilio_attached", set())
+    agent_started: list[str] = []
+
+    async def start_agent(self):
+        agent_started.append(self.call_id)
+
+    monkeypatch.setattr(CallSession, "_start_agent", start_agent)
+    resp = client.post("/api/calls", json={"to": "+923001112222", "lineId": "tw1"},
+                       headers=dialer["headers"])
+    call_id = resp.json()["id"]
+    assert resp.json()["mode"] == "ai"
+
+    path, token = _answer_and_stream(client, call_id)
+    with client.websocket_connect(path) as phone:
+        _start(phone, token, call_sid=CALL_SID)
+        session = _wait_for_session(call_id)
+        assert not session.human and session.handler is Handler.AGENT
+        assert call_id in agent_started, "the agent was not started"
+
+
 def test_an_employee_talks_on_a_twilio_call_through_the_dialer(client, dialer, fake_db,
                                                               monkeypatch):
     """Operator mode, end to end: the dialer places a human call, Twilio
@@ -1301,17 +1331,15 @@ def test_an_employee_talks_on_a_twilio_call_through_the_dialer(client, dialer, f
     assert call.mode == "human"
 
     # They pick up: Twilio asks what to do and is told to stream.
-    answered = _twilio_post(client, f"/api/webhooks/twilio/outbound/tw1/{call.id}",
-                            {"CallSid": CALL_SID, "CallStatus": "in-progress",
-                             "Direction": "outbound-api"})
-    url, token = _stream_of(answered.text)
+    from tests.test_call_mode import _wait_for_session
+
+    path, token = _answer_and_stream(client, call.id)
     stream_sid = "MZ" + "2" * 32
 
-    with client.websocket_connect(url.removeprefix("wss://api.example.com")) as phone:
+    with client.websocket_connect(path) as phone:
         _start(phone, token, call_sid=CALL_SID, stream_sid=stream_sid)
-        _media(phone, bytes([0xFF]) * 160)     # the session exists once audio flows
-        session = live.get(call.id)
-        assert session is not None and session.human, "an agent took a dialer call"
+        session = _wait_for_session(call.id)
+        assert session.human, "an agent took a dialer call"
 
         operator_token = playback.mint("700", call.id, ttl=600)
         with client.websocket_connect(
