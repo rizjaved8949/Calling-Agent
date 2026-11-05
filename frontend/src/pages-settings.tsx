@@ -116,8 +116,8 @@ function CompanyTab({company, save, canManage}: TabProps) {
     </Section>
     <Section title="Numbers and credentials">
       <p className="small muted" style={{margin: 0}}>
-        Each number carries its own Meta or Infobip credentials, so they are set on the
-        number itself rather than here.
+        Each number carries its own Meta, Infobip or Twilio credentials, so they are set on
+        the number itself rather than here.
       </p>
       <div className="row"><Link className="button outline" to="/app/numbers">Go to Numbers</Link></div>
     </Section>

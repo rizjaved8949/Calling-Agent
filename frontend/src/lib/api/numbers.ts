@@ -7,7 +7,7 @@
  */
 import { request } from './http';
 
-export type NumberKind = 'sim' | 'whatsapp';
+export type NumberKind = 'sim' | 'whatsapp' | 'twilio';
 export type NumberMode = 'inbound' | 'outbound' | 'both';
 export type NumberStatus = 'pending' | 'verified' | 'failed';
 
@@ -29,6 +29,8 @@ export type PhoneNumber = {
   usePlatformCredentials: boolean;
   createdAt: number;
   webhookUrl: string | null;
+  /** Twilio only: where Twilio reports how a call went ("Call status changes"). */
+  statusCallbackUrl: string | null;
   credentials: {
     metaPhoneNumberId: string | null;
     wabaId: string | null;
@@ -38,6 +40,11 @@ export type PhoneNumber = {
     infobipApiKey: string | null;
     infobipBaseUrl: string | null;
     infobipCallsConfigurationId: string | null;
+    twilioAccountSid: string | null;
+    /** A hint such as "…9f3c", never the token itself. */
+    twilioAuthToken: string | null;
+    /** Found by verification ("PN…"), never typed. */
+    twilioPhoneNumberSid: string | null;
   };
 };
 
@@ -50,6 +57,8 @@ export type NumberCredentials = {
   infobipApiKey?: string;
   infobipBaseUrl?: string;
   infobipCallsConfigurationId?: string;
+  twilioAccountSid?: string;
+  twilioAuthToken?: string;
 };
 
 export type NumberCreate = NumberCredentials & {
@@ -130,4 +139,30 @@ export function numberName(n: PhoneNumber): string {
 
 export function canCallOut(n: PhoneNumber): boolean {
   return n.status === 'verified' && (n.mode === 'outbound' || n.mode === 'both');
+}
+
+/**
+ * An ordinary phone line: dialled like any number, whoever carries the call.
+ *
+ * Infobip and Twilio differ in how the audio travels, not in what a company
+ * can do with the number, so everything that asks "is this a phone line?"
+ * asks this rather than comparing with 'sim' and quietly leaving Twilio out.
+ */
+export function isPhoneLine(n: PhoneNumber | { kind: NumberKind }): boolean {
+  return n.kind === 'sim' || n.kind === 'twilio';
+}
+
+/** The company whose console the credentials come from. */
+export function providerName(kind: NumberKind): 'Infobip' | 'Twilio' | 'Meta' {
+  return kind === 'whatsapp' ? 'Meta' : kind === 'twilio' ? 'Twilio' : 'Infobip';
+}
+
+/** How a number describes itself on a card or in a list. */
+export function numberKindLabel(kind: NumberKind): string {
+  return kind === 'whatsapp' ? 'WhatsApp (Meta)' : `Phone line (${providerName(kind)})`;
+}
+
+/** The short form for a picker: "Phone (Twilio) · ", "WhatsApp · ". */
+export function numberKindPrefix(kind: NumberKind): string {
+  return kind === 'whatsapp' ? 'WhatsApp · ' : `Phone (${providerName(kind)}) · `;
 }

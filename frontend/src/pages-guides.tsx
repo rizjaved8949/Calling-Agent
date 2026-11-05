@@ -69,7 +69,7 @@ export function GuidesScreen() {
       <div className="form-row">
         <div className="field" style={{flex: 1}}>
           <label>{t('Search the guides')}</label>
-          <input className="input" value={search} placeholder="Infobip, template, recording…"
+          <input className="input" value={search} placeholder="Infobip, Twilio, template, recording…"
             onChange={e => setSearch(e.target.value)}/>
         </div>
       </div>

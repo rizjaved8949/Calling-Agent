@@ -11,14 +11,15 @@ import React, {useCallback, useEffect, useState} from 'react';
 import {Link} from 'react-router-dom';
 import {
   CheckCircle2, Copy, Loader2, MessageCircle, Phone, Plus, RefreshCw, Trash2, X, XCircle,
-  PhoneIncoming, PhoneOutgoing, Pencil, CircleDashed,
+  PhoneIncoming, PhoneOutgoing, Pencil, CircleDashed, PhoneCall,
 } from 'lucide-react';
 import {Badge, Button, Empty, PageHead} from './app';
 import {CopyField, Loading, Modal, Section, TextInput, useConfirm} from './ui';
 import {useApp} from './app-context';
 import {workspace, type Agent, type KnowledgeBase} from './lib/api/workspace';
 import {
-  numbers as api, numberName, type NumberCreate, type NumberKind, type NumberMode, type PhoneNumber,
+  numbers as api, numberName, numberKindLabel, providerName,
+  type NumberCreate, type NumberKind, type NumberMode, type PhoneNumber,
 } from './lib/api/numbers';
 
 function errorText(cause: unknown, fallback: string): string {
@@ -47,6 +48,7 @@ const EMPTY: Draft = {
   kind: 'sim', label: '', phoneNumber: '', mode: 'both', usePlatformCredentials: false,
   metaPhoneNumberId: '', wabaId: '', accessToken: '', appSecret: '', verifyToken: '',
   infobipApiKey: '', infobipBaseUrl: '', infobipCallsConfigurationId: '',
+  twilioAccountSid: '', twilioAuthToken: '',
 };
 
 function ConnectNumber({existing, platformAllowed, onDone, onClose}: {
@@ -62,12 +64,15 @@ function ConnectNumber({existing, platformAllowed, onDone, onClose}: {
     wabaId: existing.credentials.wabaId ?? '',
     infobipBaseUrl: existing.credentials.infobipBaseUrl ?? '',
     infobipCallsConfigurationId: existing.credentials.infobipCallsConfigurationId ?? '',
+    twilioAccountSid: existing.credentials.twilioAccountSid ?? '',
   } : EMPTY);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<PhoneNumber | null>(null);
   const set = (patch: Partial<Draft>) => setD(old => ({...old, ...patch}));
   const wa = d.kind === 'whatsapp';
+  const twilio = d.kind === 'twilio';
+  const provider = providerName(d.kind);
   const platform = d.usePlatformCredentials;
   // A stored secret is never sent back, so the box is empty either way. The
   // last four characters go on the label as a "Saved" chip instead, because an
@@ -79,28 +84,57 @@ function ConnectNumber({existing, platformAllowed, onDone, onClose}: {
     if (!platform && !editing) {
       if (wa) need.push(['Phone number ID', d.metaPhoneNumberId], ['WhatsApp Business Account ID', d.wabaId],
         ['Access token', d.accessToken], ['App secret', d.appSecret]);
+      else if (twilio) need.push(['Account SID', d.twilioAccountSid], ['Auth Token', d.twilioAuthToken]);
       else need.push(['API key', d.infobipApiKey], ['Base URL', d.infobipBaseUrl]);
     }
     return need.filter(([, v]) => !v.trim()).map(([k]) => k);
   };
 
+  /**
+   * The shapes a value has to have before it is worth asking the provider.
+   *
+   * Twilio answers a mistyped Account SID with an HTTP 401 and nothing else,
+   * which reads to a company as "my credentials are wrong" when in fact one
+   * character was dropped on the way across. Saying so here costs a round trip
+   * and names the field.
+   */
+  const malformed = (): string => {
+    if (!twilio) return '';
+    const sid = d.twilioAccountSid.trim();
+    const token = d.twilioAuthToken.trim();
+    if (!platform && sid && !/^AC[0-9a-fA-F]{32}$/.test(sid))
+      return 'The Account SID starts with AC and is 34 characters. Copy it from Twilio Console → Account Info.';
+    if (!platform && token && token.length !== 32)
+      return 'The Auth Token is 32 characters. Click Show next to it in the Twilio Console and copy it again.';
+    if (!d.phoneNumber.trim().startsWith('+'))
+      return 'Use the full international format, starting with + and the country code.';
+    return '';
+  };
+
   const submit = async () => {
     const gaps = missing();
     if (gaps.length) {setError('Still needed: ' + gaps.join(', ') + '.'); return}
+    const bad = malformed();
+    if (bad) {setError(bad); return}
     setBusy(true); setError('');
     try {
+      // Whitespace comes along with every paste out of a provider console, and
+      // a trailing space in an Account SID is invisible but fatal.
       const shared = wa
-        ? {metaPhoneNumberId: d.metaPhoneNumberId, wabaId: d.wabaId, accessToken: d.accessToken,
-           appSecret: d.appSecret, verifyToken: d.verifyToken}
-        : {infobipApiKey: d.infobipApiKey, infobipBaseUrl: d.infobipBaseUrl,
-           infobipCallsConfigurationId: d.infobipCallsConfigurationId};
+        ? {metaPhoneNumberId: d.metaPhoneNumberId.trim(), wabaId: d.wabaId.trim(),
+           accessToken: d.accessToken.trim(), appSecret: d.appSecret.trim(),
+           verifyToken: d.verifyToken.trim()}
+        : twilio
+          ? {twilioAccountSid: d.twilioAccountSid.trim(), twilioAuthToken: d.twilioAuthToken.trim()}
+          : {infobipApiKey: d.infobipApiKey.trim(), infobipBaseUrl: d.infobipBaseUrl.trim(),
+             infobipCallsConfigurationId: d.infobipCallsConfigurationId.trim()};
       const saved = existing
         ? await api.update(existing.id, {
-            label: d.label, phoneNumber: d.phoneNumber, mode: d.mode,
+            label: d.label.trim(), phoneNumber: d.phoneNumber.trim(), mode: d.mode,
             usePlatformCredentials: d.usePlatformCredentials, ...shared,
           })
         : await api.create({
-            kind: d.kind, label: d.label, phoneNumber: d.phoneNumber, mode: d.mode,
+            kind: d.kind, label: d.label.trim(), phoneNumber: d.phoneNumber.trim(), mode: d.mode,
             usePlatformCredentials: d.usePlatformCredentials, ...shared,
           });
       setResult(saved);
@@ -112,6 +146,10 @@ function ConnectNumber({existing, platformAllowed, onDone, onClose}: {
 
   if (result) {
     const ok = result.status === 'verified';
+    // Read the provider back off the saved record rather than the draft, so
+    // this panel describes what was actually stored.
+    const twilioResult = result.kind === 'twilio';
+    const waResult = result.kind === 'whatsapp';
     return <Modal width={660} title={ok ? 'Number connected' : 'Saved, but not verified'} onClose={onClose}>
       <div className="stack">
         <div className="row" style={{gap: 12, alignItems: 'flex-start'}}>
@@ -121,10 +159,24 @@ function ConnectNumber({existing, platformAllowed, onDone, onClose}: {
             <p className="small muted" style={{margin: '4px 0 0'}}>{result.statusDetail}</p>
           </div>
         </div>
-        {result.webhookUrl && <>
-          <CopyField label={wa ? 'Callback URL — paste into your Meta app (WhatsApp → Configuration)' : 'Call events URL — paste into your Infobip Calls application'} value={result.webhookUrl}/>
-          {wa && <p className="help">Subscribe the webhook to <b>messages</b> and <b>calls</b>, and use the same verify token you entered here.</p>}
-        </>}
+        {result.webhookUrl && (twilioResult ? <>
+          {/* Twilio wants two addresses on the number: where to ask what to do
+              with a call, and where to report how it went. Verification sets
+              both for the company, so these are a fallback, said as one. */}
+          <CopyField label="Voice URL — Twilio → Phone Numbers → Active numbers → your number → Voice configuration → “A call comes in” (Webhook, HTTP POST)"
+            value={result.webhookUrl}/>
+          {result.statusCallbackUrl && <CopyField
+            label="Status callback URL — the same page, under “Call status changes”"
+            value={result.statusCallbackUrl}/>}
+          <p className="help">
+            Both of these are normally pointed at us automatically when the number
+            is verified. Paste them in by hand only if the message above says to,
+            or if calls to the number never arrive.
+          </p>
+        </> : <>
+          <CopyField label={waResult ? 'Callback URL — paste into your Meta app (WhatsApp → Configuration)' : 'Call events URL — paste into your Infobip Calls application'} value={result.webhookUrl}/>
+          {waResult && <p className="help">Subscribe the webhook to <b>messages</b> and <b>calls</b>, and use the same verify token you entered here.</p>}
+        </>)}
         {ok
           ? <div className="notice">Next: create an agent and give it a knowledge base, then come back and pick it as this number’s {result.mode === 'outbound' ? 'outbound' : 'inbound'} agent.</div>
           : <div className="notice danger">Fix the credentials and press “Edit” on the number, or “Verify again” once you have fixed it at the provider.</div>}
@@ -145,8 +197,9 @@ function ConnectNumber({existing, platformAllowed, onDone, onClose}: {
     return <Modal width={660} title="Connect a number" onClose={onClose}>
       <div className="stack">
         <p className="muted small" style={{margin: 0}}>Where did you get the number?</p>
-        <div className="preset-grid">
+        <div className="preset-grid three">
           {choice('sim', Phone, 'Phone line (Infobip)', 'A SIM / voice number bought in your Infobip account. Customers call it like any phone number.')}
+          {choice('twilio', PhoneCall, 'Phone line (Twilio)', 'A number bought in your Twilio account. Customers call it like any phone number.')}
           {choice('whatsapp', MessageCircle, 'WhatsApp (Meta)', 'A WhatsApp Business number from Meta, for WhatsApp calls and messages.')}
         </div>
         <div className="row" style={{justifyContent: 'flex-end'}}>
@@ -157,11 +210,14 @@ function ConnectNumber({existing, platformAllowed, onDone, onClose}: {
     </Modal>;
   }
 
-  return <Modal width={660} title={editing ? 'Edit number' : wa ? 'WhatsApp number' : 'Phone line'} onClose={onClose}>
+  return <Modal width={660} title={editing ? 'Edit number' : wa ? 'WhatsApp number' : `Phone line (${provider})`} onClose={onClose}>
     <div className="stack">
       <div className="field-grid">
         <TextInput label="Phone number" required value={d.phoneNumber} onChange={v => set({phoneNumber: v})}
-          placeholder="+92 300 1112222" help="With the country code, as callers dial it."/>
+          placeholder={twilio ? '+15551234567' : '+92 300 1112222'}
+          help={twilio
+            ? 'Exactly as Twilio shows it under Phone Numbers → Active numbers: the full international form, starting with + and the country code.'
+            : 'With the country code, as callers dial it.'}/>
         <TextInput label="Name" value={d.label} onChange={v => set({label: v})} placeholder="Support line"/>
       </div>
 
@@ -181,7 +237,7 @@ function ConnectNumber({existing, platformAllowed, onDone, onClose}: {
       {platformAllowed && <label className="check">
         <input type="checkbox" checked={d.usePlatformCredentials}
           onChange={e => set({usePlatformCredentials: e.target.checked})}/>
-        <span><b>Use the platform’s own {wa ? 'Meta' : 'Infobip'} credentials</b>
+        <span><b>Use the platform’s own {provider} credentials</b>
           <div className="help">Allowed for this account by the platform operator. Leave
             the credential fields below empty and the server's own are used.</div></span>
       </label>}
@@ -209,6 +265,21 @@ function ConnectNumber({existing, platformAllowed, onDone, onClose}: {
           <TextInput label="Webhook verify token" type="password" value={d.verifyToken} onChange={v => set({verifyToken: v})}
             saved={saved(existing?.credentials.verifyToken)} help={'Any phrase you choose. Type the same one into Meta when you add the callback URL.'}/>
         </div>
+      </> : twilio ? <>
+        <div className="notice small">
+          In the <b>Twilio Console</b> home page, under <b>Account Info</b>, you will
+          find your <b>Account SID</b> and <b>Auth Token</b> (click Show). The number
+          must be in the same Twilio account and have <b>Voice</b> capability.
+        </div>
+        <div className="field-grid">
+          <TextInput label="Account SID" required={!editing} value={d.twilioAccountSid}
+            onChange={v => set({twilioAccountSid: v})} placeholder="AC…"
+            help="Console home → Account Info. Starts with AC."/>
+          <TextInput label="Auth Token" required={!editing} type="password" value={d.twilioAuthToken}
+            onChange={v => set({twilioAuthToken: v})}
+            saved={saved(existing?.credentials.twilioAuthToken)}
+            help="Console home → Account Info → Show. Used to place calls and to check every request really comes from Twilio."/>
+        </div>
       </> : <>
         <div className="notice small">In the <b>Infobip portal</b>, your base URL and API keys are on the home page (Developers → API keys). The key needs the <b>Voice / Calls</b> scope.</div>
         <div className="field-grid">
@@ -227,7 +298,7 @@ function ConnectNumber({existing, platformAllowed, onDone, onClose}: {
       <div className="row" style={{justifyContent: 'flex-end'}}>
         {!editing && <Button variant="secondary" onClick={() => setStep('kind')}>Back</Button>}
         <Button onClick={() => void submit()} disabled={busy}>
-          {busy ? <><Loader2 size={15} className="spin"/> Checking with {wa ? 'Meta' : 'Infobip'}…</> : editing ? 'Save and verify' : 'Connect and verify'}
+          {busy ? <><Loader2 size={15} className="spin"/> Checking with {provider}…</> : editing ? 'Save and verify' : 'Connect and verify'}
         </Button>
       </div>
     </div>
@@ -245,6 +316,7 @@ function NumberCard({n, agents, bases, canManage, onChange, onEdit, onRemove}: {
   const {toast} = useApp();
   const [busy, setBusy] = useState('');
   const wa = n.kind === 'whatsapp';
+  const twilio = n.kind === 'twilio';
   const inbound = n.mode !== 'outbound';
   const outbound = n.mode !== 'inbound';
   const verified = n.status === 'verified';
@@ -283,10 +355,10 @@ function NumberCard({n, agents, bases, canManage, onChange, onEdit, onRemove}: {
   return <div className="card stack">
     <div className="row between" style={{alignItems: 'flex-start', flexWrap: 'wrap'}}>
       <div className="row" style={{alignItems: 'flex-start'}}>
-        <div className="brand-mark" style={{width: 42, height: 42}}>{wa ? <MessageCircle size={20}/> : <Phone size={20}/>}</div>
+        <div className="brand-mark" style={{width: 42, height: 42}}>{wa ? <MessageCircle size={20}/> : twilio ? <PhoneCall size={20}/> : <Phone size={20}/>}</div>
         <div>
           <strong style={{fontSize: '1.05rem'}}>{n.phoneNumber}</strong>
-          <div className="small muted">{n.label} · {wa ? 'WhatsApp (Meta)' : 'Phone line (Infobip)'} · {MODE_LABEL[n.mode]}{n.usePlatformCredentials ? ' · platform credentials' : ''}</div>
+          <div className="small muted">{n.label} · {numberKindLabel(n.kind)} · {MODE_LABEL[n.mode]}{n.usePlatformCredentials ? ' · platform credentials' : ''}</div>
         </div>
       </div>
       <div className="row wrap">
@@ -315,8 +387,19 @@ function NumberCard({n, agents, bases, canManage, onChange, onEdit, onRemove}: {
       canManage={canManage} busy={Boolean(busy)} onPatch={patch}/>}
 
     {n.webhookUrl && <details>
-      <summary className="small muted" style={{cursor: 'pointer'}}>Provider setup ({wa ? 'Meta webhook' : 'Infobip events URL'})</summary>
-      <div style={{marginTop: 10}}><CopyField label={wa ? 'Callback URL' : 'Call events URL'} value={n.webhookUrl}/></div>
+      <summary className="small muted" style={{cursor: 'pointer'}}>
+        Provider setup ({wa ? 'Meta webhook' : twilio ? 'Twilio webhooks' : 'Infobip events URL'})
+      </summary>
+      {twilio
+        ? <div className="stack" style={{marginTop: 10}}>
+            <CopyField label="Voice URL" value={n.webhookUrl}/>
+            {n.statusCallbackUrl && <CopyField label="Status callback URL" value={n.statusCallbackUrl}/>}
+            <p className="help" style={{margin: 0}}>
+              If you change your server address, press <b>Verify again</b>. It
+              re-points these in Twilio automatically.
+            </p>
+          </div>
+        : <div style={{marginTop: 10}}><CopyField label={wa ? 'Callback URL' : 'Call events URL'} value={n.webhookUrl}/></div>}
     </details>}
   </div>;
 }
@@ -445,7 +528,7 @@ export function NumbersScreen() {
 
   return <div className="stack">
     <PageHead eyebrow="Setup" title="Numbers"
-      description="Connect each number with its own Infobip or Meta credentials. Once verified, choose which agent answers it and which one calls out."
+      description="Connect each number with its own Infobip, Twilio or Meta credentials. Once verified, choose which agent answers it and which one calls out."
       action={canManage ? <Button onClick={() => setEditing('new')}><Plus size={16}/> Connect a number</Button> : undefined}/>
 
     <div className="card">
@@ -466,7 +549,7 @@ export function NumbersScreen() {
     {list === null && !error ? <div className="small muted">Loading…</div>
       : list && list.length === 0
         ? <Empty icon={Phone} title="No numbers yet"
-            body="Buy a number in Infobip or get a WhatsApp Business number from Meta, then connect it here with its credentials."
+            body="Buy a number in Infobip or Twilio, or get a WhatsApp Business number from Meta, then connect it here with its credentials."
             action={canManage ? <Button onClick={() => setEditing('new')}>Connect a number</Button> : undefined}/>
         : <div className="stack">{(list ?? []).map(n =>
             <NumberCard key={n.id} n={n} agents={agents} bases={bases} canManage={canManage}
@@ -507,7 +590,7 @@ export function SetupChecklist() {
   }, []);
   if (!state) return null;
   const steps: [string, string, boolean, string][] = [
-    ['Connect a number', 'Enter the Infobip or Meta credentials for a number you own.', state.numbers.length > 0, '/app/numbers'],
+    ['Connect a number', 'Enter the Infobip, Twilio or Meta credentials for a number you own.', state.numbers.length > 0, '/app/numbers'],
     ['Get it verified', 'The provider confirms the credentials work.', state.numbers.some(n => n.status === 'verified'), '/app/numbers'],
     ['Create an agent', 'Inbound, outbound or both, with its greeting and persona.', state.agents.length > 0, '/app/agents'],
     ['Give it knowledge', 'Upload the documents it should answer from.', state.docs > 0, '/app/knowledge'],

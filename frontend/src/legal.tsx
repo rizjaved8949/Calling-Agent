@@ -85,7 +85,7 @@ export function TermsPage() {
 
     <h2>8. Availability</h2>
     <p>The Service is provided without a guaranteed uptime commitment while it is in active development. An outage at
-      a provider the Service depends on — Meta, Infobip, Google or Supabase — can interrupt calling or messaging, and
+      a provider the Service depends on — Meta, Infobip, Twilio, Google or Supabase — can interrupt calling or messaging, and
       we are not liable for the consequences of an outage outside our own infrastructure.</p>
 
     <h2>9. Fees</h2>
@@ -128,7 +128,7 @@ export function PrivacyPage() {
         workspace, and any name attached to them in your campaign lists.</li>
       <li><strong>Configuration</strong> — your agent's persona, greeting, knowledge base documents and campaign
         lists.</li>
-      <li><strong>Credentials</strong> — your WhatsApp, Infobip and Google connection details, encrypted at rest with
+      <li><strong>Credentials</strong> — your WhatsApp, Infobip, Twilio and Google connection details, encrypted at rest with
         AES-256-GCM and never displayed back in full to anyone, including you.</li>
       <li><strong>Usage data</strong> — call counts, minutes, message counts and similar aggregates, shown on your
         usage dashboard.</li>
@@ -146,6 +146,7 @@ export function PrivacyPage() {
       <li><strong>Meta (WhatsApp Business Platform)</strong> — to send and receive WhatsApp messages and calls on your
         number.</li>
       <li><strong>Infobip</strong> — to place and receive phone calls on your carrier number.</li>
+      <li><strong>Twilio</strong> — to place and receive phone calls on a Twilio number.</li>
       <li><strong>Google (Gemini API)</strong> — call audio and message text are sent to Gemini to generate the
         agent's spoken and written replies.</li>
       <li><strong>Google Drive</strong> — if you connect it, recordings are stored in a folder in your own Drive, under

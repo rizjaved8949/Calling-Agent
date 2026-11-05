@@ -97,7 +97,7 @@ export const friendlyError = (code?: string): FriendlyError => (code && errorMap
  * development-only audit in `auditCompanyCopy`.
  */
 export const BANNED_TERMS = [
-  'OpenAI', 'Gemini', 'Meta', 'Infobip', 'Graph API', 'WebRTC', 'SIP', 'trunk', 'RTP', 'STUN', 'TURN',
+  'OpenAI', 'Gemini', 'Meta', 'Infobip', 'Twilio', 'Graph API', 'WebRTC', 'SIP', 'trunk', 'RTP', 'STUN', 'TURN',
   'webhook', 'endpoint', 'API key', 'access token', 'app secret', 'bearer', 'HMAC', 'embedding',
   'vector', 'chunk', 'cosine', 'similarity', 'threshold', 'top-K', 'topK', 'temperature', 'VAD',
   'sample rate', 'codec', 'PCM', 'realtime model', 'LLM', 'RAG', 'latency', 'millisecond',

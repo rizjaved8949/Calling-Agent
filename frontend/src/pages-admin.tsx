@@ -22,6 +22,7 @@ import {request} from './lib/api/http';
 import {
   CHANNEL_LABEL, STATUS_LABEL, formatDuration, formatWhen, statusTone, type CallStatus,
 } from './lib/api/calls';
+import {numberKindLabel} from './lib/api/numbers';
 
 type Stage = 'no numbers' | 'not verified' | 'no agent' | 'not assigned' | 'live';
 
@@ -290,7 +291,7 @@ export function AdminCompanies() {
                 {viewing === row.id && <Badge tone="live">viewing</Badge>}
                 <Button small variant={row.allowPlatformCredentials ? '' : 'outline'}
                   disabled={busy === row.id} onClick={() => void toggleCredentials(row)}
-                  title="Let this company connect a number using the platform's own Meta and Infobip credentials — how a demo account calls on your numbers">
+                  title="Let this company connect a number using the platform's own Meta, Infobip and Twilio credentials — how a demo account calls on your numbers">
                   {busy === row.id ? <Loader2 size={13} className="spin"/>
                     : row.allowPlatformCredentials ? 'Uses your credentials' : 'Allow your credentials'}
                 </Button>
@@ -552,7 +553,7 @@ export function AdminCompanyDetail() {
               <div className="list-row-main">
                 <strong className="mono">{n.phoneNumber}</strong>
                 <div className="small muted">
-                  {n.label} · {n.kind === 'whatsapp' ? 'WhatsApp (Meta)' : 'Phone line (Infobip)'} · {n.mode}
+                  {n.label} · {numberKindLabel(n.kind)} · {n.mode}
                   {n.usePlatformCredentials ? ' · on your credentials' : ''}
                 </div>
                 {n.statusDetail && <div className="small muted">{n.statusDetail}</div>}
@@ -641,6 +642,8 @@ const CAPABILITY_NOTES: Record<string, [string, string]> = {
   agentKey: ['Voice engine key', 'The agent can speak. Without it a call connects to silence.'],
   agentMediaBridge: ['WhatsApp media bridge', 'aiortc is installed, so WhatsApp calls can be answered rather than only logged.'],
   carrierMedia: ['Carrier media', 'Phone-line audio over a websocket. Always available.'],
+  twilio: ['Twilio platform credentials', 'TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN are set, so a company allowed your credentials can run a Twilio number on them. A company’s own Twilio number works without this.'],
+  twilioReachable: ['Public HTTPS address for Twilio', 'PUBLIC_BASE_URL starts with https://. Twilio refuses to stream call audio to anything else, so a Twilio line is silent without it.'],
 };
 
 export function AdminHealth() {

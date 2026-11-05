@@ -25,7 +25,7 @@ import {
   CHANNEL_LABEL, STATUS_LABEL, callsApi, formatDuration, formatWhen, statusTone,
   type WireCall,
 } from './lib/api/calls';
-import {numberName, numbers as numbersApi, type PhoneNumber} from './lib/api/numbers';
+import {numberName, numbers as numbersApi, providerName, type PhoneNumber} from './lib/api/numbers';
 import {workspace, type Agent} from './lib/api/workspace';
 import {request} from './lib/api/http';
 
@@ -208,7 +208,7 @@ export function DashboardScreen() {
                 <div className="list-row-main">
                   <span className="small mono">{numberName(line)}</span>
                   <div className="small muted">
-                    {line.kind === 'whatsapp' ? 'WhatsApp' : 'Phone'} · {line.mode}
+                    {line.kind === 'whatsapp' ? 'WhatsApp' : `Phone (${providerName(line.kind)})`} · {line.mode}
                   </div>
                 </div>
                 <Badge tone={line.status === 'verified' ? 'success' : line.status === 'failed' ? 'danger' : 'warning'}>

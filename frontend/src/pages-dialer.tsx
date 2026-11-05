@@ -23,7 +23,7 @@ import {
 } from 'lucide-react';
 import {Badge, Button, Empty, PageHead} from './app';
 import {useApp} from './app-context';
-import {canCallOut, numberName, numbers as api, type PhoneNumber} from './lib/api/numbers';
+import {canCallOut, numberKindPrefix, numberName, numbers as api, type PhoneNumber} from './lib/api/numbers';
 import {workspace, type Agent} from './lib/api/workspace';
 import {joinCallAsOperator, type OperatorCall} from './lib/operator';
 
@@ -298,7 +298,7 @@ export function DialerScreen() {
             <select className="select" value={lineId} disabled={inCall}
               onChange={e => setLineId(e.target.value)}>
               {(lines ?? []).map(l => <option key={l.id} value={l.id}>
-                {l.kind === 'whatsapp' ? 'WhatsApp · ' : 'Phone · '}{numberName(l)}
+                {numberKindPrefix(l.kind)}{numberName(l)}
               </option>)}
             </select>
           </div>

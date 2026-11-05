@@ -80,6 +80,10 @@
 .workspace-label{padding:9px 12px;font-weight:750;font-size:.86rem;border:1px solid var(--border);border-radius:10px;background:var(--surface,transparent)}
 
 .preset-grid{display:grid;gap:11px;grid-template-columns:repeat(auto-fit,minmax(215px,1fr))}
+/* Three providers side by side inside a 660px modal: 215px apiece would wrap
+   the third onto a lonely second row, so these cards are allowed to be a
+   little narrower. Below 760px the shared rule above stacks them anyway. */
+.preset-grid.three{grid-template-columns:repeat(auto-fit,minmax(178px,1fr))}
 .preset-card{display:flex;flex-direction:column;gap:6px;text-align:start;padding:15px;border:1.5px solid var(--border);border-radius:13px;background:var(--card);cursor:pointer;transition:border-color .15s ease,box-shadow .15s ease}
 .preset-card:hover:not(:disabled){border-color:var(--accent)}
 .preset-card.selected{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in oklab,var(--accent) 18%,transparent)}
@@ -136,7 +140,7 @@
 .rule-actions{width:100%;justify-content:flex-end}
 .unanswered-row{flex-wrap:wrap}
 .unanswered-actions{width:100%}
-.preset-grid{grid-template-columns:1fr}
+.preset-grid,.preset-grid.three{grid-template-columns:1fr}
 .portal-banner{padding-inline:15px;font-size:.74rem}
 }
 

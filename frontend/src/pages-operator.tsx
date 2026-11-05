@@ -237,8 +237,8 @@ export function OperatorCompanies() {
     }
   };
 
-  // Which companies may run their numbers on the platform's own Meta and
-  // Infobip credentials (the server's environment) — how a demo account
+  // Which companies may run their numbers on the platform's own Meta, Infobip
+  // and Twilio credentials (the server's environment) — how a demo account
   // places real calls without credentials of its own.
   const [demo, setDemo] = useState<Record<string, boolean>>({});
   useEffect(() => {
@@ -324,7 +324,7 @@ export function OperatorCompanies() {
               <div className="row">
                 {viewing === row.org.id && <Badge tone="success">{t('viewing')}</Badge>}
                 <Button small variant={demo[row.org.id] ? '' : 'outline'} onClick={() => void toggleDemo(row.org.id)}
-                  title={t('Let this company connect numbers using your own Meta/Infobip credentials from the server settings')}>
+                  title={t('Let this company connect numbers using your own Meta, Infobip or Twilio credentials from the server settings')}>
                   {demo[row.org.id] ? t('Uses your credentials') : t('Allow your credentials')}
                 </Button>
                 <Button small variant="outline" onClick={() => view(row.org.id)}>

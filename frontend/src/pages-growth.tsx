@@ -11,7 +11,7 @@ import {HelpCircle, Loader2, Pause, Play, Plus, Trash2, TrendingUp} from 'lucide
 import {Badge, Button, Empty, Field, PageHead, Tabs} from './app';
 import {useApp} from './app-context';
 import {api} from './lib/api';
-import {canCallOut, numberName, numbers as numberApi, type PhoneNumber} from './lib/api/numbers';
+import {canCallOut, numberKindPrefix, numberName, numbers as numberApi, type PhoneNumber} from './lib/api/numbers';
 import {workspace, type Agent} from './lib/api/workspace';
 
 const when = (epoch?: number) =>
@@ -282,7 +282,7 @@ export function CampaignsScreen() {
           <select className="select" value={line?.id ?? ''}
             onChange={e => setDraft(d => ({...d, lineId: e.target.value}))}>
             {lines.length === 0 && <option value="">{t('No verified outbound number')}</option>}
-            {lines.map(l => <option key={l.id} value={l.id}>{l.kind === 'whatsapp' ? 'WhatsApp · ' : 'Phone · '}{numberName(l)}</option>)}
+            {lines.map(l => <option key={l.id} value={l.id}>{numberKindPrefix(l.kind)}{numberName(l)}</option>)}
           </select>
         </div>
         <div className="field">
