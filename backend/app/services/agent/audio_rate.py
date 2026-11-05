@@ -41,6 +41,12 @@ class RateConverter:
     in. The state carries over so joining 20 ms frames does not click, and the
     phase is remembered so the pattern resumes on the right sample rather than
     shifting pitch on every frame boundary.
+
+    Any small ratio works, not only the model's 2:3: the cut-off follows the
+    larger of the two factors, so it is always below the lower rate's limit.
+    A Twilio call runs 2:1 and 1:2 between its 8 kHz and the line's 16 kHz
+    (`mulaw.TwilioAudio`), and tests/test_mulaw.py pins pitch, level and
+    aliasing for both.
     """
 
     def __init__(self, up: int, down: int, keep: float = 0.9) -> None:
