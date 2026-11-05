@@ -113,6 +113,17 @@ async def _run(tenant: Tenant, campaign_id: str) -> None:
             if campaign is None or campaign.status is not CampaignStatus.RUNNING:
                 return
 
+            if await _company_switched_off(tenant):
+                # Paused, not finished: the list is kept where it got to, and
+                # the company presses start again once it is switched back on.
+                # A call already in progress was let finish by the previous
+                # turn of this loop; only the next one is not placed.
+                campaign.status = CampaignStatus.PAUSED
+                campaign.last_error = SUSPENDED_NOTE
+                await campaign_repo.save(campaign)
+                log.info("campaign %s paused: the company is switched off", campaign_id)
+                return
+
             contact = campaign.next_waiting()
             if contact is None:
                 campaign.status = CampaignStatus.DONE
@@ -137,6 +148,28 @@ async def _run(tenant: Tenant, campaign_id: str) -> None:
                 await campaign_repo.save(campaign)
     finally:
         _runners.pop(campaign_id, None)
+
+
+SUSPENDED_NOTE = "paused because the company was switched off"
+
+
+async def _company_switched_off(tenant: Tenant) -> bool:
+    """Whether the operator has suspended this company since the run began.
+
+    Read fresh before every call: the `tenant` this loop was started with is a
+    snapshot from when somebody pressed start, possibly hours ago, and the
+    signed-in API refusing a suspended company (`api/deps.py`) does nothing
+    to a loop that is already running. A company that cannot be read is not
+    taken as suspended; the next turn asks again.
+    """
+    from ..repositories import tenants as tenant_repo
+
+    try:
+        company = await tenant_repo.get(tenant.phone_number_id)
+    except Exception:  # noqa: BLE001
+        log.warning("campaign: could not re-read company %s", tenant.phone_number_id)
+        return False
+    return bool(company is not None and company.suspended)
 
 
 async def _update_contact(tenant: Tenant, campaign_id: str, number: str, **changes) -> None:

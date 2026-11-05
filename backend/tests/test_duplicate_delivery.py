@@ -186,6 +186,24 @@ def test_the_claim_table_does_not_grow_without_limit(client, whatsapp):
     assert len(webhooks._seen_inbound) <= 2200
 
 
+def test_a_suspended_company_stores_the_message_and_sends_nothing(client, whatsapp):
+    """Suspension is a pause: whoever wrote in is kept for when the company is
+    switched back on, but nothing goes out in the company's name meanwhile."""
+    from app.repositories import calls as call_repo
+    from app.repositories import tenants as tenant_repo
+
+    company = asyncio.run(tenant_repo.get("111"))
+    company.suspended = True
+    asyncio.run(tenant_repo.save(company))
+
+    assert _deliver(client, _payload("wamid.PAUSED", body="Are you open?",
+                                     kind="text")).status_code == 200
+
+    assert whatsapp["replies"] == [], "the agent answered for a switched-off company"
+    stored = asyncio.run(call_repo.list_messages("111"))
+    assert [m.body for m in stored] == ["Are you open?"]
+
+
 def test_a_claim_is_only_made_once():
     assert webhooks._claim_inbound("only-once") is True
     assert webhooks._claim_inbound("only-once") is False

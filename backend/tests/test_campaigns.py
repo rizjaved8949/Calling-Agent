@@ -429,6 +429,68 @@ async def test_nobody_is_called_after_a_pause(runner):
     assert len(carrier.placed) == 1, f"{len(carrier.placed)} people were called"
 
 
+async def _switch_off(company_id: str = "800", suspended: bool = True) -> None:
+    from app.models.tenant import Tenant
+    from app.repositories import tenants as tenant_repo
+
+    company = await tenant_repo.get(company_id) or Tenant(phoneNumberId=company_id, name="Acme")
+    company.suspended = suspended
+    await tenant_repo.save(company)
+
+
+async def test_a_suspension_stops_a_running_campaign_before_its_next_call(runner):
+    """The loop started before the operator switched the company off; the
+    signed-in API refusing them does nothing to a loop already running."""
+    import asyncio
+
+    from app.models.campaign import CampaignStatus, ContactState
+    from app.repositories import campaigns as repo
+
+    module, carrier = runner
+    await _switch_off(suspended=False)
+    campaign = await _campaign("+923001112222,+923001112223,+923001112224")
+    task = asyncio.create_task(module._run(_tenant(), campaign.id))
+    await asyncio.sleep(0.1)          # first call is being placed
+    await _switch_off()
+    await asyncio.wait_for(task, timeout=5)
+
+    assert len(carrier.placed) == 1, f"{len(carrier.placed)} people were called"
+    final = await repo.get("800", campaign.id)
+    assert final.status is CampaignStatus.PAUSED, "a suspension must pause, not finish"
+    assert final.last_error == module.SUSPENDED_NOTE
+    assert [c.state for c in final.contacts[1:]] == [ContactState.WAITING] * 2
+
+
+async def test_a_suspended_companys_campaign_places_no_call_at_all(runner):
+    """resume_all after a deploy restarts every RUNNING campaign, suspended
+    companies' included; the first turn of the loop must catch it."""
+    import asyncio
+
+    from app.models.campaign import CampaignStatus
+    from app.repositories import campaigns as repo
+
+    module, carrier = runner
+    await _switch_off()
+    campaign = await _campaign("+923001112222")
+    await asyncio.wait_for(module._run(_tenant(), campaign.id), timeout=5)
+
+    assert carrier.placed == []
+    assert (await repo.get("800", campaign.id)).status is CampaignStatus.PAUSED
+
+
+async def test_a_company_that_cannot_be_read_is_not_taken_as_suspended(runner, monkeypatch):
+    """A database hiccup must not pause every campaign on the platform."""
+    from app.repositories import tenants as tenant_repo
+
+    module, _ = runner
+
+    async def broken(_company_id):
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(tenant_repo, "get", broken)
+    assert await module._company_switched_off(_tenant()) is False
+
+
 async def test_resume_all_restarts_a_campaign_left_running(runner):
     """What a restart used to lose: a RUNNING campaign nobody is working.
 

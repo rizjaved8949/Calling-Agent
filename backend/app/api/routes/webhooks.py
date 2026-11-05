@@ -329,8 +329,16 @@ async def _on_messages(tenant: Tenant, value: dict[str, Any]) -> None:
         # seconds and retries anything slower, so composing a reply inline
         # means the same question answered two or three times while the model
         # is still thinking.
+        #
+        # A suspended company sends nothing (see `Tenant.suspended`). The
+        # message is still stored above: suspension is a pause, and whoever
+        # wrote in is there to answer when the company is switched back on.
         if tenant.auto_reply and body and kind in {"text", "button", "interactive"}:
-            asyncio.create_task(_auto_reply(tenant, message))
+            if tenant.suspended:
+                log.info("tenant %s is switched off: message %s stored, not answered",
+                         tenant.phone_number_id, provider_id[-12:])
+            else:
+                asyncio.create_task(_auto_reply(tenant, message))
 
     # Delivery receipts for messages we sent.
     for raw in value.get("statuses") or []:
