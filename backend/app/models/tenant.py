@@ -117,6 +117,16 @@ class Tenant(BaseModel):
     # so every row is still filed under the company.
     line_id: str = Field(default="", alias="lineId")
     meta_phone_number_id: str = Field(default="", alias="metaPhoneNumberId")
+    # Which provider the overlaid number belongs to: "infobip", "twilio" or
+    # "meta". Code that holds only this copy — hanging up, placing a call —
+    # reads it to pick the right client (`services/carriers.carrier_for`).
+    # Blank on the company row itself, and blank is treated as Infobip, which
+    # is what every phone line was before there was a choice.
+    carrier: str = ""
+    # A Twilio number's credentials. Overlay-only: Twilio is set up per number,
+    # never per company, so these are always blank on a stored company row.
+    twilio_account_sid: str = Field(default="", alias="twilioAccountSid")
+    twilio_auth_token: str = Field(default="", alias="twilioAuthToken")
 
     # ---- Derived ----------------------------------------------------------
 
@@ -184,6 +194,9 @@ SECRET_FIELDS = (
     "apiKey",
     "qaApiKey",
     "infobipApiKey",
+    # Never on a stored row (see `Tenant.twilio_auth_token`, and `save`
+    # refuses an overlay), but listed so that if it ever were, it is sealed.
+    "twilioAuthToken",
 )
 # Nested secrets, as (container, field) pairs.
 NESTED_SECRET_FIELDS = (("googleDrive", "refreshToken"),)

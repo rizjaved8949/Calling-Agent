@@ -152,6 +152,10 @@ class Settings(BaseSettings):
     # ---- Telephony (SIM / SIP) -------------------------------------------
     infobip_base_url: str = ""
     infobip_api_key: str = ""
+    # The platform owner's own Twilio account, used only by a number that has
+    # "use platform credentials" on, for a company the operator allowed it for.
+    twilio_account_sid: str = ""
+    twilio_auth_token: str = ""
 
     # ---- Voice agent ------------------------------------------------------
     # Configured here, and **not yet used**: the engine that carries call audio

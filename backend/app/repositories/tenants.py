@@ -226,7 +226,12 @@ async def save(tenant: Tenant) -> Tenant:
         # fields. Saving it would copy them onto the company row.
         raise RuntimeError("refusing to save a per-number tenant overlay")
     data = tenant.model_dump(
-        by_alias=True, exclude={"phone_number_id", "line_id", "meta_phone_number_id"}
+        by_alias=True,
+        exclude={
+            "phone_number_id", "line_id", "meta_phone_number_id",
+            # Overlay-only, like the two above: they describe one number.
+            "carrier", "twilio_account_sid", "twilio_auth_token",
+        },
     )
     row = {
         "id": tenant.phone_number_id,

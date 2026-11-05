@@ -198,9 +198,21 @@ def as_tenant(tenant: Tenant, number: PhoneNumber) -> Tenant:
             verify_token=pick(number.verify_token, settings.whatsapp_webhook_verify_token),
             display_phone_number=number.phone_number,
             auto_reply=number.auto_reply,
+            carrier="meta",
+        )
+    elif number.kind is NumberKind.TWILIO:
+        update.update(
+            twilio_account_sid=pick(number.twilio_account_sid, settings.twilio_account_sid),
+            twilio_auth_token=pick(number.twilio_auth_token, settings.twilio_auth_token),
+            # The caller ID for outbound calls, read the same way an Infobip
+            # line's is, so code that only wants "this line's number" need not
+            # know which carrier it is on.
+            infobip_phone_number=number.phone_number,
+            carrier="twilio",
         )
     else:
         update.update(
+            carrier="infobip",
             infobip_api_key=pick(number.infobip_api_key, settings.infobip_api_key),
             infobip_base_url=pick(number.infobip_base_url, settings.infobip_base_url),
             infobip_phone_number=number.phone_number,

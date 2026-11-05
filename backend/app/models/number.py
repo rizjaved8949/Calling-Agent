@@ -3,8 +3,8 @@ A phone number a company has connected, with the credentials it runs on.
 
 This is the unit a company sells itself on: "our support line", "our sales
 WhatsApp". A company may have as many as it likes, each from its own provider
-account — a SIM number bought in Infobip, a WhatsApp number from Meta — and
-each one carries everything needed to reach that provider.
+account — a SIM number bought in Infobip or Twilio, a WhatsApp number from
+Meta — and each one carries everything needed to reach that provider.
 
 The lifecycle is deliberate:
 
@@ -30,6 +30,23 @@ from pydantic import BaseModel, ConfigDict, Field
 class NumberKind(str, Enum):
     SIM = "sim"              # a phone line through Infobip
     WHATSAPP = "whatsapp"    # a WhatsApp Business number through Meta
+    TWILIO = "twilio"        # a phone line through Twilio
+
+
+# The kinds that are an ordinary phone line: voice in, voice out, dialled like
+# any number. Infobip and Twilio differ in how they carry a call, not in what a
+# company can do with one, so everything that asks "is this a phone line?"
+# (the dialer's line picker, campaigns, inbound routing) asks this rather than
+# comparing with SIM and quietly leaving the newer carrier out.
+PHONE_KINDS = frozenset({NumberKind.SIM, NumberKind.TWILIO})
+
+
+def is_phone_kind(kind: NumberKind | str | None) -> bool:
+    """True for a phone line (Infobip or Twilio), False for WhatsApp."""
+    try:
+        return NumberKind(kind) in PHONE_KINDS
+    except ValueError:
+        return False
 
 
 class NumberMode(str, Enum):
@@ -45,7 +62,9 @@ class NumberStatus(str, Enum):
 
 
 # Sealed before the row is written; never returned over HTTP.
-SECRET_FIELDS = ("accessToken", "appSecret", "verifyToken", "infobipApiKey")
+SECRET_FIELDS = (
+    "accessToken", "appSecret", "verifyToken", "infobipApiKey", "twilioAuthToken",
+)
 
 
 def _hint(value: str) -> str:
@@ -107,6 +126,16 @@ class PhoneNumber(BaseModel):
         default="", alias="infobipWebsocketConfigId"
     )
 
+    # ---- Twilio --------------------------------------------------------
+    # The Account SID ("AC…") names the account; the Auth Token proves it and
+    # also signs every webhook Twilio sends us, so it is sealed like a password.
+    twilio_account_sid: str = Field(default="", alias="twilioAccountSid")
+    twilio_auth_token: str = Field(default="", alias="twilioAuthToken")
+    # Twilio's own id for this number ("PN…"). Found by verification, never
+    # typed: it is what lets us point the number's webhooks at this deployment
+    # without the company opening the Twilio console.
+    twilio_phone_number_sid: str = Field(default="", alias="twilioPhoneNumberSid")
+
     created_at: float = Field(default_factory=time.time, alias="createdAt")
 
     @property
@@ -124,12 +153,17 @@ class PhoneNumber(BaseModel):
     def public(self, *, base_url: str = "") -> dict[str, Any]:
         base = base_url.rstrip("/")
         webhook = ""
+        status_callback = ""
         if base:
-            webhook = (
-                f"{base}/api/webhooks/whatsapp"
-                if self.kind is NumberKind.WHATSAPP
-                else f"{base}/api/webhooks/infobip/line/{self.id}"
-            )
+            if self.kind is NumberKind.WHATSAPP:
+                webhook = f"{base}/api/webhooks/whatsapp"
+            elif self.kind is NumberKind.TWILIO:
+                # Twilio wants two addresses: where to ask what to do with a
+                # call ("A call comes in"), and where to report how it went.
+                webhook = f"{base}/api/webhooks/twilio/voice/{self.id}"
+                status_callback = f"{base}/api/webhooks/twilio/status/{self.id}"
+            else:
+                webhook = f"{base}/api/webhooks/infobip/line/{self.id}"
         return {
             "id": self.id,
             "kind": self.kind.value,
@@ -147,6 +181,7 @@ class PhoneNumber(BaseModel):
             "usePlatformCredentials": self.use_platform_credentials,
             "createdAt": self.created_at,
             "webhookUrl": webhook or None,
+            "statusCallbackUrl": status_callback or None,
             "credentials": {
                 "metaPhoneNumberId": self.meta_phone_number_id or None,
                 "wabaId": self.waba_id or None,
@@ -156,6 +191,9 @@ class PhoneNumber(BaseModel):
                 "infobipApiKey": _hint(self.infobip_api_key) or None,
                 "infobipBaseUrl": self.infobip_base_url or None,
                 "infobipCallsConfigurationId": self.infobip_calls_configuration_id or None,
+                "twilioAccountSid": self.twilio_account_sid or None,
+                "twilioAuthToken": _hint(self.twilio_auth_token) or None,
+                "twilioPhoneNumberSid": self.twilio_phone_number_sid or None,
             },
             "audioEndpointRegistered": bool(self.infobip_websocket_config_id),
         }
@@ -181,6 +219,9 @@ class NumberCreate(BaseModel):
     infobip_calls_configuration_id: str = Field(
         default="", alias="infobipCallsConfigurationId", max_length=128
     )
+
+    twilio_account_sid: str = Field(default="", alias="twilioAccountSid", max_length=64)
+    twilio_auth_token: str = Field(default="", alias="twilioAuthToken", max_length=128)
 
 
 class NumberUpdate(BaseModel):
@@ -212,11 +253,17 @@ class NumberUpdate(BaseModel):
         default=None, alias="infobipCallsConfigurationId"
     )
 
+    twilio_account_sid: str | None = Field(default=None, alias="twilioAccountSid", max_length=64)
+    twilio_auth_token: str | None = Field(default=None, alias="twilioAuthToken", max_length=128)
+
 
 # Changing any of these means the provider has to be asked again.
 CREDENTIAL_FIELDS = {
     "phone_number", "meta_phone_number_id", "waba_id", "access_token", "app_secret",
     "verify_token", "infobip_api_key", "infobip_base_url",
     "infobip_calls_configuration_id", "use_platform_credentials",
+    "twilio_account_sid", "twilio_auth_token",
 }
-SECRET_ATTRS = {"access_token", "app_secret", "verify_token", "infobip_api_key"}
+SECRET_ATTRS = {
+    "access_token", "app_secret", "verify_token", "infobip_api_key", "twilio_auth_token",
+}
