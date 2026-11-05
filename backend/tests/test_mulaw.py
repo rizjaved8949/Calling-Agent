@@ -47,6 +47,31 @@ def test_known_g711_values():
         [-32124, 32124, 0, 0], dtype="<i2").tobytes()
 
 
+# What Python's own `audioop` produced for every possible input, as SHA-256,
+# taken on 3.12 while it still existed (the comparisons below were run against
+# it at the same time). These hold the codec to the reference bit for bit on
+# 3.13 and later, where `audioop` is gone and those comparisons skip.
+#   encode: audioop.lin2ulaw(every int16 from -32768 to 32767, 2)
+#   decode: audioop.ulaw2lin(bytes(range(256)), 2)
+_REFERENCE_ENCODE_SHA256 = "81d633c9e6972a18c74a58720b96cb8ca0bdd096d4060b646dd708c3b846019a"
+_REFERENCE_DECODE_SHA256 = "3dab54339e520bb2c924826e3b72a917a2b612e9fd12fc867500f1d983a75827"
+
+
+def test_encoding_matches_the_saved_reference_for_every_sample():
+    import hashlib
+
+    every_sample = np.arange(-32768, 32768, dtype="<i2").tobytes()
+    digest = hashlib.sha256(mulaw.encode(every_sample)).hexdigest()
+    assert digest == _REFERENCE_ENCODE_SHA256
+
+
+def test_decoding_matches_the_saved_reference_for_every_byte():
+    import hashlib
+
+    digest = hashlib.sha256(mulaw.decode(bytes(range(256)))).hexdigest()
+    assert digest == _REFERENCE_DECODE_SHA256
+
+
 def test_decoding_matches_pythons_own_table_for_every_byte():
     every_byte = bytes(range(256))
     assert mulaw.decode(every_byte) == _audioop().ulaw2lin(every_byte, 2)
