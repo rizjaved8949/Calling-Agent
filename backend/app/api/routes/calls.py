@@ -209,7 +209,7 @@ async def start_call(
         placedBy=(member.describe()
                   or str(payload.metadata.get("placedBy") or ""))[:200],
         fromNumber=(line.phone_number if line else "")
-        or tenant.infobip_phone_number or tenant.display_phone_number,
+        or tenant.carrier_phone_number or tenant.display_phone_number,
         recordingState=(
             RecordingState.PENDING if tenant.record_calls else RecordingState.NONE
         ),

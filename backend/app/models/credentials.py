@@ -52,7 +52,7 @@ class CredentialsUpdate(BaseModel):
     # ---- Carrier (SIM) ----------------------------------------------------
     infobip_api_key: str | None = Field(default=None, alias="infobipApiKey")
     infobip_base_url: str | None = Field(default=None, alias="infobipBaseUrl")
-    infobip_phone_number: str | None = Field(default=None, alias="infobipPhoneNumber")
+    carrier_phone_number: str | None = Field(default=None, alias="infobipPhoneNumber")
     infobip_calls_configuration_id: str | None = Field(
         default=None, alias="infobipCallsConfigurationId"
     )
@@ -76,7 +76,7 @@ FIELD_MAP: dict[str, tuple[str, bool]] = {
     "webhookVerifyToken": ("verify_token", True),
     "infobipApiKey": ("infobip_api_key", True),
     "infobipBaseUrl": ("infobip_base_url", False),
-    "infobipPhoneNumber": ("infobip_phone_number", False),
+    "infobipPhoneNumber": ("carrier_phone_number", False),
     "infobipCallsConfigurationId": ("infobip_calls_configuration_id", False),
 }
 

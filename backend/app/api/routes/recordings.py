@@ -379,11 +379,16 @@ async def fetch_from_carrier(tenant: CurrentTenant, call_id: str) -> dict:
     # empty and mark a call that has its recording as having none.
     from ...services import carriers, lines
 
-    if carriers.is_twilio(await lines.tenant_for_call(tenant, call)):
+    # The credentials the call was carried on: a line with its own Infobip
+    # account keeps its recordings there, and asking the company's account
+    # finds nothing, or another account's file. Storing the copy below stays
+    # with the company.
+    line_tenant = await lines.tenant_for_call(tenant, call)
+    if carriers.is_twilio(line_tenant):
         raise Conflict("Twilio calls are recorded by the agent as they happen; "
                        "there is no carrier-side recording to fetch.")
 
-    carrier = Infobip(tenant)
+    carrier = Infobip(line_tenant)
     files = []
     if call.provider_dialog_id:
         files = await carrier.dialog_recordings(call.provider_dialog_id)

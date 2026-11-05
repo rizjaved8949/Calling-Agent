@@ -69,7 +69,13 @@ class Tenant(BaseModel):
     # Per-tenant Infobip credentials; blank falls back to the platform's.
     infobip_api_key: str = Field(default="", alias="infobipApiKey")
     infobip_base_url: str = Field(default="", alias="infobipBaseUrl")
-    infobip_phone_number: str = Field(default="", alias="infobipPhoneNumber")
+    # The phone number calls on this line come from and arrive at, whichever
+    # carrier carries them: a number overlay (`repositories/numbers.as_tenant`)
+    # fills it for an Infobip or a Twilio line alike. Named for what it is
+    # now; its stored and API key keeps the old "infobipPhoneNumber", because
+    # every company row and the frontend already use that spelling, and
+    # renaming a stored key would need a migration for no change in meaning.
+    carrier_phone_number: str = Field(default="", alias="infobipPhoneNumber")
     infobip_calls_configuration_id: str = Field(
         default="", alias="infobipCallsConfigurationId"
     )
@@ -173,7 +179,7 @@ class Tenant(BaseModel):
             },
             "telephony": {
                 "infobipConfigured": bool(self.infobip_api_key),
-                "phoneNumber": self.infobip_phone_number or None,
+                "phoneNumber": self.carrier_phone_number or None,
             },
             "qaWebhookConfigured": bool(self.qa_webhook_url),
             "allowPlatformCredentials": self.allow_platform_credentials,
@@ -221,7 +227,7 @@ class TenantCreate(BaseModel):
     persona: str = ""
     infobip_api_key: str = Field(default="", alias="infobipApiKey")
     infobip_base_url: str = Field(default="", alias="infobipBaseUrl")
-    infobip_phone_number: str = Field(default="", alias="infobipPhoneNumber")
+    carrier_phone_number: str = Field(default="", alias="infobipPhoneNumber")
     infobip_calls_configuration_id: str = Field(
         default="", alias="infobipCallsConfigurationId"
     )
@@ -262,7 +268,7 @@ class TenantUpdate(BaseModel):
     persona: str | None = None
     infobip_api_key: str | None = Field(default=None, alias="infobipApiKey")
     infobip_base_url: str | None = Field(default=None, alias="infobipBaseUrl")
-    infobip_phone_number: str | None = Field(default=None, alias="infobipPhoneNumber")
+    carrier_phone_number: str | None = Field(default=None, alias="infobipPhoneNumber")
     infobip_calls_configuration_id: str | None = Field(
         default=None, alias="infobipCallsConfigurationId"
     )

@@ -239,7 +239,7 @@ class Twilio:
         settled here rather than sitting at "ringing" for ever.
         """
         self._require()
-        caller = (from_number or self.tenant.infobip_phone_number).strip()
+        caller = (from_number or self.tenant.carrier_phone_number).strip()
         if not caller:
             raise AppError(409, "This line has no phone number to call from.",
                            code="no_caller_id")

@@ -207,7 +207,7 @@ def as_tenant(tenant: Tenant, number: PhoneNumber) -> Tenant:
             # The caller ID for outbound calls, read the same way an Infobip
             # line's is, so code that only wants "this line's number" need not
             # know which carrier it is on.
-            infobip_phone_number=number.phone_number,
+            carrier_phone_number=number.phone_number,
             carrier="twilio",
         )
     else:
@@ -215,7 +215,7 @@ def as_tenant(tenant: Tenant, number: PhoneNumber) -> Tenant:
             carrier="infobip",
             infobip_api_key=pick(number.infobip_api_key, settings.infobip_api_key),
             infobip_base_url=pick(number.infobip_base_url, settings.infobip_base_url),
-            infobip_phone_number=number.phone_number,
+            carrier_phone_number=number.phone_number,
             infobip_calls_configuration_id=number.infobip_calls_configuration_id,
         )
     return tenant.model_copy(update=update)

@@ -131,7 +131,7 @@ class Infobip:
         # Credentials before caller ID: a company that has connected nothing
         # should be told that, not sent to look for a missing phone number.
         self._require()
-        caller = (from_number or self.tenant.infobip_phone_number).strip()
+        caller = (from_number or self.tenant.carrier_phone_number).strip()
         if not caller:
             raise AppError(
                 409, "This company has no outbound number configured.", code="no_caller_id"
@@ -240,7 +240,7 @@ class Infobip:
                     "type": "WEBSOCKET",
                     "websocketEndpointConfigId": websocket_config_id,
                 },
-                "from": (from_number or self.tenant.infobip_phone_number).strip(),
+                "from": (from_number or self.tenant.carrier_phone_number).strip(),
                 "connectTimeout": 30,
             },
             "maxDuration": max_seconds,

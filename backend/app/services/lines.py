@@ -98,7 +98,7 @@ async def _verify_infobip(t: Tenant) -> str:
         name for name, value in (
             ("API key", t.infobip_api_key),
             ("Base URL", t.infobip_base_url),
-            ("Phone number", t.infobip_phone_number),
+            ("Phone number", t.carrier_phone_number),
         ) if not value
     ]
     if missing:
@@ -171,7 +171,7 @@ async def _verify_twilio(t: Tenant, number: PhoneNumber) -> str:
         name for name, value in (
             ("Account SID", t.twilio_account_sid),
             ("Auth Token", t.twilio_auth_token),
-            ("Phone number", t.infobip_phone_number),
+            ("Phone number", t.carrier_phone_number),
         ) if not value
     ]
     if missing:

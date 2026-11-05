@@ -710,7 +710,7 @@ async def _line_for(tenant: Tenant, call: Call, dialled: str = ""):
             if found is not None:
                 return found
 
-    wanted = _digits(dialled) or _digits(call.from_number) or _digits(tenant.infobip_phone_number)
+    wanted = _digits(dialled) or _digits(call.from_number) or _digits(tenant.carrier_phone_number)
     # SIM only, not Twilio, on purpose. A Twilio call always names its line
     # (the webhook URL does) and is found by id above. What reaches this point
     # is an Infobip call from the per-company webhook, and counting a Twilio
@@ -779,7 +779,7 @@ async def _bridge_agent(tenant: Tenant, call: Call) -> None:
         await Infobip(tenant).bridge_to_websocket(
             call.provider_call_id,
             websocket_config_id=config_id,
-            from_number=tenant.infobip_phone_number,
+            from_number=tenant.carrier_phone_number,
             record=False,  # the session records both sides itself
         )
         log.info("call %s: the agent's audio leg was dialled", call.id)
@@ -856,7 +856,7 @@ async def _handle_infobip(tenant: Tenant, payload: dict[str, Any]) -> None:
                 counterparty=caller,
                 providerCallId=provider_call_id,
                 lineId=tenant.line_id,
-                fromNumber=dialled or tenant.infobip_phone_number,
+                fromNumber=dialled or tenant.carrier_phone_number,
                 recordingState=(
                     RecordingState.PENDING if tenant.record_calls else RecordingState.NONE
                 ),

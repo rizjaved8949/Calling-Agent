@@ -121,7 +121,7 @@ def test_outbound_calls_go_out_on_the_numbers_credentials(
 
     async def fake_place(self, to, *, from_number=""):
         seen["key"] = self.api_key
-        seen["from"] = self.tenant.infobip_phone_number
+        seen["from"] = self.tenant.carrier_phone_number
         return {"id": "ib-call-1"}
 
     monkeypatch.setattr(telephony.Infobip, "place_call", fake_place)
@@ -389,3 +389,22 @@ def test_a_rejected_key_is_reported_as_a_key_problem(monkeypatch):
     with pytest.raises(lines._Refused) as refused:
         asyncio.run(lines._verify_infobip(_infobip_tenant()))
     assert "rejected the API key" in str(refused.value)
+
+
+def test_the_line_number_keeps_its_stored_key_after_the_rename(fake_db):
+    """`carrier_phone_number` is the code's name; every company row and the
+    frontend spell it "infobipPhoneNumber", and must go on reading it."""
+    import asyncio
+    import json
+
+    from app.models.tenant import Tenant
+    from app.repositories import tenants as tenant_repo
+
+    asyncio.run(tenant_repo.save(Tenant(phoneNumberId="t-key", name="Acme",
+                                        infobipPhoneNumber="+92516028402")))
+    stored = json.dumps([row for table in fake_db.tables.values() for row in table.values()
+                         if "t-key" in json.dumps(row, default=str)], default=str)
+    assert '"infobipPhoneNumber": "+92516028402"' in stored
+    assert "carrier_phone_number" not in stored and "carrierPhoneNumber" not in stored
+    back = asyncio.run(tenant_repo.get("t-key"))
+    assert back.carrier_phone_number == "+92516028402"

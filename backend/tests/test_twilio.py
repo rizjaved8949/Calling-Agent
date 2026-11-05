@@ -77,7 +77,7 @@ def test_the_overlay_carries_the_twilio_credentials_and_says_so():
     assert overlay.line_id == "tw1"
     assert overlay.twilio_account_sid == SID
     assert overlay.twilio_auth_token == TOKEN
-    assert overlay.infobip_phone_number == "+15551234567"  # the line's caller ID
+    assert overlay.carrier_phone_number == "+15551234567"  # the line's caller ID
     assert overlay.infobip_api_key == ""
 
 
