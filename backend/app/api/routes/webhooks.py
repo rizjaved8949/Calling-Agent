@@ -25,6 +25,7 @@ from fastapi import APIRouter, Request, Response, status
 
 from ...config import settings
 from ...models.call import (
+    TERMINAL_STATUSES,
     Call,
     CallStatus,
     Channel,
@@ -33,13 +34,14 @@ from ...models.call import (
     MessageDirection,
     RecordingState,
 )
+from ...models.number import NumberKind, PhoneNumber
 from ...models.tenant import Tenant
 from ...repositories import calls as call_repo
 from ...repositories import knowledge
 from ...repositories import numbers as number_repo
 from ...repositories import tenants as tenant_repo
-from ...security import playback
-from ...services import reports
+from ...security import playback, tickets
+from ...services import reports, twilio_client
 from ...services.agent import live, reply
 from ...services.telephony import Infobip
 from ...services.whatsapp import WhatsApp, mask, signature_ok
@@ -858,3 +860,281 @@ async def _handle_infobip(tenant: Tenant, payload: dict[str, Any]) -> None:
             reports.schedule_sync(tenant)
 
         await call_repo.save_call(call)
+
+
+# ---------------------------------------------------------------------------
+# Twilio
+# ---------------------------------------------------------------------------
+#
+# Three addresses per number, all form-encoded POSTs signed by Twilio:
+#
+#   voice/{number}           "A call comes in": what to do with an inbound call
+#   outbound/{number}/{call} fetched when someone we rang picks up
+#   status/{number}          how a call is progressing, until it ends
+#
+# The first two answer in TwiML, Twilio's XML, and must do it inside Twilio's
+# fifteen seconds; so the agent is warmed in the background and the answer is
+# only ever a few database reads away. The audio itself then arrives on
+# /api/media/twilio/{call}, which the TwiML names.
+#
+# Unlike Infobip, Twilio signs every request, with the Auth Token of the
+# account the number is in. Nothing here acts on a request whose signature
+# does not check out.
+
+_XML = "application/xml"
+
+
+def _twiml(body: str = "", status_code: int = 200) -> Response:
+    return Response(
+        content=f'<?xml version="1.0" encoding="UTF-8"?><Response>{body}</Response>',
+        media_type=_XML, status_code=status_code,
+    )
+
+
+def _signed_url(request: Request) -> str:
+    """The URL as Twilio called it, which is what it signed.
+
+    Built from PUBLIC_BASE_URL rather than read off the request: behind
+    Render's proxy the request arrives as plain http on an internal host, and
+    a signature computed over that never matches. Without a public address
+    configured (a local run hit directly) the request's own URL is all there is.
+    """
+    from ...services.lines import webhook_base
+
+    base = webhook_base()
+    if not base:
+        return str(request.url)
+    query = request.url.query
+    return f"{base}{request.url.path}" + (f"?{query}" if query else "")
+
+
+async def _twilio_request(
+    number_id: str, request: Request
+) -> tuple[Tenant, PhoneNumber, dict[str, str]] | Response:
+    """The number, its company overlay and the form, or the refusal to send.
+
+    404 for a number we do not have (there is no token to check a signature
+    against), 403 for a bad signature. Both are plain empty TwiML, so Twilio
+    logs an error rather than speaking something to a caller.
+    """
+    line = await number_repo.get_any(number_id)
+    company = await tenant_repo.get(line.tenant_id) if line else None
+    if line is None or company is None or line.kind is not NumberKind.TWILIO:
+        log.warning("Twilio webhook for unknown number %s", number_id)
+        return _twiml(status_code=status.HTTP_404_NOT_FOUND)
+    tenant = number_repo.as_tenant(company, line)
+    form = await request.form()
+    params = [(key, str(value)) for key, value in form.multi_items()]
+    if not twilio_client.signature_ok(tenant.twilio_auth_token, _signed_url(request), params,
+                                      request.headers.get("X-Twilio-Signature")):
+        log.warning("Twilio webhook for number %s with a bad signature, refused", number_id)
+        return _twiml(status_code=status.HTTP_403_FORBIDDEN)
+    return tenant, line, dict(params)
+
+
+def _stream_twiml(call_id: str) -> Response:
+    """Connect the call to our audio socket, two-way.
+
+    `<Connect><Stream>` and not `<Start><Stream>`: Start is a one-way copy for
+    recording, and the agent would hear the caller and never be heard. The
+    socket URL may not carry a query string, so the token goes in a
+    `<Parameter>` and comes back in the stream's `start` message.
+
+    Raises if this deployment has no https address or cannot mint the token;
+    the callers turn that into a declined call.
+    """
+    from xml.sax.saxutils import quoteattr
+
+    from ...errors import AppError
+    from ...services.lines import webhook_base
+
+    base = webhook_base()
+    if not base.startswith("https://"):
+        raise AppError(503, "PUBLIC_BASE_URL is not an https address", code="no_public_base_url")
+    socket_url = "wss://" + base.removeprefix("https://") + f"/api/media/twilio/{call_id}"
+    token = tickets.mint(twilio_client.MEDIA_AUDIENCE, call_id,
+                         ttl=twilio_client.MEDIA_TOKEN_TTL_SECONDS)
+    return _twiml(
+        f"<Connect><Stream url={quoteattr(socket_url)}>"
+        f'<Parameter name="token" value={quoteattr(token)}/>'
+        "</Stream></Connect>"
+    )
+
+
+@router.post("/twilio/voice/{number_id}")
+async def twilio_voice(number_id: str, request: Request) -> Response:
+    """Somebody is calling a Twilio number: answer with the agent, or decline.
+
+    The same rules as an Infobip line (`_inbound_allowed_for`): the number
+    must be verified, take inbound calls, and have an inbound agent. A call
+    that may not be answered is still recorded, as a failed call with the
+    reason, so the history shows the attempt and why nobody picked up.
+    """
+    got = await _twilio_request(number_id, request)
+    if isinstance(got, Response):
+        return got
+    tenant, line, form = got
+    call_sid = form.get("CallSid", "")
+    if not call_sid:
+        return _twiml("<Reject/>")
+    if form.get("Direction", "inbound") != "inbound":
+        # Calls we place fetch the outbound address instead; this one is only
+        # ever configured as the number's "A call comes in".
+        log.warning("Twilio voice webhook for a %s call on %s, declined",
+                    form.get("Direction"), number_id)
+        return _twiml("<Reject/>")
+
+    # A repeat of a request we already answered (Twilio retrying after a slow
+    # reply) gets the same answer again rather than a second call row.
+    existing = await call_repo.find_by_provider_id(tenant.phone_number_id, call_sid)
+    if existing is not None or not _claim_inbound(f"twilio:{call_sid}"):
+        if existing is not None and existing.status not in TERMINAL_STATUSES:
+            try:
+                return _stream_twiml(existing.id)
+            except Exception:  # noqa: BLE001
+                log.exception("call %s: could not answer a repeated request", existing.id)
+        return _twiml("<Reject/>")
+
+    caller = form.get("From", "")
+    call = Call(
+        tenantId=tenant.phone_number_id,
+        channel=Channel.PHONE,
+        direction=Direction.INBOUND,
+        status=CallStatus.RINGING,
+        counterparty=caller,
+        providerCallId=call_sid,
+        lineId=line.id,
+        fromNumber=form.get("To", "") or line.phone_number,
+        recordingState=(
+            RecordingState.PENDING if tenant.record_calls else RecordingState.NONE
+        ),
+    )
+    await call_repo.save_call(call)
+    log.info("inbound Twilio call %s from %s", call.id, mask(caller))
+
+    if not await _inbound_allowed_for(tenant, call):
+        log.info("call %s: this number takes no inbound calls, declining", call.id)
+        await _fail_call(tenant, call, "this number is not set up to answer calls")
+        return _twiml("<Reject/>")
+    try:
+        answer = _stream_twiml(call.id)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("call %s: could not hand Twilio an audio address", call.id)
+        await _fail_call(tenant, call, f"the agent could not be connected: {exc}"[:200])
+        return _twiml("<Reject/>")
+    # Started now so the greeting is ready when the socket opens; see warm_up.
+    asyncio.create_task(live.warm_up(tenant, call))
+    return answer
+
+
+@router.post("/twilio/outbound/{number_id}/{call_id}")
+async def twilio_outbound_answered(number_id: str, call_id: str, request: Request) -> Response:
+    """Someone we rang has picked up: put the agent (or the employee) on.
+
+    The URL names our call, so nothing is looked up by Twilio's id. It must
+    still be the call Twilio says it is: ours, on this number, outbound, and
+    carrying this CallSid once we know it. Anything else is hung up.
+    """
+    got = await _twilio_request(number_id, request)
+    if isinstance(got, Response):
+        return got
+    tenant, _line, form = got
+    call_sid = form.get("CallSid", "")
+    call = await call_repo.get_call(tenant.phone_number_id, call_id)
+    if (
+        call is None
+        or call.line_id != number_id
+        or call.direction is not Direction.OUTBOUND
+        or call.status in TERMINAL_STATUSES
+        or (call.provider_call_id and call.provider_call_id != call_sid)
+    ):
+        log.warning("Twilio answer for call %s that does not match, hanging up", call_id)
+        return _twiml("<Hangup/>")
+    if not call.provider_call_id and call_sid:
+        # Answered before `place_call` had saved Twilio's id. Rare, but the
+        # status callbacks find the call by this id, so it is kept now.
+        call.provider_call_id = call_sid
+        await call_repo.save_call(call)
+    try:
+        answer = _stream_twiml(call.id)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("call %s: could not hand Twilio an audio address", call.id)
+        await _fail_call(tenant, call, f"the agent could not be connected: {exc}"[:200])
+        return _twiml("<Hangup/>")
+    # A dialer call with an employee on it is not warmed: warm_up says so itself.
+    asyncio.create_task(live.warm_up(tenant, call))
+    return answer
+
+
+#: Twilio's call statuses that mean the call is over.
+_TWILIO_FINAL = {"completed", "busy", "no-answer", "failed", "canceled"}
+
+
+@router.post("/twilio/status/{number_id}")
+async def twilio_status(number_id: str, request: Request) -> Response:
+    """How a call on this number is going, until it ends.
+
+    Mirrors the Infobip handler's settling: a final status stops the agent,
+    records the duration and schedules the Sheets sync. A status for a call
+    already settled is a repeat delivery and is ignored, so a call is never
+    settled twice. Statuses can arrive out of order, so none moves a call
+    backwards (a late "ringing" does not undo "in progress").
+    """
+    got = await _twilio_request(number_id, request)
+    if isinstance(got, Response):
+        return got
+    tenant, _line, form = got
+    call_sid = form.get("CallSid", "")
+    outcome = form.get("CallStatus", "").lower()
+    call = (await call_repo.find_by_provider_id(tenant.phone_number_id, call_sid)
+            if call_sid else None)
+    if call is None or (call.line_id and call.line_id != number_id):
+        # Most often "initiated" for an outbound call, arriving before
+        # `place_call` saved Twilio's id. Nothing to update.
+        log.debug("Twilio status %r for a call we do not have", outcome)
+        return _twiml()
+    if call.status in TERMINAL_STATUSES:
+        return _twiml()
+
+    if outcome == "ringing":
+        if call.status is CallStatus.QUEUED:
+            call.status = CallStatus.RINGING
+    elif outcome == "in-progress":
+        call.status = CallStatus.IN_PROGRESS
+        call.answered_at = call.answered_at or time.time()
+    elif outcome in _TWILIO_FINAL:
+        _settle_twilio_call(call, outcome, form.get("CallDuration", ""))
+        if live.get(call.id) is not None:
+            asyncio.create_task(live.finish(tenant, call.id, "the call ended"))
+        reports.schedule_sync(tenant)
+    else:
+        # queued / initiated: nothing to record that the row does not say.
+        return _twiml()
+    await call_repo.save_call(call)
+    return _twiml()
+
+
+def _settle_twilio_call(call: Call, outcome: str, duration: str) -> None:
+    """Final status, end time and duration, from Twilio's last word on the call."""
+    call.ended_at = time.time()
+    seconds = int(duration) if duration.isdigit() else 0
+    if outcome == "completed" and seconds > 0 and not call.answered_at:
+        # The "in-progress" callback was missed or never sent; the duration
+        # says the call was answered, and when.
+        call.answered_at = call.ended_at - seconds
+    if seconds > 0:
+        call.duration_seconds = seconds
+    elif call.answered_at:
+        call.duration_seconds = max(0, round(call.ended_at - call.answered_at))
+
+    if call.answered_at:
+        call.status = CallStatus.COMPLETED
+    elif outcome == "failed":
+        call.status = CallStatus.FAILED
+        call.error = call.error or "Twilio could not connect the call"
+        call.recording_state = RecordingState.NONE
+    else:
+        call.status = CallStatus.NO_ANSWER
+        if outcome == "busy":
+            call.error = call.error or "the line was busy"
+        call.recording_state = RecordingState.NONE

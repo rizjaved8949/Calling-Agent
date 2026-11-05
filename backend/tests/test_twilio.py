@@ -472,3 +472,366 @@ def test_changing_the_token_reverifies(client, tenant_factory, auth, twilio_acco
     body = resp.json()
     assert body["status"] == "failed"
     assert body["credentials"]["twilioAuthToken"] == "…9999"
+
+
+# ---------------------------------------------------------------------------
+# Step 4: webhooks
+# ---------------------------------------------------------------------------
+
+
+def test_signature_matches_twilios_worked_example():
+    """From twilio.com/docs/usage/security, "Explore the algorithm yourself"."""
+    from app.services.twilio_client import expected_signature, signature_ok
+
+    params = [("CallSid", "CA1234567890ABCDE"), ("Caller", "+14158675310"),
+              ("Digits", "1234"), ("From", "+14158675310"), ("To", "+18005551212")]
+    url = "https://example.com/myapp.php?foo=1&bar=2"
+    assert expected_signature("12345", url, params) == "L/OH5YylLD5NRKLltdqwSvS0BnU="
+    assert signature_ok("12345", url, params, "L/OH5YylLD5NRKLltdqwSvS0BnU=")
+
+
+def test_a_tampered_request_fails_the_signature():
+    from app.services.twilio_client import signature_ok
+
+    url = "https://example.com/myapp.php?foo=1&bar=2"
+    good = "L/OH5YylLD5NRKLltdqwSvS0BnU="
+    params = [("CallSid", "CA1234567890ABCDE"), ("Caller", "+14158675310"),
+              ("Digits", "1234"), ("From", "+14158675310"), ("To", "+18005551212")]
+    tampered = [(k, "+10000000000" if k == "From" else v) for k, v in params]
+    assert not signature_ok("12345", url, tampered, good)
+    assert not signature_ok("wrong-token", url, params, good)
+    assert not signature_ok("12345", url, params, None)
+    assert not signature_ok("", url, params, good)
+
+
+INBOUND_SID = "CA" + "3" * 32
+
+
+@pytest.fixture
+def twilio_line(fake_db, monkeypatch):
+    """A verified Twilio number answering inbound with an agent, plus spies on
+    the background work the webhooks start."""
+    import asyncio
+
+    from app.config import settings
+    from app.models.number import NumberMode, NumberStatus
+    from app.repositories import numbers as repo
+    from app.repositories import tenants as tenant_repo
+    from app.api.routes import webhooks
+    from app.services import reports
+    from app.services.agent import live
+
+    # The in-process "seen this CallSid" claims outlive a test; several tests
+    # ring with the same CallSid, as no real pair of calls ever would.
+    monkeypatch.setattr(webhooks, "_seen_inbound", {})
+    monkeypatch.setattr(settings, "public_base_url", BASE)
+    asyncio.run(tenant_repo.save(Tenant(phoneNumberId="700", name="Acme")))
+    number = _twilio_number(status=NumberStatus.VERIFIED, mode=NumberMode.BOTH,
+                            inboundAgentId="agent-1")
+    asyncio.run(repo.save(number))
+
+    spy = {"warmed": [], "finished": [], "synced": 0, "live": set()}
+
+    async def warm_up(_tenant, call, **_kw):
+        spy["warmed"].append(call.id)
+
+    async def finish(_tenant, call_id, _reason=""):
+        spy["finished"].append(call_id)
+
+    def synced(_tenant, delay=None):
+        spy["synced"] += 1
+
+    monkeypatch.setattr(live, "warm_up", warm_up)
+    monkeypatch.setattr(live, "finish", finish)
+    monkeypatch.setattr(live, "get", lambda call_id: object() if call_id in spy["live"] else None)
+    monkeypatch.setattr(reports, "schedule_sync", synced)
+    return spy
+
+
+def _twilio_post(client, path: str, form: dict, *, token: str = TOKEN, signature=None):
+    from app.services.twilio_client import expected_signature
+
+    sig = signature or expected_signature(token, BASE + path, list(form.items()))
+    return client.post(path, data=form, headers={"X-Twilio-Signature": sig})
+
+
+def _ring(client, call_sid: str = INBOUND_SID, **extra):
+    form = {"CallSid": call_sid, "AccountSid": SID, "From": "+923001112222",
+            "To": "+15551234567", "CallStatus": "ringing", "Direction": "inbound", **extra}
+    return _twilio_post(client, "/api/webhooks/twilio/voice/tw1", form)
+
+
+def _calls(fake_db):
+    from app.models.call import Call
+    from app.repositories import calls as call_repo
+
+    rows = fake_db.tables.get(call_repo.CALLS_TABLE, {}).values()
+    return [Call.model_validate({**r["data"], "id": r["id"]}) for r in rows]
+
+
+def _stream_of(xml: str) -> tuple[str, str]:
+    """(socket URL, token) from Connect/Stream TwiML; fails if it is not that."""
+    import xml.etree.ElementTree as ET
+
+    root = ET.fromstring(xml)
+    assert root.tag == "Response"
+    stream = root.find("./Connect/Stream")
+    assert stream is not None, xml
+    assert root.find("./Start") is None  # one-way streams would leave the agent mute
+    token = stream.find("./Parameter[@name='token']").get("value")
+    return stream.get("url"), token
+
+
+def test_an_inbound_call_is_connected_to_the_agents_socket(client, twilio_line, fake_db):
+    from app.models.call import CallStatus, Direction
+    from app.security import tickets
+    from app.services.twilio_client import MEDIA_AUDIENCE
+
+    resp = _ring(client)
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("application/xml")
+    [call] = _calls(fake_db)
+    assert call.direction is Direction.INBOUND
+    assert call.status is CallStatus.RINGING
+    assert call.provider_call_id == INBOUND_SID
+    assert call.line_id == "tw1"
+    assert call.counterparty == "+923001112222"
+
+    url, token = _stream_of(resp.text)
+    assert url == f"wss://api.example.com/api/media/twilio/{call.id}"
+    assert tickets.verify(token, MEDIA_AUDIENCE)["s"] == call.id
+    assert twilio_line["warmed"] == [call.id]
+
+
+def test_the_stream_token_expires_in_about_two_minutes(client, twilio_line):
+    import base64
+    import json
+    import time
+
+    _url, token = _stream_of(_ring(client).text)
+    payload = json.loads(base64.urlsafe_b64decode(token.split(".")[0] + "=="))
+    assert 100 <= payload["x"] - time.time() <= 125
+
+
+def test_the_same_inbound_call_delivered_twice_is_one_call(client, twilio_line, fake_db):
+    first = _ring(client)
+    second = _ring(client)
+    assert len(_calls(fake_db)) == 1
+    assert _stream_of(first.text)[0] == _stream_of(second.text)[0]
+
+
+@pytest.mark.parametrize("field, value", [("mode", "outbound"), ("inbound_agent_id", "")])
+def test_a_number_that_does_not_answer_rejects_and_records_why(client, twilio_line, fake_db,
+                                                               field, value):
+    import asyncio
+
+    from app.models.call import CallStatus
+    from app.models.number import NumberMode
+    from app.repositories import numbers as repo
+
+    number = asyncio.run(repo.get("700", "tw1"))
+    setattr(number, field, NumberMode(value) if field == "mode" else value)
+    asyncio.run(repo.save(number))
+
+    resp = _ring(client)
+    assert resp.status_code == 200
+    assert "<Reject/>" in resp.text
+    [call] = _calls(fake_db)
+    assert call.status is CallStatus.FAILED
+    assert "not set up to answer" in call.error
+    assert twilio_line["warmed"] == []
+
+
+def test_a_bad_signature_is_refused_and_nothing_is_stored(client, twilio_line, fake_db):
+    form = {"CallSid": INBOUND_SID, "From": "+923001112222", "Direction": "inbound"}
+    resp = _twilio_post(client, "/api/webhooks/twilio/voice/tw1", form, signature="forged=")
+    assert resp.status_code == 403
+    signed_with_wrong_token = _twilio_post(client, "/api/webhooks/twilio/voice/tw1", form,
+                                           token="not-the-token")
+    assert signed_with_wrong_token.status_code == 403
+    assert _calls(fake_db) == []
+    assert twilio_line["warmed"] == []
+
+
+def test_an_unknown_number_is_404(client, twilio_line):
+    resp = _twilio_post(client, "/api/webhooks/twilio/voice/nope", {"CallSid": INBOUND_SID})
+    assert resp.status_code == 404
+
+
+def test_an_infobip_number_does_not_take_twilio_webhooks(client, twilio_line):
+    import asyncio
+
+    from app.repositories import numbers as repo
+
+    asyncio.run(repo.save(PhoneNumber(id="ib9", tenantId="700", kind=NumberKind.SIM,
+                                      phoneNumber="+923000000000")))
+    resp = _twilio_post(client, "/api/webhooks/twilio/voice/ib9", {"CallSid": INBOUND_SID})
+    assert resp.status_code == 404
+
+
+def test_without_https_the_inbound_call_is_rejected(client, twilio_line, fake_db, monkeypatch):
+    """Twilio can reach a plain http URL; it cannot stream audio to ws://."""
+    from app.config import settings
+    from app.models.call import CallStatus
+    from app.services.twilio_client import expected_signature
+
+    monkeypatch.setattr(settings, "public_base_url", "http://localhost:8000")
+    path = "/api/webhooks/twilio/voice/tw1"
+    form = {"CallSid": INBOUND_SID, "From": "+923001112222", "Direction": "inbound"}
+    sig = expected_signature(TOKEN, "http://localhost:8000" + path, list(form.items()))
+    resp = client.post(path, data=form, headers={"X-Twilio-Signature": sig})
+    assert "<Reject/>" in resp.text
+    [call] = _calls(fake_db)
+    assert call.status is CallStatus.FAILED
+
+
+# ---- outbound: the person we rang picks up --------------------------------
+
+
+def _outbound_call(fake_db, **extra):
+    import asyncio
+
+    from app.models.call import Call, CallStatus, Direction
+    from app.repositories import calls as call_repo
+
+    fields = dict(id="out1", tenantId="700", direction=Direction.OUTBOUND,
+                  status=CallStatus.RINGING, lineId="tw1", providerCallId=CALL_SID,
+                  counterparty="+923001112222")
+    call = Call(**{**fields, **extra})
+    asyncio.run(call_repo.save_call(call))
+    return call
+
+
+def test_an_answered_outbound_call_is_connected_to_the_agent(client, twilio_line, fake_db):
+    from app.security import tickets
+    from app.services.twilio_client import MEDIA_AUDIENCE
+
+    _outbound_call(fake_db)
+    resp = _twilio_post(client, "/api/webhooks/twilio/outbound/tw1/out1",
+                        {"CallSid": CALL_SID, "CallStatus": "in-progress",
+                         "Direction": "outbound-api"})
+    url, token = _stream_of(resp.text)
+    assert url == "wss://api.example.com/api/media/twilio/out1"
+    assert tickets.verify(token, MEDIA_AUDIENCE)["s"] == "out1"
+    assert twilio_line["warmed"] == ["out1"]
+
+
+@pytest.mark.parametrize("path, sid", [
+    ("/api/webhooks/twilio/outbound/tw1/out1", "CA" + "9" * 32),  # someone else's call
+    ("/api/webhooks/twilio/outbound/tw1/missing", CALL_SID),      # no such call
+])
+def test_an_answer_that_does_not_match_the_call_hangs_up(client, twilio_line, fake_db, path, sid):
+    _outbound_call(fake_db)
+    resp = _twilio_post(client, path, {"CallSid": sid, "Direction": "outbound-api"})
+    assert "<Hangup/>" in resp.text
+    assert twilio_line["warmed"] == []
+
+
+def test_an_answer_before_the_sid_was_saved_keeps_it(client, twilio_line, fake_db):
+    import asyncio
+
+    from app.repositories import calls as call_repo
+
+    _outbound_call(fake_db, providerCallId="")
+    resp = _twilio_post(client, "/api/webhooks/twilio/outbound/tw1/out1",
+                        {"CallSid": CALL_SID, "Direction": "outbound-api"})
+    assert "<Stream" in resp.text
+    assert asyncio.run(call_repo.get_call("700", "out1")).provider_call_id == CALL_SID
+
+
+# ---- status callbacks --------------------------------------------------------
+
+
+def _status(client, status: str, sid: str = CALL_SID, **extra):
+    return _twilio_post(client, "/api/webhooks/twilio/status/tw1",
+                        {"CallSid": sid, "CallStatus": status, **extra})
+
+
+def _get(call_id="out1"):
+    import asyncio
+
+    from app.repositories import calls as call_repo
+
+    return asyncio.run(call_repo.get_call("700", call_id))
+
+
+def test_an_answered_call_settles_as_completed_with_its_duration(client, twilio_line, fake_db):
+    from app.models.call import CallStatus
+
+    _outbound_call(fake_db)
+    twilio_line["live"].add("out1")
+    assert _status(client, "in-progress").status_code == 200
+    assert _get().status is CallStatus.IN_PROGRESS
+    assert _get().answered_at
+
+    _status(client, "completed", CallDuration="42")
+    call = _get()
+    assert call.status is CallStatus.COMPLETED
+    assert call.duration_seconds == 42
+    assert call.ended_at
+    assert twilio_line["finished"] == ["out1"]
+    assert twilio_line["synced"] == 1
+
+
+def test_a_repeated_final_status_is_ignored(client, twilio_line, fake_db):
+    _outbound_call(fake_db)
+    twilio_line["live"].add("out1")
+    _status(client, "completed", CallDuration="10")
+    first_end = _get().ended_at
+    _status(client, "completed", CallDuration="99")
+    assert _get().duration_seconds == 10
+    assert _get().ended_at == first_end
+    assert twilio_line["synced"] == 1
+    assert twilio_line["finished"] == ["out1"]
+
+
+@pytest.mark.parametrize("outcome, expected, words", [
+    ("busy", "NO_ANSWER", "busy"),
+    ("no-answer", "NO_ANSWER", ""),
+    ("canceled", "NO_ANSWER", ""),
+    ("failed", "FAILED", "could not connect"),
+])
+def test_unanswered_endings(client, twilio_line, fake_db, outcome, expected, words):
+    _outbound_call(fake_db)
+    _status(client, outcome)
+    call = _get()
+    assert call.status.value == expected
+    assert words in (call.error or "")
+    assert call.recording_state.value == "NONE"
+    assert call.duration_seconds == 0
+
+
+def test_a_completed_call_without_an_in_progress_callback_still_counts(client, twilio_line,
+                                                                       fake_db):
+    from app.models.call import CallStatus
+
+    _outbound_call(fake_db)
+    _status(client, "completed", CallDuration="30")
+    call = _get()
+    assert call.status is CallStatus.COMPLETED
+    assert call.answered_at and round(call.ended_at - call.answered_at) == 30
+
+
+def test_a_late_ringing_does_not_undo_in_progress(client, twilio_line, fake_db):
+    from app.models.call import CallStatus
+
+    _outbound_call(fake_db)
+    _status(client, "in-progress")
+    _status(client, "ringing")
+    assert _get().status is CallStatus.IN_PROGRESS
+
+
+def test_a_status_for_an_unknown_call_is_accepted_and_ignored(client, twilio_line, fake_db):
+    resp = _status(client, "initiated", sid="CA" + "8" * 32)
+    assert resp.status_code == 200
+    assert _calls(fake_db) == []
+
+
+def test_a_status_with_a_bad_signature_changes_nothing(client, twilio_line, fake_db):
+    from app.models.call import CallStatus
+
+    _outbound_call(fake_db)
+    resp = _twilio_post(client, "/api/webhooks/twilio/status/tw1",
+                        {"CallSid": CALL_SID, "CallStatus": "completed"}, signature="nope")
+    assert resp.status_code == 403
+    assert _get().status is CallStatus.RINGING

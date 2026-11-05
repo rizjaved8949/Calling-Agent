@@ -18,9 +18,12 @@ call verified numbers" does.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import logging
 import re
-from typing import Any
+from typing import Any, Iterable
 
 import httpx
 
@@ -41,6 +44,41 @@ _RESOURCE_SID = re.compile(r"^[A-Z]{2}[0-9a-fA-F]{32}$")
 
 # What Twilio asks us to be told about on an outbound call.
 STATUS_EVENTS = ("initiated", "ringing", "answered", "completed")
+
+# The audio socket's own proof, since Twilio does not sign the websocket: a
+# `security/tickets` ticket for this audience, naming the call, handed to
+# Twilio inside the TwiML and returned to us in the stream's `start` message.
+# Two minutes is ample: Twilio opens the socket within a second or two of
+# reading the TwiML, and a token that leaks later is already dead.
+MEDIA_AUDIENCE = "twilio-media"
+MEDIA_TOKEN_TTL_SECONDS = 120
+
+
+# ---------------------------------------------------------------------------
+# Webhook signatures
+# ---------------------------------------------------------------------------
+
+
+def expected_signature(auth_token: str, url: str, params: Iterable[tuple[str, str]]) -> str:
+    """What `X-Twilio-Signature` must be for this request.
+
+    Twilio's recipe: the full URL as Twilio called it (query string included),
+    then every POST parameter's name and value appended with no separator, in
+    name order; HMAC-SHA1 that with the Auth Token and base64 the digest.
+    Sorting the (name, value) pairs puts a repeated name's values in order
+    too, which is how Twilio's own validator treats them.
+    """
+    data = url + "".join(name + value for name, value in sorted(params))
+    digest = hmac.new(auth_token.encode(), data.encode(), hashlib.sha1).digest()
+    return base64.b64encode(digest).decode("ascii")
+
+
+def signature_ok(auth_token: str, url: str, params: Iterable[tuple[str, str]],
+                 header: str | None) -> bool:
+    """Whether Twilio really sent this. Constant-time; no token, no pass."""
+    if not auth_token or not header:
+        return False
+    return hmac.compare_digest(expected_signature(auth_token, url, params), header)
 
 
 class TwilioRefused(AppError):
