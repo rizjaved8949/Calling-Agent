@@ -332,3 +332,143 @@ async def test_a_twilio_campaign_is_ready_on_its_own_credentials(fake_db):
     await repo.save(_twilio_number(twilioAuthToken=""))
     assert not await _phone_line_ready(company, "tw1")
     assert not await _phone_line_ready(company, "")  # unchanged: company's Infobip
+
+
+# ---------------------------------------------------------------------------
+# Step 3: verifying a Twilio number
+# ---------------------------------------------------------------------------
+
+BASE = "https://api.example.com"
+
+
+@pytest.fixture
+def twilio_account(twilio_api, monkeypatch):
+    """An active, fully paid account that owns +15551234567 with voice."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "public_base_url", BASE)
+    twilio_api.replies.update({
+        ("GET", ".json"): (200, {"sid": SID, "status": "active", "type": "Full"}),
+        ("GET", "/IncomingPhoneNumbers.json"): (200, {"incoming_phone_numbers": [
+            {"sid": PN_SID, "phone_number": "+15551234567", "capabilities": {"voice": True}},
+        ]}),
+        ("POST", f"/IncomingPhoneNumbers/{PN_SID}.json"): (200, {"sid": PN_SID}),
+    })
+    return twilio_api
+
+
+def _add_twilio(client, auth, key, **fields):
+    body = {"kind": "twilio", "phoneNumber": "+15551234567",
+            "twilioAccountSid": SID, "twilioAuthToken": TOKEN, **fields}
+    return client.post("/api/numbers", json=body, headers=auth(key))
+
+
+def test_a_twilio_number_is_verified_and_pointed_here(client, tenant_factory, auth, twilio_account):
+    _, key = tenant_factory("710")
+    resp = _add_twilio(client, auth, key)
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["status"] == "verified", body["statusDetail"]
+    assert "now point here" in body["statusDetail"]
+    assert "Trial" not in body["statusDetail"]
+    assert body["credentials"]["twilioPhoneNumberSid"] == PN_SID
+    assert body["credentials"]["twilioAuthToken"] == "…abcd"
+    assert TOKEN not in resp.text
+
+    configure = twilio_account.requests[-1]
+    assert configure.url.path.endswith(f"/IncomingPhoneNumbers/{PN_SID}.json")
+    assert twilio_account.form() == {
+        "VoiceUrl": [f"{BASE}/api/webhooks/twilio/voice/{body['id']}"],
+        "VoiceMethod": ["POST"],
+        "StatusCallback": [f"{BASE}/api/webhooks/twilio/status/{body['id']}"],
+        "StatusCallbackMethod": ["POST"],
+    }
+    assert body["webhookUrl"] == f"{BASE}/api/webhooks/twilio/voice/{body['id']}"
+
+
+def test_a_wrong_token_fails_verification(client, tenant_factory, auth, twilio_account):
+    _, key = tenant_factory("711")
+    twilio_account.replies[("GET", ".json")] = (401, {"code": 20003, "message": "Authenticate"})
+    body = _add_twilio(client, auth, key).json()
+    assert body["status"] == "failed"
+    assert "Account SID or Auth Token" in body["statusDetail"]
+    assert body["credentials"]["twilioPhoneNumberSid"] is None
+
+
+def test_a_number_from_another_account_fails(client, tenant_factory, auth, twilio_account):
+    _, key = tenant_factory("712")
+    twilio_account.replies[("GET", "/IncomingPhoneNumbers.json")] = (
+        200, {"incoming_phone_numbers": []})
+    body = _add_twilio(client, auth, key).json()
+    assert body["status"] == "failed"
+    assert "not a number in this Twilio account" in body["statusDetail"]
+    # Nothing was configured on a number we could not find.
+    assert not any(r.method == "POST" for r in twilio_account.requests)
+
+
+def test_a_suspended_account_fails(client, tenant_factory, auth, twilio_account):
+    _, key = tenant_factory("713")
+    twilio_account.replies[("GET", ".json")] = (200, {"status": "suspended", "type": "Full"})
+    body = _add_twilio(client, auth, key).json()
+    assert body["status"] == "failed"
+    assert "suspended" in body["statusDetail"]
+
+
+def test_a_number_without_voice_fails(client, tenant_factory, auth, twilio_account):
+    _, key = tenant_factory("714")
+    twilio_account.replies[("GET", "/IncomingPhoneNumbers.json")] = (200, {
+        "incoming_phone_numbers": [{"sid": PN_SID, "capabilities": {"voice": False}}]})
+    body = _add_twilio(client, auth, key).json()
+    assert body["status"] == "failed"
+    assert "voice" in body["statusDetail"]
+
+
+def test_a_trial_account_is_verified_with_a_note(client, tenant_factory, auth, twilio_account):
+    _, key = tenant_factory("715")
+    twilio_account.replies[("GET", ".json")] = (200, {"status": "active", "type": "Trial"})
+    body = _add_twilio(client, auth, key).json()
+    assert body["status"] == "verified"
+    assert "Verified Caller IDs" in body["statusDetail"]
+
+
+def test_missing_fields_are_named(client, tenant_factory, auth, twilio_account):
+    _, key = tenant_factory("716")
+    body = _add_twilio(client, auth, key, twilioAuthToken="").json()
+    assert body["status"] == "failed"
+    assert body["statusDetail"] == "Missing: Auth Token."
+    assert twilio_account.requests == []
+
+
+@pytest.mark.parametrize("base", ["", "http://localhost:8000"])
+def test_without_https_the_urls_must_be_pasted(client, tenant_factory, auth, twilio_account,
+                                               monkeypatch, base):
+    from app.config import settings
+
+    _, key = tenant_factory("717")
+    monkeypatch.setattr(settings, "public_base_url", base)
+    body = _add_twilio(client, auth, key).json()
+    assert body["status"] == "verified"
+    assert "by hand" in body["statusDetail"]
+    assert not any(r.method == "POST" for r in twilio_account.requests)
+
+
+def test_a_refused_webhook_update_still_verifies_with_a_note(client, tenant_factory, auth,
+                                                             twilio_account):
+    _, key = tenant_factory("718")
+    twilio_account.replies[("POST", f"/IncomingPhoneNumbers/{PN_SID}.json")] = (
+        403, {"code": 20403, "message": "Forbidden"})
+    body = _add_twilio(client, auth, key).json()
+    assert body["status"] == "verified"
+    assert "could not be set automatically" in body["statusDetail"]
+    assert body["credentials"]["twilioPhoneNumberSid"] == PN_SID
+
+
+def test_changing_the_token_reverifies(client, tenant_factory, auth, twilio_account):
+    _, key = tenant_factory("719")
+    number = _add_twilio(client, auth, key).json()
+    twilio_account.replies[("GET", ".json")] = (401, {"code": 20003})
+    resp = client.patch(f"/api/numbers/{number['id']}",
+                        json={"twilioAuthToken": "a-new-token-9999"}, headers=auth(key))
+    body = resp.json()
+    assert body["status"] == "failed"
+    assert body["credentials"]["twilioAuthToken"] == "…9999"

@@ -3,7 +3,8 @@ Proving a number's credentials work, and finding the right credentials for a cal
 
 Verification asks the provider a question only the real owner of these
 credentials can get an answer to: Meta is asked about the phone number id with
-the access token, Infobip is asked for the account balance with the API key.
+the access token, Infobip is asked for the account balance with the API key,
+Twilio is asked for the account and for this number inside it.
 A wrong token, a number from another WABA or a typo in the base URL each fail
 here, in the settings screen, instead of on the first customer's call.
 """
@@ -31,6 +32,8 @@ async def verify(tenant: Tenant, number: PhoneNumber) -> PhoneNumber:
     try:
         if number.kind is NumberKind.WHATSAPP:
             detail = await _verify_meta(effective)
+        elif number.kind is NumberKind.TWILIO:
+            detail = await _verify_twilio(effective, number)
         else:
             detail = await _verify_infobip(effective)
     except _Refused as exc:
@@ -142,6 +145,86 @@ async def _verify_infobip(t: Tenant) -> str:
         f"Infobip reached, {len(configurations)} calls "
         f"configuration{'' if len(configurations) == 1 else 's'} available."
     )
+
+
+async def _verify_twilio(t: Tenant, number: PhoneNumber) -> str:
+    """Prove the account, find the number in it, and point it at us.
+
+    Four questions, each with its own answer for the person at the form:
+
+    1. Is anything missing? Named, so they know which box is empty.
+    2. Do the SID and token open the account, and is it active? A suspended
+       account accepts the credentials and then refuses every call.
+    3. Is this phone number in *that* account, with voice? The commonest
+       mistake is a number bought in a second Twilio account or subaccount.
+    4. Can we set its webhooks for them? Only to an https address: Twilio
+       would accept http, but the audio socket it is then sent to would not
+       be wss and the call would be silent. If we cannot, the number is still
+       verified, and the detail says the URLs must be pasted by hand.
+
+    Records Twilio's id for the number (`PN…`) on `number` as it goes; the
+    caller saves it.
+    """
+    from .twilio_client import Twilio
+
+    missing = [
+        name for name, value in (
+            ("Account SID", t.twilio_account_sid),
+            ("Auth Token", t.twilio_auth_token),
+            ("Phone number", t.infobip_phone_number),
+        ) if not value
+    ]
+    if missing:
+        raise _Refused("Missing: " + ", ".join(missing) + ".")
+
+    # Found again on every verify: a number moved between accounts must not
+    # keep the old account's id.
+    number.twilio_phone_number_sid = ""
+    client = Twilio(t)
+    try:
+        account = await client.account()
+        status = str(account.get("status") or "").lower()
+        if status != "active":
+            raise _Refused(
+                f"This Twilio account is {status or 'not active'}, so it cannot "
+                "make or take calls. Check Account billing in the Twilio Console."
+            )
+        found = await client.find_number(number.phone_number)
+    except AppError as exc:
+        # Wrong SID or token, a malformed SID, or Twilio unreachable: each
+        # already carries a sentence written for this form.
+        raise _Refused(exc.message) from exc
+    if found is None:
+        raise _Refused(
+            f"{number.phone_number} is not a number in this Twilio account. Check "
+            "Phone Numbers → Manage → Active numbers in the same account the "
+            "Account SID belongs to."
+        )
+    if not (found.get("capabilities") or {}).get("voice"):
+        raise _Refused(f"{number.phone_number} cannot make or take voice calls in Twilio.")
+    number.twilio_phone_number_sid = str(found.get("sid") or "")
+
+    detail = f"Twilio confirmed {number.phone_number}."
+    base = webhook_base()
+    urls = number.public(base_url=base)
+    if base.startswith("https://") and number.twilio_phone_number_sid:
+        try:
+            await client.configure_number(
+                number.twilio_phone_number_sid, urls["webhookUrl"], urls["statusCallbackUrl"],
+            )
+            detail += " Its call webhooks now point here."
+        except AppError as exc:
+            log.warning("number %s: could not set Twilio webhooks: %s", number.id, exc.code)
+            detail += (" Its webhooks could not be set automatically: paste the Voice "
+                       "URL and Status callback URL into the number in Twilio.")
+    else:
+        detail += (" The server has no public https address yet, so paste the Voice "
+                   "URL and Status callback URL into the number in Twilio by hand.")
+
+    if str(account.get("type") or "").lower() == "trial":
+        detail += (" Trial account: it can only call numbers listed under Verified "
+                   "Caller IDs, and callers hear a trial notice first.")
+    return detail
 
 
 def _json(response: httpx.Response) -> dict:

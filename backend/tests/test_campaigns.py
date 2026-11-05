@@ -531,3 +531,51 @@ async def test_a_long_conversation_is_not_recorded_as_a_failure(runner, monkeypa
         f"an answered call was filed as {contact.state} ({contact.note!r})"
     )
     assert len(carrier.placed) == 1, "a second call was placed over a live one"
+
+
+# ---------------------------------------------------------------------------
+# Whether a campaign can start: judged by the line it dials through
+# ---------------------------------------------------------------------------
+
+
+async def _line_with(key: str):
+    from app.models.number import NumberKind, NumberStatus, PhoneNumber
+    from app.repositories import numbers as number_repo
+
+    line = PhoneNumber(id="ib-line", tenantId="900", kind=NumberKind.SIM,
+                       phoneNumber="+923001112222", status=NumberStatus.VERIFIED,
+                       infobipApiKey=key, infobipBaseUrl="https://x.api.infobip.com" if key else "")
+    await number_repo.save(line)
+    return line
+
+
+async def test_a_line_with_its_own_key_can_start_without_a_company_key(fake_db):
+    """The company has no Infobip settings; the line has its own. The runner
+    dials with the line's, so the campaign must not be refused."""
+    from app.api.routes.campaigns import _phone_line_ready
+    from app.models.tenant import Tenant
+
+    await _line_with("line-key-12345678")
+    assert await _phone_line_ready(Tenant(phoneNumberId="900"), "ib-line")
+
+
+async def test_a_line_without_a_key_is_refused_even_if_the_company_has_one(fake_db):
+    """The other way round: the company key is not what gets dialled with, so
+    it must not let a campaign start that would fail on its first call."""
+    from app.api.routes.campaigns import _phone_line_ready
+    from app.models.tenant import Tenant
+
+    await _line_with("")
+    company = Tenant(phoneNumberId="900", infobipApiKey="k",
+                     infobipBaseUrl="https://x.api.infobip.com")
+    assert not await _phone_line_ready(company, "ib-line")
+
+
+async def test_without_a_line_the_company_settings_decide(fake_db):
+    from app.api.routes.campaigns import _phone_line_ready
+    from app.models.tenant import Tenant
+
+    company = Tenant(phoneNumberId="900", infobipApiKey="k",
+                     infobipBaseUrl="https://x.api.infobip.com")
+    assert await _phone_line_ready(company, "")
+    assert not await _phone_line_ready(Tenant(phoneNumberId="900"), "")

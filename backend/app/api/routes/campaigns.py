@@ -27,7 +27,6 @@ from ...repositories import campaigns as campaign_repo
 from ...security.rate_limit import check_expensive
 from ...services import campaign_runner
 from ...services.agent import whatsapp_media
-from ...models.number import NumberKind
 from ...models.tenant import Tenant
 from ...services import carriers
 from ...services.whatsapp import to_e164
@@ -145,15 +144,18 @@ async def update_campaign(
 async def _phone_line_ready(tenant: Tenant, line_id: str) -> bool:
     """Whether the carrier this campaign dials through has credentials.
 
-    A Twilio line is judged by its own credentials, because those are the
-    ones `campaign_runner` will dial with. Every other case is judged as it
-    always was, by the company's own Infobip settings.
+    A campaign on a line is judged by that line's credentials, Infobip or
+    Twilio, because those are the ones `campaign_runner` dials with. Judging it
+    by the company's own settings, as this once did, refused a line that had
+    its own key and passed one that had none, which then failed on the first
+    call in front of a customer. Without a line, the company's settings are
+    all there is.
     """
     from ...repositories import numbers as number_repo
 
     if line_id:
         line = await number_repo.get_safe(tenant.phone_number_id, line_id)
-        if line is not None and line.kind is NumberKind.TWILIO:
+        if line is not None:
             return carriers.carrier_for(number_repo.as_tenant(tenant, line)).configured
     return carriers.carrier_for(tenant).configured
 
