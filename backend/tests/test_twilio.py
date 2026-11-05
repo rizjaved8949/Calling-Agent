@@ -642,6 +642,26 @@ def test_a_number_that_does_not_answer_rejects_and_records_why(client, twilio_li
     assert twilio_line["warmed"] == []
 
 
+def test_a_suspended_companys_call_is_rejected(client, twilio_line, fake_db):
+    import asyncio
+
+    from app.api.routes import webhooks
+    from app.models.call import CallStatus
+    from app.repositories import tenants as tenant_repo
+
+    company = asyncio.run(tenant_repo.get("700"))
+    company.suspended = True
+    asyncio.run(tenant_repo.save(company))
+
+    resp = _ring(client)
+    assert resp.status_code == 200
+    assert "<Reject/>" in resp.text and "<Stream" not in resp.text
+    [call] = _calls(fake_db)
+    assert call.status is CallStatus.FAILED
+    assert call.error == webhooks.SUSPENDED_REASON
+    assert twilio_line["warmed"] == []
+
+
 def test_a_bad_signature_is_refused_and_nothing_is_stored(client, twilio_line, fake_db):
     form = {"CallSid": INBOUND_SID, "From": "+923001112222", "Direction": "inbound"}
     resp = _twilio_post(client, "/api/webhooks/twilio/voice/tw1", form, signature="forged=")

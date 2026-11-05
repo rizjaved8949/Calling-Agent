@@ -190,6 +190,30 @@ async def _inbound_allowed(tenant: Tenant) -> bool:
     return bool(line and line.verified and line.takes_inbound and line.inbound_agent_id)
 
 
+#: Why a call was declined, as stored on the call and shown in its history.
+SUSPENDED_REASON = "this company is switched off"
+NOT_ANSWERING_REASON = "this number is not set up to answer calls"
+
+
+async def _inbound_refusal(tenant: Tenant, call: Call) -> str:
+    """Why this inbound call must not be answered, or "" when it may be.
+
+    One question for every carrier, so Infobip, Twilio and WhatsApp cannot
+    drift apart on who gets an agent. Suspension comes first: the operator
+    switching a company off means no call is answered (see `Tenant.suspended`),
+    and the signed-in API refusing them (`api/deps.py`) never covered the
+    carrier ringing us directly. The tenant here was read fresh for this
+    webhook, so a suspension takes effect on the very next call.
+    """
+    if tenant.suspended:
+        return SUSPENDED_REASON
+    if call.channel is Channel.WHATSAPP_CALL:
+        allowed = await _inbound_allowed(tenant)
+    else:
+        allowed = await _inbound_allowed_for(tenant, call)
+    return "" if allowed else NOT_ANSWERING_REASON
+
+
 async def _handle_whatsapp(tenant: Tenant, payload: dict[str, Any]) -> None:
     for entry in payload.get("entry") or []:
         for change in entry.get("changes") or []:
@@ -546,16 +570,19 @@ async def _answer_whatsapp(tenant: Tenant, call: Call, sdp_offer: str) -> None:
     """
     from ...services.agent import whatsapp_media
 
+    # Before the media check: declining a call needs no media stack, and a
+    # suspended company's call must be declined on any server.
+    refusal = await _inbound_refusal(tenant, call)
+    if refusal:
+        log.info("call %s: declining: %s", call.id, refusal)
+        with contextlib.suppress(Exception):
+            await WhatsApp(tenant).reject_call(call.provider_call_id)
+        await _fail_call(tenant, call, refusal)
+        return
+
     if not whatsapp_media.available():
         log.error("call %s: aiortc is not installed, cannot answer", call.id)
         await _fail_call(tenant, call, "the media stack is not installed")
-        return
-
-    if not await _inbound_allowed(tenant):
-        log.info("call %s: this number takes no inbound calls, declining", call.id)
-        with contextlib.suppress(Exception):
-            await WhatsApp(tenant).reject_call(call.provider_call_id)
-        await _fail_call(tenant, call, "this number is not set up to answer calls")
         return
 
     bridge = None
@@ -758,11 +785,12 @@ async def _answer_inbound(tenant: Tenant, call: Call) -> None:
     moment the agent's leg connects, so answering first and bridging afterwards
     only buys the caller a few seconds of silence.
     """
-    if not await _inbound_allowed_for(tenant, call):
-        log.info("call %s: this number takes no inbound calls, hanging up", call.id)
+    refusal = await _inbound_refusal(tenant, call)
+    if refusal:
+        log.info("call %s: declining: %s", call.id, refusal)
         with contextlib.suppress(Exception):
             await Infobip(tenant).hangup(call.provider_call_id)
-        await _fail_call(tenant, call, "this number is not set up to answer calls")
+        await _fail_call(tenant, call, refusal)
         return
     await _bridge_agent(tenant, call)
 
@@ -1012,9 +1040,10 @@ async def twilio_voice(number_id: str, request: Request) -> Response:
     await call_repo.save_call(call)
     log.info("inbound Twilio call %s from %s", call.id, mask(caller))
 
-    if not await _inbound_allowed_for(tenant, call):
-        log.info("call %s: this number takes no inbound calls, declining", call.id)
-        await _fail_call(tenant, call, "this number is not set up to answer calls")
+    refusal = await _inbound_refusal(tenant, call)
+    if refusal:
+        log.info("call %s: declining: %s", call.id, refusal)
+        await _fail_call(tenant, call, refusal)
         return _twiml("<Reject/>")
     try:
         answer = _stream_twiml(call.id)
