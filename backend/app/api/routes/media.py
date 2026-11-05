@@ -246,9 +246,8 @@ async def operator_media(socket: WebSocket, call_id: str, token: str = Query(def
 
 
 async def _hang_up_human(tenant: Tenant, call_id: str) -> None:
-    from ...services import lines
+    from ...services import carriers, lines
     from ...services.agent import whatsapp_media
-    from ...services.telephony import Infobip
     from ...services.whatsapp import WhatsApp
 
     call = await call_repo.get_call(tenant.phone_number_id, call_id)
@@ -258,7 +257,7 @@ async def _hang_up_human(tenant: Tenant, call_id: str) -> None:
     await live.finish(effective, call_id, "the employee hung up")
     with contextlib.suppress(Exception):
         if call.provider_call_id and call.channel is Channel.PHONE:
-            await Infobip(effective).hangup(call.provider_call_id)
+            await carriers.hang_up(effective, call.provider_call_id)
         elif call.provider_call_id and call.channel is Channel.WHATSAPP_CALL:
             await WhatsApp(effective).terminate_call(call.provider_call_id)
             await whatsapp_media.drop(call_id)

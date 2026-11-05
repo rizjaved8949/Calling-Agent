@@ -29,7 +29,7 @@ from ...security.rate_limit import check_expensive
 from ...services.agent import live
 from ...services import recordings as recording_service
 from ...services import reports
-from ...services.telephony import Infobip
+from ...services import carriers
 from ...services.whatsapp import WhatsApp, mask, to_e164
 from ..deps import CurrentMember, CurrentTenant, refuse_staff
 
@@ -223,8 +223,7 @@ async def start_call(
 
     try:
         if payload.channel == Channel.PHONE:
-            result = await Infobip(tenant).place_call(destination)
-            call.provider_call_id = str(result.get("id") or result.get("callId") or "")
+            result = await carriers.place_call(tenant, call, destination)
             call.provider_dialog_id = str(result.get("dialogId") or "")
         elif payload.channel == Channel.WHATSAPP_CALL:
             from ...services.agent import whatsapp_media
@@ -298,7 +297,7 @@ async def end_call(tenant: CurrentTenant, call_id: str) -> dict:
         await live.finish(tenant, call_id, "ended from the dashboard")
     if call.provider_call_id and call.channel == Channel.PHONE:
         try:
-            await Infobip(tenant).hangup(call.provider_call_id)
+            await carriers.hang_up(tenant, call.provider_call_id)
         except AppError as exc:
             log.info("hangup for %s was refused: %s", call_id, exc)
     elif call.provider_call_id and call.channel == Channel.WHATSAPP_CALL:

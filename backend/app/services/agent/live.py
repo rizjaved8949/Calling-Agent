@@ -315,12 +315,12 @@ async def _hang_up_after_goodbye(tenant: Tenant, call: Call, reason: str) -> Non
 async def hang_up(tenant: Tenant, call: Call, reason: str) -> None:
     """End the call with the provider and settle it here. Never raises."""
     from ...models.call import Channel
-    from ...services.telephony import Infobip
+    from ...services import carriers
     from ...services.whatsapp import WhatsApp
 
     with contextlib.suppress(Exception):
         if call.provider_call_id and call.channel is Channel.PHONE:
-            await Infobip(tenant).hangup(call.provider_call_id)
+            await carriers.hang_up(tenant, call.provider_call_id)
         elif call.provider_call_id and call.channel is Channel.WHATSAPP_CALL:
             await WhatsApp(tenant).terminate_call(call.provider_call_id)
             from . import whatsapp_media

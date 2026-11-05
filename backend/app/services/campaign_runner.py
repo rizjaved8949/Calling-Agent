@@ -29,7 +29,7 @@ from ..models.campaign import Campaign, CampaignStatus, ContactState
 from ..models.tenant import Tenant
 from ..repositories import calls as call_repo
 from ..repositories import campaigns as campaign_repo
-from .telephony import Infobip
+from . import carriers
 from .whatsapp import WhatsApp, to_e164
 
 log = logging.getLogger(__name__)
@@ -164,7 +164,7 @@ async def _hang_up(tenant: Tenant, call: Call) -> None:
         return
     with contextlib.suppress(Exception):
         if call.channel is Channel.PHONE:
-            await Infobip(tenant).hangup(call.provider_call_id)
+            await carriers.hang_up(tenant, call.provider_call_id)
         else:
             await WhatsApp(tenant).terminate_call(call.provider_call_id)
         log.info("campaign call %s hung up", call.id)
@@ -179,8 +179,7 @@ async def _dial(tenant: Tenant, campaign: Campaign, call: Call, destination: str
     prevent.
     """
     if campaign.channel is Channel.PHONE:
-        result = await Infobip(tenant).place_call(destination)
-        call.provider_call_id = str(result.get("id") or result.get("callId") or "")
+        await carriers.place_call(tenant, call, destination)
     else:
         from .agent import whatsapp_media
 

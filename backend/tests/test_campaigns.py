@@ -311,10 +311,12 @@ class FakeCarrier:
 
 @pytest.fixture
 def runner(monkeypatch, fake_db):
-    from app.services import campaign_runner
+    from app.services import campaign_runner, carriers
 
     carrier = FakeCarrier(dial_seconds=0.3)
-    monkeypatch.setattr(campaign_runner, "Infobip", carrier)
+    # The runner reaches the carrier through `carriers.carrier_for`, which
+    # picks Infobip or Twilio per line; replacing it replaces both.
+    monkeypatch.setattr(carriers, "carrier_for", carrier)
     # The wait for a call to finish is five seconds per poll in production.
     real_sleep = campaign_runner.asyncio.sleep
 

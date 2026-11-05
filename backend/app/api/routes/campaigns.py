@@ -27,7 +27,9 @@ from ...repositories import campaigns as campaign_repo
 from ...security.rate_limit import check_expensive
 from ...services import campaign_runner
 from ...services.agent import whatsapp_media
-from ...services.telephony import Infobip
+from ...models.number import NumberKind
+from ...models.tenant import Tenant
+from ...services import carriers
 from ...services.whatsapp import to_e164
 from ..deps import CurrentTenant
 
@@ -140,6 +142,22 @@ async def update_campaign(
     return campaign.public()
 
 
+async def _phone_line_ready(tenant: Tenant, line_id: str) -> bool:
+    """Whether the carrier this campaign dials through has credentials.
+
+    A Twilio line is judged by its own credentials, because those are the
+    ones `campaign_runner` will dial with. Every other case is judged as it
+    always was, by the company's own Infobip settings.
+    """
+    from ...repositories import numbers as number_repo
+
+    if line_id:
+        line = await number_repo.get_safe(tenant.phone_number_id, line_id)
+        if line is not None and line.kind is NumberKind.TWILIO:
+            return carriers.carrier_for(number_repo.as_tenant(tenant, line)).configured
+    return carriers.carrier_for(tenant).configured
+
+
 @router.post("/{campaign_id}/start", dependencies=[Depends(check_expensive)])
 async def start_campaign(tenant: CurrentTenant, campaign_id: str) -> dict:
     """Begin calling. Everything that could stop it is checked first."""
@@ -156,7 +174,7 @@ async def start_campaign(tenant: CurrentTenant, campaign_id: str) -> dict:
     # Checked now rather than discovered on the first call, which would fail in
     # front of a customer and leave the campaign half-run.
     if campaign.channel is Channel.PHONE:
-        if not Infobip(tenant).configured:
+        if not await _phone_line_ready(tenant, campaign.line_id):
             raise AppError(
                 409,
                 "This company has no phone-line credentials, so it cannot place "
