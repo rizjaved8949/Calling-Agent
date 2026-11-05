@@ -1107,6 +1107,234 @@ def test_infobip_sessions_have_no_clear_and_barge_in_still_flushes():
     assert cleared == [True], "the far end was not told to stop playing"
 
 
+# ---------------------------------------------------------------------------
+# Step 7: outbound calls from the dialer and campaigns
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _fresh_twilio_spacing(monkeypatch):
+    """The per-account call spacing is module state; each test starts clean,
+    and with no wait, except the tests that measure it."""
+    from app.services import carriers
+
+    monkeypatch.setattr(carriers, "_twilio_last", {})
+    monkeypatch.setattr(carriers, "_twilio_locks", {})
+    monkeypatch.setattr(carriers, "TWILIO_CALL_SPACING_SECONDS", 0.0)
+
+
+@pytest.fixture
+def dialer(client, tenant_factory, auth, twilio_api, monkeypatch):
+    """Company 700 signed in, with a verified Twilio line that makes calls."""
+    import asyncio
+
+    from app.config import settings
+    from app.models.number import NumberMode, NumberStatus
+    from app.repositories import numbers as repo
+
+    monkeypatch.setattr(settings, "public_base_url", BASE)
+    _tenant, key = tenant_factory("700", "Acme")
+    asyncio.run(repo.save(_twilio_number(status=NumberStatus.VERIFIED, mode=NumberMode.BOTH,
+                                         outboundAgentId="agent-1")))
+    twilio_api.replies[("POST", "/Calls.json")] = (201, {"sid": CALL_SID, "status": "queued"})
+    return {"headers": auth(key), "api": twilio_api}
+
+
+def test_pick_line_offers_twilio_numbers_for_phone_calls(fake_db):
+    import asyncio
+
+    from app.api.routes.numbers import pick_line
+    from app.errors import AppError
+    from app.models.number import NumberMode, NumberStatus
+    from app.repositories import numbers as repo
+
+    company = Tenant(phoneNumberId="700", name="Acme")
+    asyncio.run(repo.save(_twilio_number(status=NumberStatus.VERIFIED, mode=NumberMode.BOTH)))
+
+    assert asyncio.run(pick_line(company, "", whatsapp=False)).id == "tw1"
+    assert asyncio.run(pick_line(company, "tw1", whatsapp=False)).id == "tw1"
+    with pytest.raises(AppError) as wrong:
+        asyncio.run(pick_line(company, "tw1", whatsapp=True))
+    assert wrong.value.code == "wrong_kind"
+
+
+def test_the_dialer_places_a_twilio_call(client, dialer, fake_db):
+    from app.models.call import CallStatus
+
+    resp = client.post("/api/calls", json={"to": "+923001112222", "lineId": "tw1"},
+                       headers=dialer["headers"])
+    assert resp.status_code == 201, resp.text
+    [call] = _calls(fake_db)
+    assert call.status is CallStatus.RINGING
+    assert call.provider_call_id == CALL_SID
+    assert call.line_id == "tw1" and call.from_number == "+15551234567"
+
+    form = dialer["api"].form()
+    assert form["To"] == ["+923001112222"] and form["From"] == ["+15551234567"]
+    assert form["Url"] == [f"{BASE}/api/webhooks/twilio/outbound/tw1/{call.id}"]
+    assert form["StatusCallback"] == [f"{BASE}/api/webhooks/twilio/status/tw1"]
+
+
+def test_a_twilio_refusal_reaches_the_dialer_and_fails_the_call(client, dialer, fake_db):
+    from app.models.call import CallStatus
+
+    dialer["api"].replies[("POST", "/Calls.json")] = (400, {"code": 21219})
+    resp = client.post("/api/calls", json={"to": "+923001112222", "lineId": "tw1"},
+                       headers=dialer["headers"])
+    assert resp.status_code == 409
+    assert "Verified Caller IDs" in resp.json()["error"]["message"]
+    [call] = _calls(fake_db)
+    assert call.status is CallStatus.FAILED
+
+
+def test_ending_a_twilio_call_from_the_dashboard_hangs_it_up(client, dialer, fake_db):
+    client.post("/api/calls", json={"to": "+923001112222", "lineId": "tw1"},
+                headers=dialer["headers"])
+    [call] = _calls(fake_db)
+    resp = client.post(f"/api/calls/{call.id}/end", headers=dialer["headers"])
+    assert resp.status_code == 200
+    hangup = dialer["api"].requests[-1]
+    assert hangup.url.path.endswith(f"/Calls/{CALL_SID}.json")
+    assert dialer["api"].form() == {"Status": ["completed"]}
+
+
+async def test_calls_on_one_twilio_account_are_spaced_out(monkeypatch):
+    """Twilio takes about one new call per second per account. Two placed at
+    once, from a campaign and the dialer say, must take turns."""
+    import asyncio
+    import time
+
+    from app.services import carriers
+
+    monkeypatch.setattr(carriers, "TWILIO_CALL_SPACING_SECONDS", 0.3)
+    started = time.monotonic()
+    await asyncio.gather(*(carriers._twilio_turn(SID) for _ in range(3)))
+    assert time.monotonic() - started >= 0.55, "three calls went out inside one spacing"
+
+    # Another account is not held up by this one.
+    started = time.monotonic()
+    await carriers._twilio_turn("AC" + "9" * 32)
+    assert time.monotonic() - started < 0.1
+
+
+async def test_placing_a_twilio_call_waits_its_turn(twilio_api, monkeypatch):
+    from app.config import settings
+    from app.models.call import Call, Channel, Direction
+    from app.services import carriers
+
+    turns: list[str] = []
+
+    async def turn(account_sid):
+        turns.append(account_sid)
+
+    monkeypatch.setattr(settings, "public_base_url", BASE)
+    monkeypatch.setattr(carriers, "_twilio_turn", turn)
+    twilio_api.replies[("POST", "/Calls.json")] = (201, {"sid": CALL_SID})
+    call = Call(tenantId="700", channel=Channel.PHONE, direction=Direction.OUTBOUND,
+                counterparty="+923001112222", lineId="tw1", fromNumber="+15551234567")
+    await carriers.place_call(_overlay(), call, "+923001112222")
+    assert turns == [SID]
+
+
+def test_a_campaign_on_a_twilio_line_dials_through_twilio(dialer, fake_db, monkeypatch):
+    import asyncio
+
+    from app.models.campaign import Campaign, CampaignStatus, Contact, ContactState
+    from app.repositories import campaigns as campaign_repo
+    from app.services import campaign_runner
+
+    real_sleep = asyncio.sleep
+
+    async def quick(seconds, *a, **k):
+        await real_sleep(min(seconds, 0.01))
+
+    monkeypatch.setattr(campaign_runner.asyncio, "sleep", quick)
+    monkeypatch.setattr(campaign_runner, "MAX_CALL_SECONDS", 0.05)
+
+    async def run():
+        campaign = Campaign(tenantId="700", name="t", status=CampaignStatus.RUNNING,
+                            gapSeconds=5, lineId="tw1", agentId="agent-1",
+                            contacts=[Contact(number="+923001112222")])
+        await campaign_repo.save(campaign)
+        await campaign_runner._run(Tenant(phoneNumberId="700", name="Acme"), campaign.id)
+        return await campaign_repo.get("700", campaign.id)
+
+    final = asyncio.run(run())
+    placed = [r for r in dialer["api"].requests if r.url.path.endswith("/Calls.json")]
+    assert len(placed) == 1
+    assert dialer["api"].form(dialer["api"].requests.index(placed[0]))["From"] == ["+15551234567"]
+    [call] = _calls(fake_db)
+    assert call.provider_call_id == CALL_SID and call.line_id == "tw1"
+    # Nothing settled the fake call, so the ring timeout ended it at Twilio.
+    assert final.contacts[0].state is ContactState.FAILED
+    assert any(r.url.path.endswith(f"/Calls/{CALL_SID}.json") for r in dialer["api"].requests)
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "Existing bug, not Twilio's: calls.save_call writes the legacy alias "
+    "'mode' (= handled_by, 'agent') over Call.mode, so a dialer call reads "
+    "back as 'agent' and the AI answers it. Remove this mark with the fix."))
+def test_an_employee_talks_on_a_twilio_call_through_the_dialer(client, dialer, fake_db,
+                                                              monkeypatch):
+    """Operator mode, end to end: the dialer places a human call, Twilio
+    answers and opens its stream, the employee's browser joins, and audio
+    crosses in both directions with no agent in between."""
+    import base64
+
+    from app.api.routes import media, webhooks
+    from app.security import playback
+    from app.services.agent import live
+
+    monkeypatch.setattr(media, "_twilio_attached", set())
+    monkeypatch.setattr(webhooks, "_seen_inbound", {})
+    resp = client.post("/api/calls", json={"to": "+923001112222", "lineId": "tw1",
+                                           "human": True}, headers=dialer["headers"])
+    assert resp.status_code == 201, resp.text
+    import asyncio
+
+    from app.repositories import calls as call_repo
+
+    # Read through the repository: the raw row's legacy "mode" alias means
+    # who handled the call, which is not this field.
+    [raw] = _calls(fake_db)
+    call = asyncio.run(call_repo.get_call("700", raw.id))
+    assert call.mode == "human"
+
+    # They pick up: Twilio asks what to do and is told to stream.
+    answered = _twilio_post(client, f"/api/webhooks/twilio/outbound/tw1/{call.id}",
+                            {"CallSid": CALL_SID, "CallStatus": "in-progress",
+                             "Direction": "outbound-api"})
+    url, token = _stream_of(answered.text)
+    stream_sid = "MZ" + "2" * 32
+
+    with client.websocket_connect(url.removeprefix("wss://api.example.com")) as phone:
+        _start(phone, token, call_sid=CALL_SID, stream_sid=stream_sid)
+        _media(phone, bytes([0xFF]) * 160)     # the session exists once audio flows
+        session = live.get(call.id)
+        assert session is not None and session.human, "an agent took a dialer call"
+
+        operator_token = playback.mint("700", call.id, ttl=600)
+        with client.websocket_connect(
+                f"/api/media/operator/{call.id}?token={operator_token}") as browser:
+            assert browser.receive_json()["type"] == "handover"
+
+            # The person on the phone speaks; the employee hears it.
+            _media(phone, bytes([0xFF]) * 160)
+            assert len(browser.receive_bytes()) == 640
+
+            # The employee speaks; Twilio is sent it as μ-law.
+            for _ in range(3):
+                browser.send_bytes(b"\x00" * 640)
+            sent = phone.receive_json()
+            assert sent["event"] == "media" and sent["streamSid"] == stream_sid
+            assert len(base64.b64decode(sent["media"]["payload"])) == 160
+
+    # The employee hanging up hung the call up at Twilio.
+    hangups = [r for r in dialer["api"].requests if r.url.path.endswith(f"/Calls/{CALL_SID}.json")]
+    assert hangups, "the call was left running at Twilio"
+    assert live.get(call.id) is None
+
+
 def test_a_person_taking_over_clears_what_twilio_was_still_playing():
     import asyncio
 

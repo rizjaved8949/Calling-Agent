@@ -25,6 +25,7 @@ from ...models.number import (
     NumberStatus,
     NumberUpdate,
     PhoneNumber,
+    is_phone_kind,
 )
 from ...models.tenant import Tenant
 from ...repositories import agents as agent_repo
@@ -199,23 +200,26 @@ async def pick_line(tenant: Tenant, line_id: str, *, whatsapp: bool) -> PhoneNum
     right kind. Not named, the first number that qualifies. None only when the
     company has no numbers at all — the pre-numbers single-credential setup.
     """
-    kind = NumberKind.WHATSAPP if whatsapp else NumberKind.SIM
+    # A phone call can go out on either carrier: Infobip (SIM) or Twilio.
+    def fits(n: PhoneNumber) -> bool:
+        return n.kind is NumberKind.WHATSAPP if whatsapp else is_phone_kind(n.kind)
+
     numbers = await repo.list_for(tenant.phone_number_id)
     if line_id:
         number = next((n for n in numbers if n.id == line_id), None)
         if number is None:
             raise NotFound("Number")
-        if number.kind is not kind:
+        if not fits(number):
             raise AppError(422, f"{number.label} is a {number.kind.value} number.", code="wrong_kind")
         if not number.verified:
             raise AppError(409, f"{number.label} is not verified yet.", code="number_not_verified")
         if not number.makes_outbound:
             raise AppError(409, f"{number.label} is inbound-only.", code="inbound_only")
         return number
-    fitting = [n for n in numbers if n.kind is kind and n.verified and n.makes_outbound]
+    fitting = [n for n in numbers if fits(n) and n.verified and n.makes_outbound]
     if fitting:
         return fitting[0]
-    if any(n.kind is kind for n in numbers):
+    if any(fits(n) for n in numbers):
         raise AppError(
             409, "None of your " + ("WhatsApp" if whatsapp else "phone")
             + " numbers is verified and allowed to make outbound calls.",

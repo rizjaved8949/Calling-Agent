@@ -711,6 +711,11 @@ async def _line_for(tenant: Tenant, call: Call, dialled: str = ""):
                 return found
 
     wanted = _digits(dialled) or _digits(call.from_number) or _digits(tenant.infobip_phone_number)
+    # SIM only, not Twilio, on purpose. A Twilio call always names its line
+    # (the webhook URL does) and is found by id above. What reaches this point
+    # is an Infobip call from the per-company webhook, and counting a Twilio
+    # number here would make "the one verified phone number" ambiguous for a
+    # company with one of each, so its Infobip calls would stop being matched.
     kind = NumberKind.WHATSAPP if call.channel is Channel.WHATSAPP_CALL else NumberKind.SIM
     try:
         numbers = await number_repo.list_for(company_id)

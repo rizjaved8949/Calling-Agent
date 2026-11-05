@@ -17,6 +17,9 @@ equivalent. Those are only ever reached from Infobip's own webhooks.
 """
 from __future__ import annotations
 
+import asyncio
+import time
+
 from ..errors import AppError
 from ..models.call import Call
 from ..models.tenant import Tenant
@@ -59,6 +62,32 @@ def twilio_urls(number_id: str, call_id: str) -> tuple[str, str]:
     return f"{hooks}/outbound/{number_id}/{call_id}", f"{hooks}/status/{number_id}"
 
 
+#: The least time between two calls placed on one Twilio account. Twilio's
+#: default is one new outbound call per second per account ("CPS"); faster
+#: than that and it queues them itself, then refuses with 20429 once its queue
+#: is full. Spaced here instead, so a campaign and the dialer on the same
+#: account, or two campaigns, take turns rather than tripping it.
+TWILIO_CALL_SPACING_SECONDS = 1.0
+
+_twilio_last: dict[str, float] = {}
+_twilio_locks: dict[str, asyncio.Lock] = {}
+
+
+async def _twilio_turn(account_sid: str) -> None:
+    """Wait until this account may place another call, then claim the slot.
+
+    Per account, not per number: the limit is Twilio's per account, and
+    several numbers can share one. Per process too, which is all there is:
+    one web service places every call.
+    """
+    lock = _twilio_locks.setdefault(account_sid, asyncio.Lock())
+    async with lock:
+        wait = _twilio_last.get(account_sid, 0.0) + TWILIO_CALL_SPACING_SECONDS - time.monotonic()
+        if wait > 0:
+            await asyncio.sleep(wait)
+        _twilio_last[account_sid] = time.monotonic()
+
+
 async def place_call(tenant: Tenant, call: Call, destination: str) -> dict:
     """Ring `destination` for `call`, and record the carrier's call id on it.
 
@@ -76,6 +105,7 @@ async def place_call(tenant: Tenant, call: Call, destination: str) -> dict:
             raise AppError(409, "This call has no Twilio line to go out on.",
                            code="no_line")
         answer_url, status_url = twilio_urls(number_id, call.id)
+        await _twilio_turn(tenant.twilio_account_sid)
         result = await carrier.place_call(
             destination, from_number=call.from_number,
             answer_url=answer_url, status_url=status_url,
