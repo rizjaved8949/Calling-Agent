@@ -673,6 +673,52 @@ def test_a_bad_signature_is_refused_and_nothing_is_stored(client, twilio_line, f
     assert twilio_line["warmed"] == []
 
 
+def _refusal_logs(caplog) -> str:
+    return "\n".join(r.getMessage() for r in caplog.records
+                     if r.name == "app.api.routes.webhooks" and "refused" in r.getMessage())
+
+
+def test_a_signature_for_another_address_says_which_url_was_checked(client, twilio_line,
+                                                                    caplog):
+    """The commonest real failure: the service moved domain and Twilio still
+    calls (and signs) the old address."""
+    import logging
+
+    from app.services.twilio_client import expected_signature
+
+    path = "/api/webhooks/twilio/voice/tw1"
+    form = {"CallSid": INBOUND_SID, "From": "+923001112222", "Direction": "inbound"}
+    signature = expected_signature(TOKEN, "https://old.example.com" + path, list(form.items()))
+    with caplog.at_level(logging.WARNING, logger="app.api.routes.webhooks"):
+        resp = _twilio_post(client, path, form, signature=signature)
+
+    assert resp.status_code == 403
+    text = _refusal_logs(caplog)
+    assert "signature did not match" in text
+    assert BASE + path in text, "the warning must name the URL we checked"
+    assert "PUBLIC_BASE_URL" in text and "Verify again" in text
+    # Nothing that would help forge the next request, nor the caller's number.
+    assert TOKEN not in text
+    assert signature not in text
+    assert expected_signature(TOKEN, BASE + path, list(form.items())) not in text
+    assert "+923001112222" not in text
+
+
+def test_a_request_with_no_signature_is_called_out_as_not_from_twilio(client, twilio_line,
+                                                                      caplog):
+    import logging
+
+    path = "/api/webhooks/twilio/voice/tw1?attempt=2"
+    with caplog.at_level(logging.WARNING, logger="app.api.routes.webhooks"):
+        resp = client.post(path, data={"CallSid": INBOUND_SID})
+
+    assert resp.status_code == 403
+    text = _refusal_logs(caplog)
+    assert "no X-Twilio-Signature" in text
+    # The query string is not repeated: we cannot know what it carries.
+    assert "attempt=2" not in text and "(plus its query string)" in text
+
+
 def test_an_unknown_number_is_404(client, twilio_line):
     resp = _twilio_post(client, "/api/webhooks/twilio/voice/nope", {"CallSid": INBOUND_SID})
     assert resp.status_code == 404

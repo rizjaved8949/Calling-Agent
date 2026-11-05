@@ -953,11 +953,54 @@ async def _twilio_request(
     tenant = number_repo.as_tenant(company, line)
     form = await request.form()
     params = [(key, str(value)) for key, value in form.multi_items()]
-    if not twilio_client.signature_ok(tenant.twilio_auth_token, _signed_url(request), params,
-                                      request.headers.get("X-Twilio-Signature")):
-        log.warning("Twilio webhook for number %s with a bad signature, refused", number_id)
+    signed_url = _signed_url(request)
+    header = request.headers.get("X-Twilio-Signature")
+    if not twilio_client.signature_ok(tenant.twilio_auth_token, signed_url, params, header):
+        _log_bad_signature(number_id, signed_url, has_header=bool(header),
+                           has_token=bool(tenant.twilio_auth_token))
         return _twiml(status_code=status.HTTP_403_FORBIDDEN)
     return tenant, line, dict(params)
+
+
+def _log_bad_signature(number_id: str, signed_url: str, *, has_header: bool,
+                       has_token: bool) -> None:
+    """Say why a Twilio request was refused, in words someone can act on.
+
+    A refused webhook is silent from the outside: the caller hears Twilio's
+    "application error" and our side shows nothing. The commonest cause by far
+    is the address, not an attacker — Twilio signs the URL *it* called, we
+    check the one built from PUBLIC_BASE_URL, and the two disagree after the
+    service moves to a new domain. So the warning names the URL we checked
+    and the fix.
+
+    Never the token, the expected signature or the one Twilio sent: any of
+    them in a log is a step towards forging the next request. The query string
+    is dropped from the logged URL too, since we do not know what it carries.
+    """
+    shown = signed_url.split("?", 1)[0] + (" (plus its query string)" if "?" in signed_url else "")
+    if not has_header:
+        log.warning(
+            "Twilio webhook for number %s refused: the request carried no "
+            "X-Twilio-Signature header, so it did not come from Twilio. URL: %s",
+            number_id, shown,
+        )
+    elif not has_token:
+        log.warning(
+            "Twilio webhook for number %s refused: the number has no Auth Token "
+            "to check the signature with. Add it on the number and press "
+            "\"Verify again\". URL: %s",
+            number_id, shown,
+        )
+    else:
+        log.warning(
+            "Twilio webhook for number %s refused: the signature did not match. "
+            "We checked it against %s. Twilio signs the URL it called, so "
+            "PUBLIC_BASE_URL (%s) probably does not match the URL set on the "
+            "number in Twilio; pressing \"Verify again\" on the number points "
+            "Twilio at this server's address. If the URLs already match, the "
+            "Auth Token saved on the number is not the account's current one.",
+            number_id, shown, settings.public_base_url.strip() or "not set",
+        )
 
 
 def _stream_twiml(call_id: str) -> Response:
