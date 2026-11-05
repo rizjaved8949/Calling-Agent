@@ -1011,13 +1011,17 @@ def _log_bad_signature(number_id: str, signed_url: str, *, has_header: bool,
         )
 
 
-def _stream_twiml(call_id: str) -> Response:
+def _stream_twiml(call: Call) -> Response:
     """Connect the call to our audio socket, two-way.
 
     `<Connect><Stream>` and not `<Start><Stream>`: Start is a one-way copy for
     recording, and the agent would hear the caller and never be heard. The
     socket URL may not carry a query string, so the token goes in a
     `<Parameter>` and comes back in the stream's `start` message.
+
+    The token names the call (its subject) and, signed alongside it, the
+    company, which is what the socket needs to read the call: calls are only
+    ever looked up within their own company.
 
     Raises if this deployment has no https address or cannot mint the token;
     the callers turn that into a declined call.
@@ -1030,9 +1034,10 @@ def _stream_twiml(call_id: str) -> Response:
     base = webhook_base()
     if not base.startswith("https://"):
         raise AppError(503, "PUBLIC_BASE_URL is not an https address", code="no_public_base_url")
-    socket_url = "wss://" + base.removeprefix("https://") + f"/api/media/twilio/{call_id}"
-    token = tickets.mint(twilio_client.MEDIA_AUDIENCE, call_id,
-                         ttl=twilio_client.MEDIA_TOKEN_TTL_SECONDS)
+    socket_url = "wss://" + base.removeprefix("https://") + f"/api/media/twilio/{call.id}"
+    token = tickets.mint(twilio_client.MEDIA_AUDIENCE, call.id,
+                         ttl=twilio_client.MEDIA_TOKEN_TTL_SECONDS,
+                         extra={"t": call.tenant_id})
     return _twiml(
         f"<Connect><Stream url={quoteattr(socket_url)}>"
         f'<Parameter name="token" value={quoteattr(token)}/>'
@@ -1069,7 +1074,7 @@ async def twilio_voice(number_id: str, request: Request) -> Response:
     if existing is not None or not _claim_inbound(f"twilio:{call_sid}"):
         if existing is not None and existing.status not in TERMINAL_STATUSES:
             try:
-                return _stream_twiml(existing.id)
+                return _stream_twiml(existing)
             except Exception:  # noqa: BLE001
                 log.exception("call %s: could not answer a repeated request", existing.id)
         return _twiml("<Reject/>")
@@ -1097,7 +1102,7 @@ async def twilio_voice(number_id: str, request: Request) -> Response:
         await _fail_call(tenant, call, refusal)
         return _twiml("<Reject/>")
     try:
-        answer = _stream_twiml(call.id)
+        answer = _stream_twiml(call)
     except Exception as exc:  # noqa: BLE001
         log.exception("call %s: could not hand Twilio an audio address", call.id)
         await _fail_call(tenant, call, f"the agent could not be connected: {exc}"[:200])
@@ -1136,7 +1141,7 @@ async def twilio_outbound_answered(number_id: str, call_id: str, request: Reques
         call.provider_call_id = call_sid
         await call_repo.save_call(call)
     try:
-        answer = _stream_twiml(call.id)
+        answer = _stream_twiml(call)
     except Exception as exc:  # noqa: BLE001
         log.exception("call %s: could not hand Twilio an audio address", call.id)
         await _fail_call(tenant, call, f"the agent could not be connected: {exc}"[:200])

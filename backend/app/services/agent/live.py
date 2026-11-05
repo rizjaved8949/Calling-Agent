@@ -408,12 +408,19 @@ async def start(
     send_to_caller: Callable[[bytes], None],
     *,
     keepalive: bool = True,
+    on_clear: Callable[[], None] | None = None,
 ) -> CallSession:
-    """Answer a call: bring up the agent and start moving audio."""
+    """Answer a call: bring up the agent and start moving audio.
+
+    `on_clear` is for a carrier that buffers audio on its side (Twilio): it is
+    called when what was already sent should stop playing. See
+    `CallSession.on_clear`.
+    """
     existing = _sessions.get(call.id)
     if existing is not None:
         # Warmed while the carrier was connecting. Hand it the line; anything
         # it has already said is queued and plays from its first word.
+        existing.on_clear = on_clear
         existing.attach_transport(send_to_caller)
         call.status = CallStatus.IN_PROGRESS
         call.answered_at = call.answered_at or time.time()
@@ -449,6 +456,7 @@ async def start(
         on_tool=None if human else _tool_handler(tenant, call),
         human=human,
     )
+    session.on_clear = on_clear
     _sessions[call.id] = session
     await session.start()
 

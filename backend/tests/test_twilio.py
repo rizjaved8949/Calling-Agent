@@ -901,3 +901,223 @@ def test_a_status_with_a_bad_signature_changes_nothing(client, twilio_line, fake
                         {"CallSid": CALL_SID, "CallStatus": "completed"}, signature="nope")
     assert resp.status_code == 403
     assert _get().status is CallStatus.RINGING
+
+
+# ---------------------------------------------------------------------------
+# Step 6: the media socket
+# ---------------------------------------------------------------------------
+#
+# Driven as Twilio drives it: ring the voice webhook, take the socket URL and
+# token out of its TwiML, connect, and speak Twilio's JSON. The agent is a
+# stand-in that records what it hears; it speaks when spoken to, so every
+# message the test waits for is caused by one the test sent.
+
+
+class _FakeSession:
+    def __init__(self, send, on_clear):
+        self.send = send
+        self.on_clear = on_clear
+        self.heard: list[bytes] = []
+
+    def feed_caller(self, frame: bytes) -> None:
+        self.heard.append(frame)
+        if len(self.heard) == 1:
+            self.send(b"\x00" * 640)       # the agent answers: 20 ms of silence
+        elif len(self.heard) == 2:
+            self.on_clear()                # the caller cut in
+
+
+@pytest.fixture
+def twilio_socket(twilio_line, monkeypatch):
+    """The `twilio_line` company, with `live.start` replaced by `_FakeSession`."""
+    from app.api.routes import media
+    from app.services.agent import live
+
+    monkeypatch.setattr(media, "_twilio_attached", set())
+    started: list[tuple[str, _FakeSession]] = []
+
+    async def start(_tenant, call, send, *, keepalive=True, on_clear=None):
+        session = _FakeSession(send, on_clear)
+        started.append((call.id, session))
+        return session
+
+    monkeypatch.setattr(live, "start", start)
+    twilio_line["started"] = started
+    return twilio_line
+
+
+def _socket_for(client) -> tuple[str, str, str]:
+    """(path, token, call id) for a freshly rung inbound call."""
+    url, token = _stream_of(_ring(client).text)
+    path = url.removeprefix("wss://api.example.com")
+    return path, token, path.rsplit("/", 1)[1]
+
+
+def _start(socket, token: str, *, call_sid: str = INBOUND_SID, stream_sid: str = "MZ" + "1" * 32):
+    socket.send_json({"event": "connected", "protocol": "Call", "version": "1.0.0"})
+    socket.send_json({
+        "event": "start", "sequenceNumber": "1", "streamSid": stream_sid,
+        "start": {"streamSid": stream_sid, "callSid": call_sid, "accountSid": SID,
+                  "tracks": ["inbound"], "customParameters": {"token": token},
+                  "mediaFormat": {"encoding": "audio/x-mulaw", "sampleRate": 8000,
+                                  "channels": 1}},
+    })
+
+
+def _media(socket, payload: bytes) -> None:
+    import base64
+
+    socket.send_json({"event": "media", "streamSid": "MZ" + "1" * 32,
+                      "media": {"track": "inbound", "chunk": "1", "timestamp": "0",
+                                "payload": base64.b64encode(payload).decode()}})
+
+
+def _refused(client, path: str, token: str, **start) -> int:
+    """The close code a socket gets, failing if it is not closed."""
+    from starlette.websockets import WebSocketDisconnect
+
+    with client.websocket_connect(path) as socket:
+        _start(socket, token, **start)
+        with pytest.raises(WebSocketDisconnect) as closed:
+            socket.receive_json()
+    return closed.value.code
+
+
+def test_audio_flows_both_ways_and_barge_in_clears_twilio(client, twilio_socket):
+    import base64
+
+    path, token, call_id = _socket_for(client)
+    stream_sid = "MZ" + "1" * 32
+    with client.websocket_connect(path) as socket:
+        _start(socket, token)
+
+        # The caller speaks: 160 bytes of μ-law in, one 640-byte frame to the agent.
+        _media(socket, bytes([0xFF]) * 160)
+        answer = socket.receive_json()
+        assert answer["event"] == "media" and answer["streamSid"] == stream_sid
+        assert base64.b64decode(answer["media"]["payload"]) == bytes([0xFF]) * 160
+
+        # The caller cuts in: Twilio is told to drop what it still has queued.
+        _media(socket, bytes([0xFF]) * 160)
+        assert socket.receive_json() == {"event": "clear", "streamSid": stream_sid}
+
+        socket.send_json({"event": "stop", "streamSid": stream_sid,
+                          "stop": {"callSid": INBOUND_SID, "accountSid": SID}})
+
+    [(started_id, session)] = twilio_socket["started"]
+    assert started_id == call_id
+    assert [len(f) for f in session.heard] == [640, 640]
+    assert session.heard[0] == b"\x00" * 640
+    assert twilio_socket["finished"] == [call_id]
+
+
+def test_nothing_starts_before_the_start_message(client, twilio_socket, monkeypatch):
+    """No streamSid, no proof: a socket that never says `start` gets nothing."""
+    from starlette.websockets import WebSocketDisconnect
+
+    from app.api.routes import media
+
+    monkeypatch.setattr(media, "TWILIO_START_TIMEOUT_SECONDS", 0.2)
+    path, _token, _call_id = _socket_for(client)
+    with client.websocket_connect(path) as socket:
+        socket.send_json({"event": "connected"})
+        with pytest.raises(WebSocketDisconnect) as closed:
+            socket.receive_json()
+    assert closed.value.code == 4400
+    assert twilio_socket["started"] == []
+
+
+def test_a_bad_token_is_refused(client, twilio_socket):
+    path, token, _call_id = _socket_for(client)
+    assert _refused(client, path, token[:-4] + "AAAA") == 4401
+    assert _refused(client, path, "") == 4401
+    assert twilio_socket["started"] == []
+
+
+def test_an_expired_token_is_refused(client, twilio_socket):
+    from app.security import tickets
+    from app.services.twilio_client import MEDIA_AUDIENCE
+
+    path, _token, call_id = _socket_for(client)
+    stale = tickets.mint(MEDIA_AUDIENCE, call_id, ttl=-1, extra={"t": "700"})
+    assert _refused(client, path, stale) == 4401
+    assert twilio_socket["started"] == []
+
+
+def test_a_token_for_another_call_is_refused(client, twilio_socket):
+    """Each token opens the one socket URL it was minted for."""
+    path, _token, _call_id = _socket_for(client)
+    _other_path, other_token, _other_id = _socket_for_second_call(client)
+    # This call's own CallSid, so only the token can be what is wrong.
+    assert _refused(client, path, other_token, call_sid=INBOUND_SID) == 4401
+    assert twilio_socket["started"] == []
+
+
+def _socket_for_second_call(client):
+    url, token = _stream_of(_ring(client, call_sid="CA" + "6" * 32).text)
+    path = url.removeprefix("wss://api.example.com")
+    return path, token, path.rsplit("/", 1)[1]
+
+
+def test_a_stream_for_a_different_twilio_call_is_refused(client, twilio_socket):
+    path, token, _call_id = _socket_for(client)
+    assert _refused(client, path, token, call_sid="CA" + "7" * 32) == 4401
+
+
+def test_a_call_that_has_ended_is_refused(client, twilio_socket, fake_db):
+    import asyncio
+
+    from app.models.call import CallStatus
+    from app.repositories import calls as call_repo
+
+    path, token, call_id = _socket_for(client)
+    call = asyncio.run(call_repo.get_call("700", call_id))
+    call.status = CallStatus.COMPLETED
+    asyncio.run(call_repo.save_call(call))
+    assert _refused(client, path, token) == 4401
+    assert twilio_socket["started"] == []
+
+
+def test_a_second_socket_for_the_same_call_is_refused(client, twilio_socket):
+    path, token, _call_id = _socket_for(client)
+    with client.websocket_connect(path) as first:
+        _start(first, token)
+        _media(first, bytes([0xFF]) * 160)
+        first.receive_json()                       # the first socket is live
+        assert _refused(client, path, token) == 4409
+    assert len(twilio_socket["started"]) == 1
+
+
+def test_infobip_sessions_have_no_clear_and_barge_in_still_flushes():
+    """The hook is Twilio's alone; a session without it behaves as before."""
+    from app.services.agent.gemini import AgentPersona, LiveSettings
+    from app.services.agent.session import CallSession
+
+    session = CallSession("c1", send_to_caller=lambda _f: None,
+                          live_settings=LiveSettings(model="m", api_key="k"),
+                          persona=AgentPersona(instructions=""), record=False)
+    assert session.on_clear is None
+    session._pacer.offer(b"\x00" * 640 * 10)
+    session._on_interrupted()                      # must not raise without a hook
+    assert not session.speaking
+
+    cleared: list[bool] = []
+    session.on_clear = lambda: cleared.append(True)
+    session._on_interrupted()
+    assert cleared == [True], "the far end was not told to stop playing"
+
+
+def test_a_person_taking_over_clears_what_twilio_was_still_playing():
+    import asyncio
+
+    from app.services.agent.gemini import AgentPersona, LiveSettings
+    from app.services.agent.session import CallSession, Handler
+
+    session = CallSession("c1", send_to_caller=lambda _f: None,
+                          live_settings=LiveSettings(model="m", api_key="k"),
+                          persona=AgentPersona(instructions=""), record=False)
+    cleared: list[bool] = []
+    session.on_clear = lambda: cleared.append(True)
+    asyncio.run(session.hand_over(lambda _f: None))
+    assert session.handler is Handler.OPERATOR
+    assert cleared == [True], "the agent kept talking over the person who took over"

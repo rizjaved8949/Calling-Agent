@@ -108,6 +108,12 @@ class CallSession:
         self._agent_task: asyncio.Task | None = None
         self._pacer_task: asyncio.Task | None = None
         self._operator_out: Callable[[bytes], None] | None = None
+        # Told when audio already sent must stop playing: the caller cut in,
+        # or a person took over. Only a carrier that buffers on its side needs
+        # it. Twilio plays what it has been sent until told `clear`, so
+        # dropping our own queue alone leaves the agent talking over the
+        # caller for as long as Twilio's buffer lasts. Infobip leaves it None.
+        self.on_clear: Callable[[], None] | None = None
         self._closed = False
 
     # ---- lifecycle --------------------------------------------------------
@@ -286,6 +292,7 @@ class CallSession:
             self._operator_out = send_to_operator
             return
         dropped = self._pacer.flush()
+        self._clear_far_end()
         self.handler = Handler.OPERATOR
         self._operator_out = send_to_operator
         if self._agent:
@@ -310,8 +317,16 @@ class CallSession:
 
     def _on_interrupted(self) -> None:
         dropped = self._pacer.flush()
+        # Whether or not anything was queued here: the far end may still be
+        # playing what was sent a moment ago.
+        self._clear_far_end()
         if dropped:
             log.info("call %s: caller cut in, dropped %d frames", self.call_id, dropped)
+
+    def _clear_far_end(self) -> None:
+        if self.on_clear is not None:
+            with contextlib.suppress(Exception):
+                self.on_clear()
 
     def _note(self, who: str, text: str) -> None:
         self.transcript.append((who, text))
