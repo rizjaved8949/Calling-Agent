@@ -56,6 +56,14 @@ async def health() -> dict:
             # SIM calls and operator takeover need no WebRTC — a carrier
             # websocket carries PCM directly — so they are listed apart.
             "carrierMedia": True,
+            # Platform Twilio credentials in the environment, which numbers
+            # may fall back on when the operator allows it. A company's own
+            # Twilio number works without them; this says nothing about those.
+            "twilio": bool(settings.twilio_account_sid.strip()
+                           and settings.twilio_auth_token.strip()),
+            # Twilio refuses to stream audio to anything but wss://, so a
+            # Twilio line needs the public address to be https.
+            "twilioReachable": settings.public_base_url.strip().startswith("https://"),
             "callsInProgress": live.active(),
             # How many more this process will take before it starts refusing.
             # Visible here so headroom can be read off the health check during

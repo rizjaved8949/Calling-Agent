@@ -373,6 +373,15 @@ async def fetch_from_carrier(tenant: CurrentTenant, call_id: str) -> dict:
         raise NotFound("Call")
     if call.channel != Channel.PHONE:
         raise Conflict("Only SIM calls have a carrier-side recording.")
+    # A Twilio call has nothing to fetch: we never ask Twilio to record, the
+    # agent's session records both sides as they happen, exactly as it does
+    # for Infobip. Asking Infobip about a Twilio CallSid would only come back
+    # empty and mark a call that has its recording as having none.
+    from ...services import carriers, lines
+
+    if carriers.is_twilio(await lines.tenant_for_call(tenant, call)):
+        raise Conflict("Twilio calls are recorded by the agent as they happen; "
+                       "there is no carrier-side recording to fetch.")
 
     carrier = Infobip(tenant)
     files = []

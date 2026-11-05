@@ -37,12 +37,13 @@ Each company brings its own provider accounts, so its traffic and its bill are
 its own.
 
 # Setting up, in order
-1. Numbers → Connect a number. Choose Phone line (Infobip) or WhatsApp (Meta),
-   choose inbound / outbound / both, and paste that provider's credentials.
-   The platform asks the provider straight away and marks the number Verified
-   or Not verified with the provider's own reason.
+1. Numbers → Connect a number. Choose Phone line (Infobip), Phone line
+   (Twilio) or WhatsApp (Meta), choose inbound / outbound / both, and paste
+   that provider's credentials. The platform asks the provider straight away
+   and marks the number Verified or Not verified with the provider's own reason.
 2. Paste the webhook URL the number then shows into Infobip, or into the Meta
-   app subscribed to both `messages` and `calls`.
+   app subscribed to both `messages` and `calls`. A Twilio number needs
+   nothing pasted: verifying it points its webhooks here automatically.
 3. Agents → New agent. Inbound, outbound or both, with a greeting, a
    description of who it is, a language, a talking speed and a voice.
 4. Knowledge → create a knowledge base, upload documents, pick it on the agent.
@@ -54,6 +55,21 @@ Credentials live on the number, not on the company, so one company can have
 several numbers from different accounts.
 For Infobip you need the base URL (top of the portal home page) and an API key
 with the Voice/Calls scope. The Calls configuration ID is optional.
+For Twilio you need the Account SID (starts with AC) and Auth Token from
+Account Info on the Twilio Console home page, and a voice-capable number
+bought in that same account. Verifying sets the number's "A call comes in"
+webhook and status callback for you. If it says they could not be set, paste
+the Voice URL and Status callback URL the number shows into the number in
+Twilio, both as HTTP POST. If calls are refused after the server's address
+changed, press Verify again so Twilio is pointed at the new address.
+A Twilio trial account can only call numbers listed under Phone Numbers →
+Verified Caller IDs, and callers hear a short trial notice first. Calling
+another country needs that country turned on under Voice → Settings → Geo
+permissions in the Twilio Console. One Twilio account places about one new
+call per second, so calls from campaigns and the dialer on the same account
+are spaced out automatically.
+WhatsApp messages and WhatsApp calls always go through Meta, whichever
+carrier the phone lines use.
 For Meta you need the Phone number ID and WhatsApp Business Account ID from
 API Setup, a System User access token (the temporary one expires in 24 hours),
 the App secret from App settings → Basic, and a webhook verify token you invent.
