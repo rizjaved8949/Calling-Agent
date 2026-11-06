@@ -69,6 +69,10 @@ class Settings(BaseSettings):
     # who is turned away can ring back, where ten callers hearing broken audio
     # are ten complaints. Raise it once a plan with more CPU is in place.
     max_concurrent_calls: int = 10
+    # The longest any call may run before it is ended, in seconds. The
+    # backstop for every reason a line is kept open on purpose (a caller who
+    # keeps talking after goodbyes, a model that never ends the call).
+    max_call_seconds: int = 1800
 
     # How often to call our own /health, in seconds. Render's free plan stops
     # an instance after ~15 minutes without traffic, and the next webhook then

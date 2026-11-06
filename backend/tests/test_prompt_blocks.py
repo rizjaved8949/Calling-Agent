@@ -429,9 +429,22 @@ def test_the_goodbye_is_said_once():
     from app.services.agent import prompt
 
     text = " ".join(prompt.build(persona="You answer calls.", context="").split())
-    assert "Say goodbye once" in text
-    assert "do not say it again" in text
+    assert "say goodbye once" in text
+    assert "never say a second closing line" in text
     assert "A question is not an ending" in text
+
+
+def test_the_close_is_asked_then_goodbye_then_nothing():
+    """It said "Allah hafiz", then asked whether there was anything else,
+    then hung up. The order is: ask once, goodbye once, then silence."""
+    from app.services.agent import prompt
+
+    text = " ".join(prompt.build(persona="You answer calls.", context="").split())
+    ask = text.index("Ask once whether there is anything else")
+    goodbye = text.index("say goodbye once")
+    silence = text.index("After your goodbye, say nothing more")
+    assert ask < goodbye < silence
+    assert "Never ask whether there is anything else after you have said goodbye" in text
 
 
 def test_the_right_figure_is_used_when_several_are_given():

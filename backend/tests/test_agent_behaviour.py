@@ -230,6 +230,9 @@ async def test_ending_waits_for_the_goodbye_before_hanging_up(monkeypatch):
         def __init__(self):
             self.speaking = True
 
+        def caller_spoke_since(self, _moment):
+            return False
+
     session = Session()
     live._sessions["c-9"] = session
 

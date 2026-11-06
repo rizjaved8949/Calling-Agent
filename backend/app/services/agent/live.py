@@ -300,7 +300,16 @@ def _tool_handler(tenant: Tenant, call: Call):
                 )
             log.info("call %s: the agent is ending the call (%s)", call.id, reason)
             asyncio.create_task(_hang_up_after_goodbye(tenant, call, reason))
-            return "The call is ending. Say your goodbye now and stop talking."
+            # Not "say your goodbye now": the goodbye was said before this was
+            # called, so that invited a second closing line, and the agent
+            # said "Allah hafiz" and then asked whether there was anything
+            # else. What happens if they speak again is said here, while the
+            # model is still listening.
+            return (
+                "The call is ending. Your goodbye has been said: say nothing "
+                "more. If the caller then asks something, answer it. If they "
+                "only say goodbye back, call end_call again without speaking."
+            )
 
         return "That is not something you can do on this call."
 
@@ -324,25 +333,45 @@ def _claims_caller_gone(reason: str) -> bool:
     return any(word in said for word in _GONE_WORDS)
 
 
+#: How long after the goodbye has played the line stays open for the caller
+#: to say something. Longer than the echo tail, so their reply is not
+#: mistaken for the agent's own voice coming back.
+GOODBYE_GRACE_SECONDS = 2.0
+
+
 async def _hang_up_after_goodbye(tenant: Tenant, call: Call, reason: str) -> None:
-    """Let the farewell finish playing, then hang up.
+    """Let the farewell finish playing, give the caller a moment, then hang up.
 
     Cutting the line the instant the model calls `end_call` clips the goodbye
     mid-word, which sounds exactly like a dropped call. So this waits for the
     outgoing audio to drain — bounded, because a model that never stops
     talking must not hold the line open either.
+
+    And it does not hang up on somebody who is talking. A caller who speaks
+    after the goodbye ("wait, one more thing") keeps the line: the model
+    hears them and answers, and it ends the call again when they are done.
+    Only their own voice counts, not the agent's echo (see
+    `CallSession.agent_may_be_echoing`), and every call still ends at
+    `settings.max_call_seconds` whatever happens.
     """
     session = _sessions.get(call.id)
-    deadline = time.time() + 12
+    asked_at = time.time()
+    deadline = asked_at + 12
     try:
         while session is not None and time.time() < deadline:
             await asyncio.sleep(0.4)
             if not session.speaking:
-                # A moment past the last frame, so the final word lands.
-                await asyncio.sleep(0.6)
                 break
-    finally:
+        await asyncio.sleep(GOODBYE_GRACE_SECONDS)
+    except asyncio.CancelledError:
         await hang_up(tenant, call, reason)
+        raise
+    if (session is not None and _sessions.get(call.id) is session
+            and session.caller_spoke_since(asked_at)):
+        log.info("call %s: the caller spoke after the goodbye; staying on the line",
+                 call.id)
+        return
+    await hang_up(tenant, call, reason)
 
 
 async def hang_up(tenant: Tenant, call: Call, reason: str, *, error: str = "") -> None:
@@ -604,7 +633,34 @@ async def _attach(session: CallSession, tenant: Tenant, call: Call,
     return session
 
 
+#: Every answered call's time limit, by call id. See `_limit`.
+_time_limits: dict[str, asyncio.Task] = {}
+
+
+def _limit(tenant: Tenant, call: Call) -> None:
+    """End the call at `settings.max_call_seconds`, whatever else happens.
+
+    The backstop for everything that keeps a line open on purpose — a caller
+    who keeps talking after goodbyes, a model that never calls end_call — so
+    no call can run, and bill, forever.
+    """
+    if call.id in _time_limits:
+        return
+
+    async def at_the_limit() -> None:
+        await asyncio.sleep(settings.max_call_seconds)
+        if call.id in _sessions:
+            log.warning("call %s: reached the %ds limit; ending it", call.id,
+                        settings.max_call_seconds)
+            await hang_up(tenant, call, "the call reached its time limit")
+
+    task = asyncio.create_task(at_the_limit())
+    _time_limits[call.id] = task
+    task.add_done_callback(lambda _t: _time_limits.pop(call.id, None))
+
+
 async def _mark_answered(tenant: Tenant, call: Call) -> None:
+    _limit(tenant, call)
     call.status = CallStatus.IN_PROGRESS
     call.answered_at = call.answered_at or time.time()
     if tenant.record_calls and call.recording_state is RecordingState.NONE:
@@ -624,6 +680,9 @@ async def finish(tenant: Tenant, call_id: str, reason: str = "", *, error: str =
     heard the agent at all: a connected line with nobody on it is not a
     completed call, and filing it as one hid every one of these.
     """
+    limit = _time_limits.pop(call_id, None)
+    if limit is not None and limit is not asyncio.current_task():
+        limit.cancel()
     session = _sessions.pop(call_id, None)
     if session is None:
         return
@@ -744,6 +803,12 @@ async def _respell_in_roman_urdu(tenant: Tenant, call_id: str, transcript: str) 
 
 async def end_all(reason: str = "shutting down") -> None:
     """Stop every live call. Used when the process is going away."""
+    for limit in list(_time_limits.values()):
+        # A task from a loop that has already closed cannot be cancelled, and
+        # needs nothing more; shutting down must not fail over it.
+        with contextlib.suppress(RuntimeError):
+            limit.cancel()
+    _time_limits.clear()
     for call_id, session in list(_sessions.items()):
         _sessions.pop(call_id, None)
         with contextlib.suppress(Exception):

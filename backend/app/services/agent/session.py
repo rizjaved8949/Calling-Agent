@@ -24,7 +24,7 @@ import time
 from enum import Enum
 from typing import Any, Awaitable, Callable
 
-from .audio_rate import FRAME_MS, PHONE_RATE, RateConverter, gemini_to_phone
+from .audio_rate import FRAME_MS, PHONE_RATE, SILENT_FRAME, RateConverter, gemini_to_phone
 from . import engines
 from .caller_level import VOICE_FLOOR, CallerLevel, rms
 from .gemini import AgentPersona, AgentUnavailable, LiveSettings, turn_timing
@@ -32,6 +32,10 @@ from .pacer import HUMAN_PREROLL_FRAMES, PREROLL_FRAMES, FramePacer
 from .recorder import RECORD_RATE, TwoWayRecorder
 
 log = logging.getLogger(__name__)
+
+#: How long after the agent's last word the caller's side can still carry
+#: its echo: the network to the handset and back, plus the room.
+ECHO_TAIL_SECONDS = 1.0
 
 
 class Handler(str, Enum):
@@ -132,7 +136,11 @@ class CallSession:
         self.caller_level: CallerLevel | None = None
         # When the caller last said something, by the wall clock; 0 if never.
         # How "they have gone" is checked against what is actually arriving.
+        # Only counted while the agent is quiet: see `feed_caller`.
         self.caller_spoke_at = 0.0
+        # When the agent's voice last went down the line (not keep-alive
+        # silence); 0 if it has not spoken yet.
+        self.agent_audible_at = 0.0
 
     # ---- lifecycle --------------------------------------------------------
 
@@ -181,6 +189,8 @@ class CallSession:
         saying the thing that interrupted.
         """
         self._transport(frame)
+        if frame != SILENT_FRAME:
+            self.agent_audible_at = time.time()
         if self._recorder and self._line_to_record:
             with contextlib.suppress(Exception):
                 self._recorder.feed("agent", self._line_to_record.process(frame))
@@ -283,7 +293,7 @@ class CallSession:
             return
         if self._recorder and self._caller_to_record:
             self._recorder.feed("caller", self._caller_to_record.process(pcm16))
-        if rms(pcm16) >= VOICE_FLOOR:
+        if rms(pcm16) >= VOICE_FLOOR and not self.agent_may_be_echoing():
             self.caller_spoke_at = time.time()
         if self.handler is Handler.AGENT:
             if self._agent:
@@ -401,6 +411,26 @@ class CallSession:
     def caller_spoke_within(self, seconds: float) -> bool:
         """Whether the caller was heard in the last `seconds`."""
         return bool(self.caller_spoke_at) and time.time() - self.caller_spoke_at <= seconds
+
+    def caller_spoke_since(self, moment: float) -> bool:
+        """Whether the caller was heard after `moment` (wall clock)."""
+        return self.caller_spoke_at > moment
+
+    def agent_may_be_echoing(self) -> bool:
+        """Whether what arrives from the caller could be the agent's own voice.
+
+        A phone sends back some of what it plays: the handset's speaker into
+        its microphone, or the network's own echo. While the agent is talking,
+        and for `ECHO_TAIL_SECONDS` after its last word has gone out (the trip
+        to the handset and back), loud audio from the caller's side may be
+        the agent, so it does not count as the caller speaking. Deciding the
+        caller is still there, or spoke after the goodbye, from the agent's
+        own echo would keep calls open that should end.
+        """
+        if self._pacer.speaking:
+            return True
+        return bool(self.agent_audible_at) and (
+            time.time() - self.agent_audible_at < ECHO_TAIL_SECONDS)
 
     @property
     def closed(self) -> bool:
