@@ -27,6 +27,7 @@ from ...repositories import calls as call_repo
 from ...security import playback
 from ...security.rate_limit import check_expensive
 from ...services.agent import live
+from ...services.agent.script import readable
 from ...services import recordings as recording_service
 from ...services import reports
 from ...services import carriers
@@ -106,7 +107,7 @@ async def live_calls(tenant: CurrentTenant) -> dict:
                 "seconds": round(time.time() - (call.answered_at or call.started_at)),
                 "handledBy": session.handler.value,
                 "speaking": session.speaking,
-                "transcript": session.transcript_text(),
+                "transcript": readable(session.transcript_text()),
                 # Scoped to this call and short-lived: a browser cannot send an
                 # Authorization header on a websocket.
                 "operatorToken": playback.mint(tenant.phone_number_id, call.id, ttl=3600),
@@ -152,7 +153,7 @@ async def call_session(tenant: CurrentTenant, call_id: str) -> dict:
         "operatorToken": (
             playback.mint(tenant.phone_number_id, call.id, ttl=3600) if session else None
         ),
-        "transcript": session.transcript_text() if session else None,
+        "transcript": readable(session.transcript_text()) if session else None,
     }
 
 
@@ -349,7 +350,7 @@ async def get_transcript(tenant: CurrentTenant, call_id: str) -> dict:
         raise NotFound("Call")
     return {
         "callId": call.id,
-        "transcript": call.transcript or None,
+        "transcript": readable(call.transcript) or None,
         "summary": call.summary or None,
         "topic": call.topic or None,
         "language": call.language or None,

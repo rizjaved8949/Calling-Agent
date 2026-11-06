@@ -15,6 +15,7 @@ from fastapi import APIRouter, Query
 from ...models.call import MessageDirection
 from ...repositories import calls as call_repo
 from ...services.agent import gaps as gap_finder
+from ...services.agent.script import readable
 from ..deps import CurrentTenant
 
 router = APIRouter(prefix="/gaps", tags=["gaps"])
@@ -34,7 +35,7 @@ async def unanswered(tenant: CurrentTenant, limit: int = Query(50, ge=1, le=200)
 
     calls = await call_repo.list_calls(tenant.phone_number_id, limit=SAMPLE)
     for call in calls:
-        for gap in gap_finder.find_in_transcript(call.transcript):
+        for gap in gap_finder.find_in_transcript(readable(call.transcript)):
             found.append(
                 {
                     "question": gap["question"],

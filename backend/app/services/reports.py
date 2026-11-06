@@ -24,6 +24,7 @@ from ..models.call import Call, RecordingState
 from ..models.tenant import Tenant
 from ..repositories import calls as call_repo
 from ..repositories import tenants as tenant_repo
+from .agent.script import readable
 from .drive import SHEET_MIME, XLSX_MIME, DriveError, TenantDrive, web_link
 from .storage import DRIVE_PREFIX
 
@@ -145,7 +146,7 @@ def build_workbook(tenant: Tenant, calls: list[Call]) -> bytes:
             continue
         date, _ = _stamp(call.started_at)
         transcripts.append(
-            [_cell(call.id), date, _cell(call.counterparty), _cell(call.transcript)]
+            [_cell(call.id), date, _cell(call.counterparty), _cell(readable(call.transcript))]
         )
     for column, width in enumerate((38, 12, 18, 120), start=1):
         transcripts.column_dimensions[get_column_letter(column)].width = width

@@ -28,6 +28,7 @@ from ...repositories import knowledge
 from .. import recordings as recording_service
 from .. import reports
 from . import prompt
+from . import script
 from . import voices
 from . import tools as tool_catalogue
 from .gemini import AgentPersona, LiveSettings
@@ -620,7 +621,12 @@ async def finish(tenant: Tenant, call_id: str, reason: str = "", *, error: str =
             call.handled_by = "operator"
         transcript = session.transcript_text()
         if transcript:
-            call.transcript = transcript
+            # Hindi script as Roman Urdu straight away, so the row never holds
+            # Devanagari; the text model then spells it properly, below.
+            call.transcript = script.readable(transcript)
+            # The speech model's own words, kept whenever they were rewritten.
+            call.transcript_original = (
+                transcript if call.transcript != transcript else "")
         if reason:
             call.metadata = {**call.metadata, "endedBecause": reason}
 
@@ -652,8 +658,56 @@ async def finish(tenant: Tenant, call_id: str, reason: str = "", *, error: str =
             call_id, call.duration_seconds, call.status.value,
             call.recording_state.value.lower(),
         )
+        if script.has_devanagari(transcript):
+            task = asyncio.create_task(_respell_in_roman_urdu(tenant, call_id, transcript))
+            _respelling.add(task)
+            task.add_done_callback(_respelling.discard)
     except Exception:  # noqa: BLE001
         log.exception("call %s: could not settle the row", call_id)
+
+
+#: Transcripts being respelled after their call, held so none is collected
+#: half-way through.
+_respelling: set[asyncio.Task] = set()
+
+
+async def _respell_in_roman_urdu(tenant: Tenant, call_id: str, transcript: str) -> None:
+    """Rewrite a finished call's Hindi-script lines as Roman Urdu with the text
+    model, which spells loanwords and Urdu words the way people write them.
+
+    After the call is settled rather than before, so a slow or missing model
+    never holds up the call's own record — that already reads in Roman Urdu,
+    letter by letter, and this only improves it. Never raises.
+    """
+    try:
+        chosen = await live_settings_now(tenant)
+        # Only a Gemini key can call the Gemini text model.
+        key = chosen.api_key if (chosen.engine or "gemini") == "gemini" else ""
+        if not key:
+            return
+        speakers: list[str] = []
+        said: list[str] = []
+        for line in transcript.split("\n"):
+            who, sep, text = line.partition(": ")
+            if sep and who in ("caller", "agent"):
+                speakers.append(f"{who}: ")
+                said.append(text)
+            else:
+                speakers.append("")
+                said.append(line)
+        respelled = await script.to_roman_urdu(
+            said, api_key=key, model=settings.gemini_text_model)
+        call = await call_repo.get_call(tenant.phone_number_id, call_id)
+        if call is None:
+            return
+        call.transcript = "\n".join(p + t for p, t in zip(speakers, respelled))
+        # Only the readable copy changes; the original stays as heard.
+        call.transcript_original = call.transcript_original or transcript
+        await call_repo.save_call(call)
+        reports.schedule_sync(tenant)
+        log.info("call %s: transcript written in Roman Urdu", call_id)
+    except Exception:  # noqa: BLE001
+        log.exception("call %s: could not respell the transcript", call_id)
 
 
 async def end_all(reason: str = "shutting down") -> None:

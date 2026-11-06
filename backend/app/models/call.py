@@ -15,6 +15,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..services.agent.script import readable
+
 
 class Channel(str, Enum):
     PHONE = "PHONE"                      # SIM / SIP, through Infobip
@@ -102,6 +104,12 @@ class Call(BaseModel):
 
     # ---- Content ----------------------------------------------------------
     transcript: str = ""
+    # The transcript exactly as the speech model wrote it, kept whenever the
+    # one above was rewritten for reading (Hindi script shown as Roman Urdu,
+    # see services/agent/script.py). Stored, never shown and never changed,
+    # so nothing the model heard is lost to the conversion. Empty when the
+    # transcript above is already the original.
+    transcript_original: str = Field(default="", alias="transcriptOriginal")
     summary: str = ""
     topic: str = ""
     language: str = ""
@@ -164,7 +172,9 @@ class Call(BaseModel):
                 "available": self.recording_state == RecordingState.READY,
                 "error": self.recording_error or None,
             },
-            "transcript": self.transcript or None,
+            # Hindi script as Roman Urdu, for rows saved before calls were
+            # converted when they ended. See services/agent/script.py.
+            "transcript": readable(self.transcript) or None,
             "summary": self.summary or None,
             "topic": self.topic or None,
             "language": self.language or None,

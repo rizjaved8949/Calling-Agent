@@ -35,6 +35,7 @@ from ...repositories import tenants as tenant_repo
 from ...security import playback
 from ...services.agent import claims, live
 from ...services.agent.audio_rate import FRAME_BYTES
+from ...services.agent.script import readable
 
 log = logging.getLogger(__name__)
 
@@ -469,7 +470,7 @@ async def operator_media(socket: WebSocket, call_id: str, token: str = Query(def
     with contextlib.suppress(Exception):
         await socket.send_text(json.dumps({
             "type": "handover",
-            "transcript": session.transcript_text(),
+            "transcript": readable(session.transcript_text()),
         }))
     log.info("call %s: an operator joined", call_id)
 
