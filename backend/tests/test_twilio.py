@@ -423,6 +423,35 @@ def test_a_number_without_voice_fails(client, tenant_factory, auth, twilio_accou
     assert "voice" in body["statusDetail"]
 
 
+def _on_a_trunk(twilio_account):
+    twilio_account.replies[("GET", "/IncomingPhoneNumbers.json")] = (200, {
+        "incoming_phone_numbers": [{"sid": PN_SID, "capabilities": {"voice": True},
+                                    "trunk_sid": "TK" + "e" * 32}]})
+
+
+def test_a_number_left_on_a_sip_trunk_fails_with_how_to_fix_it(
+        client, tenant_factory, auth, twilio_account):
+    """What happened with a number moved from Retell: Twilio sent every call
+    to Retell's trunk, Retell answered busy, and this said Verified."""
+    _, key = tenant_factory("719")
+    _on_a_trunk(twilio_account)
+    body = _add_twilio(client, auth, key, mode="both").json()
+    assert body["status"] == "failed"
+    assert "SIP Trunk" in body["statusDetail"] and "Configure with" in body["statusDetail"]
+    # Nothing was changed in their Twilio account.
+    assert not [r for r in twilio_account.requests if r.method == "POST"]
+
+
+def test_an_outbound_only_number_on_a_trunk_still_verifies(
+        client, tenant_factory, auth, twilio_account):
+    """Outbound calls go through the Calls API, not the trunk."""
+    _, key = tenant_factory("720")
+    _on_a_trunk(twilio_account)
+    body = _add_twilio(client, auth, key, mode="outbound").json()
+    assert body["status"] == "verified"
+    assert "SIP Trunk" in body["statusDetail"]
+
+
 def test_a_trial_account_is_verified_with_a_note(client, tenant_factory, auth, twilio_account):
     _, key = tenant_factory("715")
     twilio_account.replies[("GET", ".json")] = (200, {"status": "active", "type": "Trial"})

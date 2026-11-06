@@ -62,6 +62,7 @@ async def test_start_hands_the_line_to_a_session_already_warmed(fake_db, monkeyp
 
     class Warmed:
         handler = type("H", (), {"value": "agent"})()
+        closed = False  # a warmed session whose model is still connected
         def attach_transport(self, send):
             attached.append(send)
 
