@@ -52,6 +52,8 @@ def _call() -> Call:
 class _FakeSession:
     """Stands in for the session `start` would build and attach to the line."""
 
+    closed = False  # its model is still connected
+
     def __init__(self) -> None:
         self.ended_with = None
 

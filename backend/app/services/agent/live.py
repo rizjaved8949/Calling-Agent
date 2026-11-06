@@ -312,8 +312,12 @@ async def _hang_up_after_goodbye(tenant: Tenant, call: Call, reason: str) -> Non
         await hang_up(tenant, call, reason)
 
 
-async def hang_up(tenant: Tenant, call: Call, reason: str) -> None:
-    """End the call with the provider and settle it here. Never raises."""
+async def hang_up(tenant: Tenant, call: Call, reason: str, *, error: str = "") -> None:
+    """End the call with the provider and settle it here. Never raises.
+
+    `error` is passed on to `finish`: set when the call is ending because the
+    agent could not carry it.
+    """
     from ...models.call import Channel
     from ...services import carriers
     from ...services.whatsapp import WhatsApp
@@ -326,7 +330,51 @@ async def hang_up(tenant: Tenant, call: Call, reason: str) -> None:
             from . import whatsapp_media
 
             await whatsapp_media.drop(call.id)
-    await finish(tenant, call.id, reason)
+    await finish(tenant, call.id, reason, error=error)
+
+
+def _when_agent_fails(tenant: Tenant, call: Call):
+    """What a session does when its model refuses it or goes away.
+
+    Three cases, by which session it was:
+
+    * Not the one in the registry: an orphan or a superseded session. It
+      ends quietly. It must not end a call another session is carrying.
+    * A warmed-up session no line is attached to yet: dropped from the
+      registry, so `start` builds a fresh one when the caller arrives. A key
+      that was busy a moment ago may well be free by then.
+    * The session the caller is on: the call is hung up with the carrier and
+      recorded with the reason. Leaving it up meant silence until the caller
+      gave up, and a history that called it "Completed".
+    """
+    async def handle(session: CallSession, reason: str) -> None:
+        if _sessions.get(call.id) is not session:
+            return
+        if not session.attached:
+            _sessions.pop(call.id, None)
+            log.warning("call %s: the warmed-up agent was refused (%s); the line will "
+                        "get a fresh one", call.id, reason)
+            return
+        log.warning("call %s: the agent cannot carry the call (%s); hanging up",
+                    call.id, reason)
+        from .. import platform_settings
+
+        await hang_up(tenant, call, "the agent could not carry the call",
+                      error=f"The agent could not carry the call: "
+                            f"{platform_settings.explain(reason)}")
+
+    return handle
+
+
+#: Calls whose warm-up is building its session right now, and the event set
+#: once it has registered one (or given up). `start` waits on it rather than
+#: building a second session; see `start`.
+_warming: dict[str, asyncio.Event] = {}
+
+#: How long `start` waits for a warm-up already in progress. Building the
+#: session is two database reads; the model connecting happens after the
+#: session is registered and is not waited for here.
+WARM_UP_WAIT_SECONDS = 8.0
 
 
 def _discard(_frame: bytes) -> None:
@@ -368,6 +416,16 @@ async def warm_up(tenant: Tenant, call: Call, *, keepalive: bool = True) -> None
         # A dialer call is a person talking to a person. Warming a model for it
         # would put an agent on a line the employee is about to speak on.
         return
+    if call.id in _warming:
+        return
+    # Claimed before the first await, so a line connecting while this reads
+    # the database waits for this session instead of building a second one.
+    # Two sessions for one call is two model connections: the key's limit on
+    # open sessions refused the second ("out of quota"), the call ran on that
+    # dead one, and the caller heard nothing.
+    registered = asyncio.Event()
+    _warming[call.id] = registered
+    session: CallSession | None = None
     try:
         session = CallSession(
             call.id,
@@ -379,15 +437,16 @@ async def warm_up(tenant: Tenant, call: Call, *, keepalive: bool = True) -> None
             on_transcript=lambda who, text: None,
             on_tool=_tool_handler(tenant, call),
         )
+        session.attached = False
+        session.on_agent_failed = _when_agent_fails(tenant, call)
         # Checked again, because building that session awaited the database
-        # twice and the line can connect in the meantime. `start` finds no
-        # session, makes its own, and attaches it to the carrier — and this
-        # assignment used to overwrite it.
+        # twice. `start` now waits for this rather than building its own, but
+        # it stops waiting after `WARM_UP_WAIT_SECONDS`, and then whatever it
+        # registered is the session on the line and must not be overwritten.
         #
-        # What that cost: the real conversation ran on a session nothing was
-        # tracking, while the one that got settled, recorded and transcribed
-        # was this one, which had only ever spoken its own greeting. The call
-        # sounded perfect and the recording stopped after the intro.
+        # What overwriting cost once: the real conversation ran on a session
+        # nothing was tracking, while the one that got settled, recorded and
+        # transcribed was this one, which had only ever spoken its greeting.
         if call.id in _sessions:
             log.info("call %s: the line connected while warming; standing down",
                      call.id)
@@ -395,10 +454,20 @@ async def warm_up(tenant: Tenant, call: Call, *, keepalive: bool = True) -> None
                 await session.end("superseded by the live session")
             return
         _sessions[call.id] = session
-        await session.start(paced=False)
-        log.info("call %s: the agent is connected and waiting for the line", call.id)
     except Exception:  # noqa: BLE001
-        _sessions.pop(call.id, None)
+        log.exception("call %s: could not warm the agent up", call.id)
+        return
+    finally:
+        _warming.pop(call.id, None)
+        registered.set()
+
+    try:
+        await session.start(paced=False)
+        if not session.closed:
+            log.info("call %s: the agent is connected and waiting for the line", call.id)
+    except Exception:  # noqa: BLE001
+        if _sessions.get(call.id) is session:
+            _sessions.pop(call.id, None)
         log.exception("call %s: could not warm the agent up", call.id)
 
 
@@ -415,19 +484,28 @@ async def start(
     `on_clear` is for a carrier that buffers audio on its side (Twilio): it is
     called when what was already sent should stop playing. See
     `CallSession.on_clear`.
+
+    Exactly one session per call. A warm-up still reading the database is
+    waited for, not raced: a Twilio stream connects within half a second of
+    the webhook, sooner than the warm-up registers, and both used to build a
+    session. See `_warming`.
     """
+    warming = _warming.get(call.id)
+    if warming is not None:
+        try:
+            await asyncio.wait_for(warming.wait(), timeout=WARM_UP_WAIT_SECONDS)
+        except asyncio.TimeoutError:
+            log.warning("call %s: the warm-up took too long; starting the agent here",
+                        call.id)
+
     existing = _sessions.get(call.id)
+    if existing is not None and existing.closed:
+        # Warmed, but its model was refused or went away before the caller
+        # arrived. Attaching it would connect the caller to nobody.
+        _sessions.pop(call.id, None)
+        existing = None
     if existing is not None:
-        # Warmed while the carrier was connecting. Hand it the line; anything
-        # it has already said is queued and plays from its first word.
-        existing.on_clear = on_clear
-        existing.attach_transport(send_to_caller)
-        call.status = CallStatus.IN_PROGRESS
-        call.answered_at = call.answered_at or time.time()
-        if tenant.record_calls and call.recording_state is RecordingState.NONE:
-            call.recording_state = RecordingState.PENDING
-        await call_repo.save_call(call)
-        return existing
+        return await _attach(existing, tenant, call, send_to_caller, on_clear)
 
     # Past the warmed-session check above, so a call that was warmed while
     # there was room is still answered: it is already counted, and refusing it
@@ -456,25 +534,62 @@ async def start(
         on_tool=None if human else _tool_handler(tenant, call),
         human=human,
     )
+    # Building awaited the database; a warm-up that outlasted the wait above
+    # may have registered meanwhile. Use it rather than open a second model
+    # session, which the key would refuse.
+    other = _sessions.get(call.id)
+    if other is not None and not other.closed:
+        with contextlib.suppress(Exception):
+            await session.end("superseded by the warmed-up session")
+        return await _attach(other, tenant, call, send_to_caller, on_clear)
+
     session.on_clear = on_clear
+    session.on_agent_failed = _when_agent_fails(tenant, call)
     _sessions[call.id] = session
     await session.start()
+    if session.closed:
+        # Refused while starting ("out of quota"). `_when_agent_fails` hangs
+        # the call up and files it as failed; marking it answered and in
+        # progress here, after that, is how it used to read "Completed".
+        return session
 
+    await _mark_answered(tenant, call)
+    log.info("call %s answered for %s (%d live)", call.id, tenant.phone_number_id, len(_sessions))
+    return session
+
+
+async def _attach(session: CallSession, tenant: Tenant, call: Call,
+                  send_to_caller: Callable[[bytes], None],
+                  on_clear: Callable[[], None] | None) -> CallSession:
+    """Hand a warmed-up session the line; what it has already said plays
+    from its first word."""
+    session.on_clear = on_clear
+    session.attach_transport(send_to_caller)
+    await _mark_answered(tenant, call)
+    log.info("call %s answered for %s on the warmed-up agent (%d live)",
+             call.id, tenant.phone_number_id, len(_sessions))
+    return session
+
+
+async def _mark_answered(tenant: Tenant, call: Call) -> None:
     call.status = CallStatus.IN_PROGRESS
     call.answered_at = call.answered_at or time.time()
     if tenant.record_calls and call.recording_state is RecordingState.NONE:
         call.recording_state = RecordingState.PENDING
     await call_repo.save_call(call)
-    log.info("call %s answered for %s (%d live)", call.id, tenant.phone_number_id, len(_sessions))
-    return session
 
 
-async def finish(tenant: Tenant, call_id: str, reason: str = "") -> None:
+async def finish(tenant: Tenant, call_id: str, reason: str = "", *, error: str = "") -> None:
     """Settle a call: stop the agent, store the recording, save the transcript.
 
     Never raises. Called from a socket that has already closed, from a webhook,
     and from a `finally` — none of which have anywhere to put an exception, and
     all of which must still settle the row.
+
+    `error` is why the agent could not carry the call. It is recorded on the
+    call either way, and the call is filed as FAILED when the caller never
+    heard the agent at all: a connected line with nobody on it is not a
+    completed call, and filing it as one hid every one of these.
     """
     session = _sessions.pop(call_id, None)
     if session is None:
@@ -497,6 +612,10 @@ async def finish(tenant: Tenant, call_id: str, reason: str = "") -> None:
             call.status = CallStatus.COMPLETED
         else:
             call.status = CallStatus.NO_ANSWER
+        if error:
+            call.error = error[:300]
+            if session.frames_out == 0:
+                call.status = CallStatus.FAILED
         if session.handler.value == "operator":
             call.handled_by = "operator"
         transcript = session.transcript_text()

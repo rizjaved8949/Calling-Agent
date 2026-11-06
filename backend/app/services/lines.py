@@ -204,7 +204,28 @@ async def _verify_twilio(t: Tenant, number: PhoneNumber) -> str:
         raise _Refused(f"{number.phone_number} cannot make or take voice calls in Twilio.")
     number.twilio_phone_number_sid = str(found.get("sid") or "")
 
+    # A number attached to an Elastic SIP Trunk sends every incoming call to
+    # that trunk, and ignores the webhook set below. Another voice-AI provider
+    # (Retell, for one) attaches its numbers this way and leaves the trunk in
+    # place when the number is deleted on their side. Those calls then never
+    # arrived here: Twilio gave them to the old provider, which answered
+    # "busy", while this screen said Verified. Not detached for them: a trunk
+    # can be in use on purpose, and it is their account.
+    on_trunk = bool(found.get("trunk_sid"))
+    if on_trunk and number.takes_inbound:
+        raise _Refused(
+            f"{number.phone_number} is attached to an Elastic SIP Trunk in Twilio "
+            "(often left behind by another calling provider), so incoming calls go "
+            "to that trunk instead of here. In the Twilio Console open the number, "
+            "set \"Configure with\" to \"Webhook, TwiML Bin, Function, Studio Flow, "
+            "Proxy Service\" (or remove it under Elastic SIP Trunking → Trunks → "
+            "Numbers), save, then verify again."
+        )
+
     detail = f"Twilio confirmed {number.phone_number}."
+    if on_trunk:
+        detail += (" It is attached to an Elastic SIP Trunk, which is fine for "
+                   "outbound calls only; detach it before taking incoming calls.")
     base = webhook_base()
     urls = number.public(base_url=base)
     if base.startswith("https://") and number.twilio_phone_number_sid:

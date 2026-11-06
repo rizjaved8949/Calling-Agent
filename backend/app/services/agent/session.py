@@ -114,6 +114,16 @@ class CallSession:
         # dropping our own queue alone leaves the agent talking over the
         # caller for as long as Twilio's buffer lasts. Infobip leaves it None.
         self.on_clear: Callable[[], None] | None = None
+        # Told when the model cannot carry the call: refused at the start
+        # ("out of quota") or lost mid-call. Without it the session simply
+        # stopped, and the caller sat on a silent line until they gave up.
+        # `live` decides what that means for the call. See `live._when_agent_fails`.
+        self.on_agent_failed: Callable[["CallSession", str], Awaitable[None]] | None = None
+        # Whether a real line carries this session's audio. False only while
+        # a warmed-up session waits for its caller (`live.warm_up`); a failure
+        # then is a reason to try again when the line arrives, not to hang up.
+        self.attached = True
+        self._failure_task: asyncio.Task | None = None
         self._closed = False
 
     # ---- lifecycle --------------------------------------------------------
@@ -141,6 +151,7 @@ class CallSession:
         word rather than being cut into.
         """
         self._transport = send_to_caller
+        self.attached = True
         if self._pacer_task is None and not self._closed:
             self._pacer_task = asyncio.create_task(self._run_pacer())
 
@@ -202,6 +213,18 @@ class CallSession:
                 from .. import platform_settings
                 platform_settings.note_failure(platform_settings.explain(str(exc)))
                 await self.end(str(exc))
+                # Reported from a task of its own: `end` has just cancelled
+                # this one (it is the agent task), so anything awaited here
+                # could be cut short before the call is dealt with.
+                self._failure_task = asyncio.create_task(self._report_failure(str(exc)))
+
+    async def _report_failure(self, reason: str) -> None:
+        if self.on_agent_failed is None:
+            return
+        try:
+            await self.on_agent_failed(self, reason)
+        except Exception:  # noqa: BLE001 — a loose task has nowhere to raise to
+            log.exception("call %s: could not act on the agent failing", self.call_id)
 
     async def _run_pacer(self) -> None:
         # 5 ms, so a 20 ms frame is never more than a quarter-frame late.
@@ -363,6 +386,16 @@ class CallSession:
             else:
                 lines.append(f"{who}: {text.strip()}")
         return "\n".join(lines)
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    @property
+    def frames_out(self) -> int:
+        """Frames sent down the line so far. Silence only starts after the
+        agent has said something, so above zero means the caller heard it."""
+        return self._pacer.frames_sent
 
     @property
     def speaking(self) -> bool:

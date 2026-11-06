@@ -155,6 +155,8 @@ def test_health_reports_headroom(client, no_sessions, monkeypatch):
 # --- helpers ---------------------------------------------------------------
 
 class _FakeSession:
+    closed = False  # its model is still connected
+
     def attach_transport(self, _send) -> None:
         pass
 
