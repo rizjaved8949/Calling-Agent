@@ -283,6 +283,21 @@ def _tool_handler(tenant: Tenant, call: Call):
 
         if name == "end_call":
             reason = str(args.get("reason") or "the agent ended the call")[:200]
+            session = _sessions.get(call.id)
+            if (session is not None and _claims_caller_gone(reason)
+                    and session.caller_spoke_within(CALLER_GONE_SECONDS)):
+                # The model said they had gone while their voice was still
+                # coming down the line: twice on real calls, it hung up on a
+                # caller who was talking. A caller who really rings off ends
+                # the call from the carrier's side; nothing needs deciding.
+                log.info("call %s: not ending the call: the agent said %r, but "
+                         "the caller was heard %.1fs ago", call.id, reason,
+                         time.time() - session.caller_spoke_at)
+                return (
+                    "Do not end the call: the caller is still on the line and "
+                    "has just been speaking. Listen to them and answer what "
+                    "they said."
+                )
             log.info("call %s: the agent is ending the call (%s)", call.id, reason)
             asyncio.create_task(_hang_up_after_goodbye(tenant, call, reason))
             return "The call is ending. Say your goodbye now and stop talking."
@@ -290,6 +305,23 @@ def _tool_handler(tenant: Tenant, call: Call):
         return "That is not something you can do on this call."
 
     return handle
+
+
+#: An agent that ends a call because the caller has gone is not believed if
+#: the caller was heard this recently.
+CALLER_GONE_SECONDS = 5.0
+
+_GONE_WORDS = ("rang off", "rung off", "hung up", "hang up", "hanged up",
+               "has left", "caller left", "they left", "has gone", "caller gone",
+               "disconnect", "dropped off", "line dropped", "silent", "silence",
+               "no response", "not respond", "unresponsive", "no one there",
+               "nobody there", "not there", "not answering")
+
+
+def _claims_caller_gone(reason: str) -> bool:
+    """Whether the agent's reason for ending says the caller is not there."""
+    said = reason.lower()
+    return any(word in said for word in _GONE_WORDS)
 
 
 async def _hang_up_after_goodbye(tenant: Tenant, call: Call, reason: str) -> None:

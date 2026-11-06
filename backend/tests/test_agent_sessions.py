@@ -315,6 +315,9 @@ def test_a_real_inbound_call_opens_one_agent_and_the_caller_hears_it(
         _start(phone, token)                      # at once, mid warm-up
         greeting = phone.receive_json()
         assert greeting["event"] == "media", "the caller heard nothing"
+        [ringing] = _calls(fake_db)
+        assert live.get(ringing.id).caller_level is not None, (
+            "a Twilio caller reaches the model without the level raised")
 
     assert len(OneSlotEngine.built) == 1, (
         f"{len(OneSlotEngine.built)} model sessions were opened for one call")

@@ -35,6 +35,7 @@ from ...repositories import tenants as tenant_repo
 from ...security import playback
 from ...services.agent import claims, live
 from ...services.agent.audio_rate import FRAME_BYTES
+from ...services.agent.caller_level import CallerLevel
 from ...services.agent.script import readable
 
 log = logging.getLogger(__name__)
@@ -371,6 +372,10 @@ async def twilio_media(socket: WebSocket, call_id: str):
             await socket.close(code=4503)
             await live.finish(tenant, call_id, str(exc))
             return
+        # Twilio callers arrive about 15 dB under the agent, quiet enough for
+        # the model to miss them. Only what the model hears is raised; the
+        # recording keeps the call as it came. See `caller_level.py`.
+        session.caller_level = CallerLevel()
         await _twilio_stream(socket, session, out, stream_sid, stop, tenant, call_id)
     finally:
         _twilio_attached.discard(call_id)

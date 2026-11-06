@@ -75,7 +75,8 @@ END_CALL: dict[str, Any] = {
                 "type": "string",
                 "description": (
                     "A few words for the record: 'the caller's question was answered', "
-                    "'the caller rang off', 'the caller was not engaging'."
+                    "'the caller said goodbye', 'the caller was not engaging'. Never "
+                    "'the caller rang off': if they hang up, the call ends by itself."
                 ),
             },
         },

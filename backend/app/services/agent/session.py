@@ -26,6 +26,7 @@ from typing import Any, Awaitable, Callable
 
 from .audio_rate import FRAME_MS, PHONE_RATE, RateConverter, gemini_to_phone
 from . import engines
+from .caller_level import VOICE_FLOOR, CallerLevel, rms
 from .gemini import AgentPersona, AgentUnavailable, LiveSettings, turn_timing
 from .pacer import HUMAN_PREROLL_FRAMES, PREROLL_FRAMES, FramePacer
 from .recorder import RECORD_RATE, TwoWayRecorder
@@ -125,6 +126,13 @@ class CallSession:
         self.attached = True
         self._failure_task: asyncio.Task | None = None
         self._closed = False
+        # Raises a quiet caller before the model hears them. Set by the
+        # transport that needs it (Twilio); None leaves the audio as it came.
+        # See `caller_level.py`.
+        self.caller_level: CallerLevel | None = None
+        # When the caller last said something, by the wall clock; 0 if never.
+        # How "they have gone" is checked against what is actually arriving.
+        self.caller_spoke_at = 0.0
 
     # ---- lifecycle --------------------------------------------------------
 
@@ -275,9 +283,12 @@ class CallSession:
             return
         if self._recorder and self._caller_to_record:
             self._recorder.feed("caller", self._caller_to_record.process(pcm16))
+        if rms(pcm16) >= VOICE_FLOOR:
+            self.caller_spoke_at = time.time()
         if self.handler is Handler.AGENT:
             if self._agent:
-                self._agent.feed(pcm16)
+                heard = self.caller_level.process(pcm16) if self.caller_level else pcm16
+                self._agent.feed(heard)
         elif self._operator_out:
             # Straight through: a person needs no model in the middle.
             self._operator_out(pcm16)
@@ -386,6 +397,10 @@ class CallSession:
             else:
                 lines.append(f"{who}: {text.strip()}")
         return "\n".join(lines)
+
+    def caller_spoke_within(self, seconds: float) -> bool:
+        """Whether the caller was heard in the last `seconds`."""
+        return bool(self.caller_spoke_at) and time.time() - self.caller_spoke_at <= seconds
 
     @property
     def closed(self) -> bool:
