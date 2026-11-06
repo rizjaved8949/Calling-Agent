@@ -111,7 +111,8 @@ async def live_settings_now(tenant: Tenant | None = None) -> LiveSettings:
     )
 
 
-async def persona_for(tenant: Tenant, call: Call | None = None) -> AgentPersona:
+async def persona_for(tenant: Tenant, call: Call | None = None,
+                      timings: dict[str, float] | None = None) -> AgentPersona:
     """The agent for this call, built from the company's settings and material.
 
     Which agent, and which documents, is `services/routing.py`'s decision —
@@ -135,6 +136,7 @@ async def persona_for(tenant: Tenant, call: Call | None = None) -> AgentPersona:
                  "language": tenant.language, "ttsVoice": tenant.tts_voice,
                  "tone": "", "escalation": "", "pace": ""}
     else:
+        clock = time.monotonic()
         resolved = await routing.resolve(
             tenant,
             channel=call.channel,
@@ -147,7 +149,10 @@ async def persona_for(tenant: Tenant, call: Call | None = None) -> AgentPersona:
             agent_id=call.agent_id,
             line_id=call.line_id,
         )
+        _took(timings, "routing", clock)
+        clock = time.monotonic()
         context = await routing.context_for(tenant, resolved)
+        _took(timings, "documents", clock)
         voice = routing.persona_for(tenant, resolved)
         # Recorded on the call so "why did it answer that?" stays answerable
         # after the setups have been edited.
@@ -157,7 +162,9 @@ async def persona_for(tenant: Tenant, call: Call | None = None) -> AgentPersona:
         call.resolved_by = resolved.resolved_by
 
     language = (voice["language"] or "").strip()
+    clock = time.monotonic()
     can_message = bool(call) and await _can_send_whatsapp(tenant)
+    _took(timings, "WhatsApp check", clock)
 
     # Every word of this is now a block a company can read and change; see
     # `prompt.py`. It used to be a few hundred words of behaviour written
@@ -206,6 +213,78 @@ async def persona_for(tenant: Tenant, call: Call | None = None) -> AgentPersona:
         pace=(voice.get("pace") or "").strip(),
         tools=tool_catalogue.for_call(can_send_whatsapp=can_message),
     )
+
+
+def _took(timings: dict[str, float] | None, step: str, since: float) -> None:
+    if timings is not None:
+        timings[step] = time.monotonic() - since
+
+
+def _timed(timings: dict[str, float], total: float) -> str:
+    """For a log line: 4.2s (engine settings 0.1s, documents 3.9s, ...)."""
+    steps = ", ".join(f"{step} {seconds:.1f}s" for step, seconds in timings.items())
+    return f"{total:.1f}s ({steps})" if steps else f"{total:.1f}s"
+
+
+#: Preparing an agent slower than this is logged as a warning.
+SLOW_PREPARE_SECONDS = 2.0
+
+
+async def _prepared(tenant: Tenant, call: Call) -> tuple[LiveSettings, AgentPersona]:
+    """The engine and the agent for a call, timed step by step in the log.
+
+    On a real call this took nine seconds once, the first after a deploy, and
+    the caller heard nothing for all of it. Timed so the slow step is named
+    in the log rather than guessed at.
+    """
+    timings: dict[str, float] = {}
+    started = clock = time.monotonic()
+    chosen = await live_settings_now(tenant)
+    _took(timings, "engine settings", clock)
+    persona = await persona_for(tenant, call, timings)
+    total = time.monotonic() - started
+    report = log.warning if total >= SLOW_PREPARE_SECONDS else log.info
+    report("call %s: agent prepared in %s", call.id, _timed(timings, total))
+    return chosen, persona
+
+
+async def prepare() -> None:
+    """Load what every first call needs, while nobody is waiting for it.
+
+    The first call after a deploy found nothing loaded: the speech library,
+    the engine settings, the connection to the database and every company's
+    documents were all read while the caller sat in silence (nine seconds,
+    once). Done here instead, in the background, when the server starts.
+    The knowledge cache then keeps the documents warm between calls. Never
+    raises: a call that finds something missing just reads it, as before.
+    """
+    import importlib
+
+    from ...repositories import agents as agent_repo
+    from ...repositories import tenants as tenant_repo
+    from .. import platform_settings
+
+    started = time.monotonic()
+    try:
+        # Heavy to import, and imported by the first model session otherwise.
+        await asyncio.to_thread(importlib.import_module, "google.genai")
+    except Exception:  # noqa: BLE001
+        log.info("prepare: the speech library could not be loaded ahead of time")
+    companies = 0
+    try:
+        await platform_settings.current()
+        for tenant in await tenant_repo.list_all():
+            try:
+                await tenant_repo.get(tenant.phone_number_id)
+                bases = await agent_repo.list_knowledge_bases(tenant.phone_number_id)
+                await knowledge.warm(tenant.phone_number_id, [kb.id for kb in bases])
+                companies += 1
+            except Exception:  # noqa: BLE001 — one company must not stop the rest
+                log.exception("prepare: could not load company %s", tenant.phone_number_id)
+    except Exception:  # noqa: BLE001
+        log.exception("prepare: could not load the companies")
+    log.info("prepare: ready for calls in %.1fs (%d companies' documents loaded)",
+             time.monotonic() - started, companies)
 
 
 # A language tag is for machines. "Speak ur-PK" is not an instruction anyone,
@@ -489,11 +568,12 @@ async def warm_up(tenant: Tenant, call: Call, *, keepalive: bool = True) -> None
     _warming[call.id] = registered
     session: CallSession | None = None
     try:
+        chosen, persona = await _prepared(tenant, call)
         session = CallSession(
             call.id,
             send_to_caller=_discard,
-            live_settings=await live_settings_now(tenant),
-            persona=await persona_for(tenant, call),
+            live_settings=chosen,
+            persona=persona,
             record=tenant.record_calls,
             keepalive=keepalive,
             on_transcript=lambda who, text: None,
@@ -524,9 +604,11 @@ async def warm_up(tenant: Tenant, call: Call, *, keepalive: bool = True) -> None
         registered.set()
 
     try:
+        connecting = time.monotonic()
         await session.start(paced=False)
         if not session.closed:
-            log.info("call %s: the agent is connected and waiting for the line", call.id)
+            log.info("call %s: the agent is connected (%.1fs) and waiting for the line",
+                     call.id, time.monotonic() - connecting)
     except Exception:  # noqa: BLE001
         if _sessions.get(call.id) is session:
             _sessions.pop(call.id, None)
@@ -588,13 +670,17 @@ async def start(
         )
 
     human = call.mode == "human"
+    if human:
+        # A human call never starts the model, so it needs no persona.
+        chosen = await live_settings_now(tenant)
+        persona = AgentPersona(instructions="", greeting="")
+    else:
+        chosen, persona = await _prepared(tenant, call)
     session = CallSession(
         call.id,
         send_to_caller=send_to_caller,
-        live_settings=await live_settings_now(tenant),
-        # A human call never starts the model, so it needs no persona.
-        persona=AgentPersona(instructions="", greeting="") if human
-        else await persona_for(tenant, call),
+        live_settings=chosen,
+        persona=persona,
         record=tenant.record_calls,
         keepalive=keepalive,
         on_transcript=lambda who, text: None,

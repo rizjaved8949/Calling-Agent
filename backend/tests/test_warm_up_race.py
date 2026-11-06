@@ -80,7 +80,7 @@ async def test_warming_stands_down_when_the_line_connected_first(
         from app.services.agent.gemini import LiveSettings
         return LiveSettings(model="m", api_key="k")
 
-    async def persona(_tenant, _call=None):
+    async def persona(_tenant, _call=None, _timings=None):
         from app.services.agent.gemini import AgentPersona
         return AgentPersona(instructions="be helpful", greeting="hello")
 
@@ -125,7 +125,7 @@ async def test_warming_still_registers_when_nothing_else_did(
         from app.services.agent.gemini import LiveSettings
         return LiveSettings(model="m", api_key="k")
 
-    async def persona(_tenant, _call=None):
+    async def persona(_tenant, _call=None, _timings=None):
         from app.services.agent.gemini import AgentPersona
         return AgentPersona(instructions="be helpful", greeting="hello")
 

@@ -101,11 +101,20 @@ async def lifespan(_app: FastAPI):
 
     pinging = asyncio.create_task(keepalive.run_forever())
 
+    # The first call after a deploy should not be the one that loads
+    # everything. See `live.prepare`.
+    preparing = None
+    if settings.prepare_on_start:
+        from .services.agent import live as live_calls
+
+        preparing = asyncio.create_task(live_calls.prepare())
+
     try:
         yield
     finally:
-        for task in (reaping, pinging):
-            task.cancel()
+        for task in (reaping, pinging, preparing):
+            if task is not None:
+                task.cancel()
         with __import__("contextlib").suppress(asyncio.CancelledError, Exception):
             await reaping
         with __import__("contextlib").suppress(asyncio.CancelledError, Exception):

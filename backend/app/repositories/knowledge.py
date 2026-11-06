@@ -13,6 +13,8 @@ becomes the place retrieval goes, behind the same `context_for()` call.
 """
 from __future__ import annotations
 
+import asyncio
+
 import hashlib
 import logging
 import time
@@ -102,12 +104,20 @@ async def delete(tenant_id: str, document_id: str) -> None:
     forget_context(tenant_id)
 
 
-# The prompt text for one knowledge base, briefly. Reading and joining tens of
-# thousands of characters took 1.7 seconds of every call's opening silence, and
-# documents do not change between two calls a minute apart. Invalidated on
-# upload and delete; stale for at most this long otherwise.
+# The prompt text for one knowledge base, kept between calls. Reading and
+# joining tens of thousands of characters took 1.7 seconds of a call's opening
+# silence on a warm server, and far longer on the first call after a restart.
+#
+# Every document write goes through `save` and `delete` here, and both drop
+# the company's entries, so what is cached is never out of date because of an
+# upload. It is still re-read in the background once it is older than
+# `_CONTEXT_TTL_SECONDS`, in case the table was changed some other way, but a
+# call is never made to wait for that: it gets the copy in hand and the next
+# call gets the fresh one. Only a company's very first call after a restart or
+# an upload reads while the caller waits, and `warm` covers the restart.
 _CONTEXT_TTL_SECONDS = 120.0
 _context_cache: dict[tuple[str, str, int], tuple[float, str]] = {}
+_refreshing: dict[tuple[str, str, int], "asyncio.Task[None]"] = {}
 
 
 def forget_context(tenant_id: str = "") -> None:
@@ -126,11 +136,41 @@ async def context_for(
 ) -> str:
     key = (tenant_id, knowledge_base_id, limit)
     cached = _context_cache.get(key)
-    if cached and time.monotonic() - cached[0] < _CONTEXT_TTL_SECONDS:
+    if cached:
+        if time.monotonic() - cached[0] >= _CONTEXT_TTL_SECONDS:
+            _refresh_later(key)
         return cached[1]
     text = await _read_context(tenant_id, limit, knowledge_base_id)
     _context_cache[key] = (time.monotonic(), text)
     return text
+
+
+def _refresh_later(key: tuple[str, str, int]) -> None:
+    """Re-read one cached entry in the background, once at a time."""
+    if key in _refreshing:
+        return
+
+    async def refresh() -> None:
+        try:
+            replacing = _context_cache.get(key)
+            text = await _read_context(key[0], key[2], key[1])
+            # Only over the very copy this set out to replace. Not if an
+            # upload dropped it meanwhile (the next call reads it fresh, with
+            # the new document in it), nor over a newer read.
+            if replacing is not None and _context_cache.get(key) is replacing:
+                _context_cache[key] = (time.monotonic(), text)
+        except Exception:  # noqa: BLE001 — the copy in hand still serves
+            log.exception("tenant %s: could not refresh the knowledge text", key[0])
+        finally:
+            _refreshing.pop(key, None)
+
+    _refreshing[key] = asyncio.create_task(refresh())
+
+
+async def warm(tenant_id: str, knowledge_base_ids: list[str]) -> None:
+    """Read a company's knowledge text before its first call needs it."""
+    for knowledge_base_id in ["", *knowledge_base_ids]:
+        await context_for(tenant_id, knowledge_base_id=knowledge_base_id)
 
 
 async def _read_context(

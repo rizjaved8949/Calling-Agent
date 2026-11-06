@@ -95,7 +95,7 @@ async def engine(monkeypatch, fake_db):
         await asyncio.sleep(0.3)
         return LiveSettings(model="m", api_key="k")
 
-    async def persona_from_db(_tenant, _call=None):
+    async def persona_from_db(_tenant, _call=None, _timings=None):
         await asyncio.sleep(0.05)
         return AgentPersona(instructions="be helpful", greeting="hello")
 
@@ -304,7 +304,7 @@ def test_a_real_inbound_call_opens_one_agent_and_the_caller_hears_it(
         await asyncio.sleep(0.3)                  # slower than Twilio's socket
         return LiveSettings(model="m", api_key="k")
 
-    async def persona_from_db(_tenant, _call=None):
+    async def persona_from_db(_tenant, _call=None, _timings=None):
         return AgentPersona(instructions="be helpful", greeting="hello")
 
     monkeypatch.setattr(live, "live_settings_now", settings_from_db)

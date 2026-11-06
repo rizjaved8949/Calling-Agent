@@ -23,6 +23,8 @@ os.environ.setdefault("SUPABASE_SERVICE_KEY", "test-service-key")
 os.environ.setdefault("CREDENTIALS_SECRET", "test-credentials-secret")
 os.environ.setdefault("ADMIN_API_KEY", "test-admin-key")
 os.environ.setdefault("APP_ENV", "test")
+# Tests read the database deliberately; nothing should read it behind them.
+os.environ.setdefault("PREPARE_ON_START", "false")
 
 
 class FakeSupabase:

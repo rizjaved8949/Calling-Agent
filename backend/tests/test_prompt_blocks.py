@@ -445,6 +445,8 @@ def test_the_close_is_asked_then_goodbye_then_nothing():
     silence = text.index("After your goodbye, say nothing more")
     assert ask < goodbye < silence
     assert "Never ask whether there is anything else after you have said goodbye" in text
+    # A caller who has said "Allah hafiz" is not asked whether there is more.
+    assert "If they have already said goodbye, skip this and go straight to step 2" in text
 
 
 def test_the_right_figure_is_used_when_several_are_given():

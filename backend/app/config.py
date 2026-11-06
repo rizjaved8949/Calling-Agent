@@ -73,6 +73,10 @@ class Settings(BaseSettings):
     # backstop for every reason a line is kept open on purpose (a caller who
     # keeps talking after goodbyes, a model that never ends the call).
     max_call_seconds: int = 1800
+    # Read every company's documents, the engine settings and the speech
+    # library when the server starts, so the first call after a deploy does
+    # not wait for them. See `live.prepare`.
+    prepare_on_start: bool = True
 
     # How often to call our own /health, in seconds. Render's free plan stops
     # an instance after ~15 minutes without traffic, and the next webhook then
