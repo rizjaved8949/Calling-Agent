@@ -277,14 +277,21 @@ async def prepare() -> None:
             try:
                 await tenant_repo.get(tenant.phone_number_id)
                 bases = await agent_repo.list_knowledge_bases(tenant.phone_number_id)
-                await knowledge.warm(tenant.phone_number_id, [kb.id for kb in bases])
+                if not await knowledge.warm(tenant.phone_number_id,
+                                            [kb.id for kb in bases]):
+                    log.info("prepare: the document cache is full (%d MB); the "
+                             "remaining companies load on their first call",
+                             settings.document_cache_mb)
+                    break
                 companies += 1
             except Exception:  # noqa: BLE001 — one company must not stop the rest
                 log.exception("prepare: could not load company %s", tenant.phone_number_id)
     except Exception:  # noqa: BLE001
         log.exception("prepare: could not load the companies")
-    log.info("prepare: ready for calls in %.1fs (%d companies' documents loaded)",
-             time.monotonic() - started, companies)
+    log.info("prepare: ready for calls in %.1fs (%d companies' documents loaded, "
+             "%.1f MB of %d MB document cache used)",
+             time.monotonic() - started, companies,
+             knowledge.cached_bytes() / (1024 * 1024), settings.document_cache_mb)
 
 
 # A language tag is for machines. "Speak ur-PK" is not an instruction anyone,

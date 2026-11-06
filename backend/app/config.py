@@ -77,6 +77,10 @@ class Settings(BaseSettings):
     # library when the server starts, so the first call after a deploy does
     # not wait for them. See `live.prepare`.
     prepare_on_start: bool = True
+    # The most memory the cached document text may take, in MB. Past it the
+    # least recently used companies are dropped (and read again on their next
+    # call), and the startup preload stops.
+    document_cache_mb: int = 100
 
     # How often to call our own /health, in seconds. Render's free plan stops
     # an instance after ~15 minutes without traffic, and the next webhook then

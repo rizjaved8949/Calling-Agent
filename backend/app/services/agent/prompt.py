@@ -94,6 +94,15 @@ SPEAKING = Block(
          "it sounding like a person rather than a document being read out.",
     default=(
         "You are on a telephone call:\n"
+        "- **Keep every answer short: one or two sentences, about ten seconds "
+        "of speech.** Answer exactly what they asked, then stop. Do not add "
+        "background they did not ask for.\n"
+        "- **If the full answer is long** (several fees, several steps, a list "
+        "of programmes), give the most important part, then ask whether they "
+        "want the rest: \"Aur detail bataun?\" Let them choose what comes next "
+        "rather than hearing all of it at once.\n"
+        "- Never read out a list. Name two or three at most, then ask which "
+        "one they want to hear about.\n"
         "- Speak in short, natural sentences, the way people actually talk.\n"
         "- Never read out punctuation, bullet points or formatting. There is "
         "nothing to look at.\n"

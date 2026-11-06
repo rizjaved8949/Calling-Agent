@@ -14,12 +14,14 @@ becomes the place retrieval goes, behind the same `context_for()` call.
 from __future__ import annotations
 
 import asyncio
-
 import hashlib
 import logging
+import sys
 import time
+from collections import OrderedDict
 from typing import Any
 
+from ..config import settings
 from ..db.supabase import supabase
 
 log = logging.getLogger(__name__)
@@ -115,18 +117,70 @@ async def delete(tenant_id: str, document_id: str) -> None:
 # call is never made to wait for that: it gets the copy in hand and the next
 # call gets the fresh one. Only a company's very first call after a restart or
 # an upload reads while the caller waits, and `warm` covers the restart.
+#
+# Bounded by `settings.document_cache_mb`, least recently used first out, so
+# the cache cannot take the server's memory as more companies upload more
+# documents. A company dropped from it is read again on its next call.
 _CONTEXT_TTL_SECONDS = 120.0
-_context_cache: dict[tuple[str, str, int], tuple[float, str]] = {}
+_context_cache: OrderedDict[tuple[str, str, int], tuple[float, str]] = OrderedDict()
+_cache_bytes = 0
+#: How many entries have been dropped to make room, ever.
+_evictions = 0
 _refreshing: dict[tuple[str, str, int], "asyncio.Task[None]"] = {}
+
+
+def _size(text: str) -> int:
+    """What a cached text costs in memory: Urdu text is stored at up to four
+    bytes a character, so this is not its length."""
+    return sys.getsizeof(text)
+
+
+def _cache_limit() -> int:
+    return max(0, settings.document_cache_mb) * 1024 * 1024
+
+
+def cached_bytes() -> int:
+    """How much memory the cached document text is using."""
+    return _cache_bytes
+
+
+def cache_full() -> bool:
+    return _cache_bytes >= _cache_limit()
+
+
+def _drop(key: tuple[str, str, int]) -> None:
+    global _cache_bytes
+    entry = _context_cache.pop(key, None)
+    if entry is not None:
+        _cache_bytes -= _size(entry[1])
+
+
+def _store(key: tuple[str, str, int], text: str) -> None:
+    """Keep `text`, making room by dropping what was used least recently."""
+    global _cache_bytes, _evictions
+    _drop(key)
+    size = _size(text)
+    if size > _cache_limit():
+        return                     # bigger than the whole cache: never kept
+    while _context_cache and _cache_bytes + size > _cache_limit():
+        oldest = next(iter(_context_cache))
+        _drop(oldest)
+        _evictions += 1
+        log.info("document cache full: dropped tenant %s's documents until "
+                 "their next call", oldest[0])
+    _context_cache[key] = (time.monotonic(), text)
+    _cache_bytes += size
 
 
 def forget_context(tenant_id: str = "") -> None:
     """Drop cached prompt text after documents change."""
+    global _cache_bytes
     if not tenant_id:
         _context_cache.clear()
+        _cache_bytes = 0
         return
     for key in [k for k in _context_cache if k[0] == tenant_id]:
-        _context_cache.pop(key, None)
+        _drop(key)
 
 
 async def context_for(
@@ -137,11 +191,12 @@ async def context_for(
     key = (tenant_id, knowledge_base_id, limit)
     cached = _context_cache.get(key)
     if cached:
+        _context_cache.move_to_end(key)          # just used
         if time.monotonic() - cached[0] >= _CONTEXT_TTL_SECONDS:
             _refresh_later(key)
         return cached[1]
     text = await _read_context(tenant_id, limit, knowledge_base_id)
-    _context_cache[key] = (time.monotonic(), text)
+    _store(key, text)
     return text
 
 
@@ -158,7 +213,7 @@ def _refresh_later(key: tuple[str, str, int]) -> None:
             # upload dropped it meanwhile (the next call reads it fresh, with
             # the new document in it), nor over a newer read.
             if replacing is not None and _context_cache.get(key) is replacing:
-                _context_cache[key] = (time.monotonic(), text)
+                _store(key, text)
         except Exception:  # noqa: BLE001 — the copy in hand still serves
             log.exception("tenant %s: could not refresh the knowledge text", key[0])
         finally:
@@ -167,10 +222,21 @@ def _refresh_later(key: tuple[str, str, int]) -> None:
     _refreshing[key] = asyncio.create_task(refresh())
 
 
-async def warm(tenant_id: str, knowledge_base_ids: list[str]) -> None:
-    """Read a company's knowledge text before its first call needs it."""
+async def warm(tenant_id: str, knowledge_base_ids: list[str]) -> bool:
+    """Read a company's knowledge text before its first call needs it.
+
+    Returns False, having stopped, once the cache is full, that is once
+    loading one more means dropping another: preloading past that would
+    only push out what was loaded a moment ago.
+    """
     for knowledge_base_id in ["", *knowledge_base_ids]:
+        if cache_full():
+            return False
+        before = _evictions
         await context_for(tenant_id, knowledge_base_id=knowledge_base_id)
+        if _evictions != before:
+            return False
+    return True
 
 
 async def _read_context(
