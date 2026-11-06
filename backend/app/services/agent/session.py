@@ -37,6 +37,15 @@ log = logging.getLogger(__name__)
 #: its echo: the network to the handset and back, plus the room.
 ECHO_TAIL_SECONDS = 1.0
 
+# An outbound call's greeting waits for the person's "hello". See
+# `CallSession.hold_for_hello`.
+#: How long to wait for anyone to speak before greeting anyway.
+HELLO_WAIT_SECONDS = 1.5
+#: How much quiet after they spoke means their "hello" is finished.
+HELLO_DONE_SECONDS = 0.4
+#: The longest the greeting is ever held, so a noisy line cannot hold it.
+HELLO_MAX_SECONDS = 4.0
+
 
 class Handler(str, Enum):
     AGENT = "agent"
@@ -141,6 +150,9 @@ class CallSession:
         # When the agent's voice last went down the line (not keep-alive
         # silence); 0 if it has not spoken yet.
         self.agent_audible_at = 0.0
+        # Set while an outbound greeting waits for the person's "hello":
+        # (since, heard_at), wall clock; heard_at is 0 until they speak.
+        self._hello: list[float] | None = None
 
     # ---- lifecycle --------------------------------------------------------
 
@@ -247,6 +259,8 @@ class CallSession:
     async def _run_pacer(self) -> None:
         # 5 ms, so a 20 ms frame is never more than a quarter-frame late.
         while not self._closed:
+            if self._hello is not None:
+                self._check_hello()
             self._pacer.tick()
             await asyncio.sleep(FRAME_MS / 4000)
 
@@ -293,11 +307,21 @@ class CallSession:
             return
         if self._recorder and self._caller_to_record:
             self._recorder.feed("caller", self._caller_to_record.process(pcm16))
-        if rms(pcm16) >= VOICE_FLOOR and not self.agent_may_be_echoing():
+        voiced = rms(pcm16) >= VOICE_FLOOR
+        if voiced and not self.agent_may_be_echoing():
             self.caller_spoke_at = time.time()
+        if self._hello is not None:
+            if voiced:
+                self._hello[1] = time.time()
+            self._check_hello()
         if self.handler is Handler.AGENT:
             if self._agent:
                 heard = self.caller_level.process(pcm16) if self.caller_level else pcm16
+                if self._hello is not None:
+                    # Their "hello" is answered by the greeting, not by the
+                    # model: heard as well, it would reply to it as a turn of
+                    # its own and greet twice. Silence keeps the stream whole.
+                    heard = bytes(len(heard))
                 self._agent.feed(heard)
         elif self._operator_out:
             # Straight through: a person needs no model in the middle.
@@ -411,6 +435,42 @@ class CallSession:
     def caller_spoke_within(self, seconds: float) -> bool:
         """Whether the caller was heard in the last `seconds`."""
         return bool(self.caller_spoke_at) and time.time() - self.caller_spoke_at <= seconds
+
+    def hold_for_hello(self) -> None:
+        """Hold the greeting until the person who picked up has said hello.
+
+        For an outbound call. Whoever answers says "hello?" first, and a
+        greeting already playing talks straight over it; on a real call the
+        agent greeted a second after pickup, before anyone spoke. So the
+        greeting (already generated, so nothing is lost by waiting) is held
+        and released the moment their hello ends, or after
+        `HELLO_WAIT_SECONDS` if nobody speaks, and never later than
+        `HELLO_MAX_SECONDS`.
+        """
+        self._hello = [time.time(), 0.0]
+        self._pacer.held = True
+
+    @property
+    def waiting_for_hello(self) -> bool:
+        return self._hello is not None
+
+    def _check_hello(self) -> None:
+        if self._hello is None:
+            return
+        since, heard_at = self._hello
+        now = time.time()
+        waited = now - since
+        if heard_at:
+            if now - heard_at < HELLO_DONE_SECONDS and waited < HELLO_MAX_SECONDS:
+                return
+            why = f"after their hello, {waited:.1f}s in"
+        elif waited < HELLO_WAIT_SECONDS:
+            return
+        else:
+            why = f"nobody spoke in {HELLO_WAIT_SECONDS:.1f}s"
+        self._hello = None
+        self._pacer.held = False
+        log.info("call %s: greeting %s", self.call_id, why)
 
     def caller_spoke_since(self, moment: float) -> bool:
         """Whether the caller was heard after `moment` (wall clock)."""

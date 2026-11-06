@@ -71,6 +71,10 @@ class FramePacer:
         self._spoken = False
         self.frames_sent = 0
         self.frames_dropped = 0
+        # While True nothing is released: what is queued waits, in order, and
+        # plays from its first frame once this is lifted. How an outbound
+        # greeting waits for the person's "hello" (`CallSession.hold_for_hello`).
+        self.held = False
 
     # ---- input ------------------------------------------------------------
 
@@ -116,6 +120,9 @@ class FramePacer:
         rather than in a sleep loop is what makes the timing testable.
         """
         now = self.clock()
+        if self.held:
+            self._next_at = None
+            return 0
         if self._next_at is None:
             self._next_at = now
 

@@ -540,12 +540,16 @@ async def start(
     *,
     keepalive: bool = True,
     on_clear: Callable[[], None] | None = None,
+    wait_for_hello: bool = False,
 ) -> CallSession:
     """Answer a call: bring up the agent and start moving audio.
 
     `on_clear` is for a carrier that buffers audio on its side (Twilio): it is
     called when what was already sent should stop playing. See
     `CallSession.on_clear`.
+
+    `wait_for_hello` holds the greeting until the person who picked up has
+    said hello (an outbound call). See `CallSession.hold_for_hello`.
 
     Exactly one session per call. A warm-up still reading the database is
     waited for, not raced: a Twilio stream connects within half a second of
@@ -567,7 +571,8 @@ async def start(
         _sessions.pop(call.id, None)
         existing = None
     if existing is not None:
-        return await _attach(existing, tenant, call, send_to_caller, on_clear)
+        return await _attach(existing, tenant, call, send_to_caller, on_clear,
+                             wait_for_hello=wait_for_hello)
 
     # Past the warmed-session check above, so a call that was warmed while
     # there was room is still answered: it is already counted, and refusing it
@@ -603,10 +608,13 @@ async def start(
     if other is not None and not other.closed:
         with contextlib.suppress(Exception):
             await session.end("superseded by the warmed-up session")
-        return await _attach(other, tenant, call, send_to_caller, on_clear)
+        return await _attach(other, tenant, call, send_to_caller, on_clear,
+                             wait_for_hello=wait_for_hello)
 
     session.on_clear = on_clear
     session.on_agent_failed = _when_agent_fails(tenant, call)
+    if wait_for_hello and not human:
+        session.hold_for_hello()
     _sessions[call.id] = session
     await session.start()
     if session.closed:
@@ -622,10 +630,14 @@ async def start(
 
 async def _attach(session: CallSession, tenant: Tenant, call: Call,
                   send_to_caller: Callable[[bytes], None],
-                  on_clear: Callable[[], None] | None) -> CallSession:
+                  on_clear: Callable[[], None] | None,
+                  *, wait_for_hello: bool = False) -> CallSession:
     """Hand a warmed-up session the line; what it has already said plays
-    from its first word."""
+    from its first word (after the person's hello, with `wait_for_hello`)."""
     session.on_clear = on_clear
+    if wait_for_hello and not session.human:
+        # Before the transport, so not one frame of the greeting goes out first.
+        session.hold_for_hello()
     session.attach_transport(send_to_caller)
     await _mark_answered(tenant, call)
     log.info("call %s answered for %s on the warmed-up agent (%d live)",

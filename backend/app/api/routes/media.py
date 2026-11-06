@@ -366,7 +366,11 @@ async def twilio_media(socket: WebSocket, call_id: str):
     log.info("call %s: Twilio audio socket attached", call_id)
     try:
         try:
-            session = await live.start(tenant, call, out, keepalive=True, on_clear=out.clear)
+            # An outbound call's greeting waits for whoever picked up to say
+            # hello; an inbound caller is greeted at once.
+            session = await live.start(
+                tenant, call, out, keepalive=True, on_clear=out.clear,
+                wait_for_hello=call.direction is Direction.OUTBOUND)
         except live.AtCapacity as exc:
             log.warning("call %s: %s", call_id, exc)
             await socket.close(code=4503)

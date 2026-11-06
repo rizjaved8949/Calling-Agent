@@ -965,8 +965,10 @@ def twilio_socket(twilio_line, monkeypatch):
     monkeypatch.setattr(media, "_twilio_attached", set())
     started: list[tuple[str, _FakeSession]] = []
 
-    async def start(_tenant, call, send, *, keepalive=True, on_clear=None):
+    async def start(_tenant, call, send, *, keepalive=True, on_clear=None,
+                    wait_for_hello=False):
         session = _FakeSession(send, on_clear)
+        session.wait_for_hello = wait_for_hello
         started.append((call.id, session))
         return session
 
@@ -1035,6 +1037,7 @@ def test_audio_flows_both_ways_and_barge_in_clears_twilio(client, twilio_socket)
 
     [(started_id, session)] = twilio_socket["started"]
     assert started_id == call_id
+    assert session.wait_for_hello is False, "an inbound caller is greeted at once"
     assert [len(f) for f in session.heard] == [640, 640]
     assert session.heard[0] == b"\x00" * 640
     assert twilio_socket["finished"] == [call_id]
