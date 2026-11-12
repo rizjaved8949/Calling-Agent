@@ -412,6 +412,79 @@ MAX_PARAMETER_CHARS = 900
 EMPTY_PARAMETER = "Details from your call."
 
 
+#: Where one sentence ends and the next begins: sentence punctuation (Urdu's
+#: too), a line break, or the middle dot the parameter cleaner joins with.
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?؟۔])\s+|\s*\n+\s*|\s+·\s+")
+_GREETING = re.compile(
+    r"^(?:assalam|asalam|assalamu|salam|salaam|aoa|hello|hi|hey|dear|greetings|namaste|adaab"
+    r"|good\s+(?:morning|afternoon|evening))\b", re.I)
+_INTRO = re.compile(
+    r"(?:virtual assistant here|assistant here|here from|this is .{0,40}(?:assistant|from)\b"
+    r"|bol rahi hoon|bol raha hoon|calling from|speaking from|aapki madad ke liye)", re.I)
+_SIGN_OFF = re.compile(
+    r"\b(?:drive safe|take care|thank you|thanks|thankyou|shukriya|allah hafiz|khuda hafiz"
+    r"|regards|best wishes|have a (?:good|nice|great) day|bye|goodbye|see you|happy driving"
+    r"|safe travels|you're welcome|feel free|let us know|let me know)\b", re.I)
+#: A sentence that carries a fact: a figure, an item: value, a currency.
+_DETAIL = re.compile(r"\d|[:₨$€£%]|\b(?:pkr|rs\.?|rupees?)\b", re.I)
+#: A sign-off is short; a long closing sentence may be saying something.
+_SIGN_OFF_WORDS = 8
+
+
+def strip_pleasantries(text: str) -> str:
+    """`text` without a greeting at the start or a sign-off at the end.
+
+    The template around a follow-up already greets and closes, so a message
+    that arrived read "Hello! Here are the details... Assalam-o-Alaikum,
+    Alif! BYD Pakistan Virtual Assistant here. ... Drive safe! Reply here if
+    you have any other questions." Up to two leading sentences that greet or
+    introduce, and up to two short trailing sentences that sign off, are
+    taken out. Conservative on purpose: a sentence with a figure, an item:
+    value or a currency in it is never removed, and a text that would be
+    left empty is returned as it was. A text with nothing to strip comes
+    back exactly as given.
+    """
+    original = text or ""
+    spans: list[tuple[int, int]] = []
+    position = 0
+    for match in _SENTENCE_SPLIT.finditer(original):
+        if match.start() > position:
+            spans.append((position, match.start()))
+        position = match.end()
+    if position < len(original):
+        spans.append((position, len(original)))
+    spans = [(s, e) for s, e in spans if original[s:e].strip()]
+    if len(spans) < 2:
+        return original
+
+    start, end = 0, len(spans)
+    for _ in range(2):
+        if start >= end:
+            break
+        sentence = original[spans[start][0]:spans[start][1]].strip()
+        if _DETAIL.search(sentence):
+            break
+        if _GREETING.match(sentence) or _INTRO.search(sentence):
+            start += 1
+        else:
+            break
+    for _ in range(2):
+        if end <= start:
+            break
+        sentence = original[spans[end - 1][0]:spans[end - 1][1]].strip()
+        if _DETAIL.search(sentence) or len(sentence.split()) > _SIGN_OFF_WORDS:
+            break
+        if _SIGN_OFF.search(sentence):
+            end -= 1
+        else:
+            break
+    if start == 0 and end == len(spans):
+        return original
+    if start >= end:
+        return original
+    return original[spans[start][0]:spans[end - 1][1]].strip()
+
+
 def clean_parameter(text: str) -> str:
     """`text` as a template parameter Meta will accept.
 

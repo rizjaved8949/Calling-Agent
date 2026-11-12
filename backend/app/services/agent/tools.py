@@ -39,7 +39,16 @@ SEND_WHATSAPP_MESSAGE: dict[str, Any] = {
         "number_confirmed true. Saying yes is not sending: the message goes only "
         "when the result says Sent, and only then may you say it is sent. Never "
         "send after a no, and never say a message is on its way before the "
-        "result says Sent."
+        "result says Sent. The text is only the details themselves: no greeting, "
+        "no self-introduction, no caller's name, no sign-off (no 'Drive safe', "
+        "'Allah hafiz', 'Thank you'); the message template already greets and "
+        "closes. When the caller asks for 'these details' or 'yeh details', "
+        "include every item you told them on the call for that topic (for "
+        "example, every model and price you quoted), not a selection; stay "
+        "within 900 characters by writing each item compactly ('ATTO 2: PKR "
+        "7,290,000'). Only if it truly cannot fit, send the items the caller "
+        "asked about first and say on the call that the rest is available on "
+        "request."
     ),
     "parameters": {
         "type": "object",
@@ -47,8 +56,9 @@ SEND_WHATSAPP_MESSAGE: dict[str, Any] = {
             "text": {
                 "type": "string",
                 "description": (
-                    "The message, written to be read on a phone screen. Keep it short "
-                    "and concrete. Never promise anything the company has not said."
+                    "Only the details, written compactly, one item per line: "
+                    "'ATTO 2: PKR 7,290,000'. No greeting, no name, no sign-off. "
+                    "Never promise anything the company has not said."
                 ),
             },
             "to": {

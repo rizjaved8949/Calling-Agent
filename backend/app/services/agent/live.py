@@ -616,20 +616,42 @@ async def _deliver(sender: Tenant, destination: str, text: str, call: Call) -> s
     never delivered, which is a worse failure than a refusal: the agent said
     "sent" and meant it.
     """
-    from ...services.whatsapp import WhatsApp, clean_parameter
+    from ...services.whatsapp import WhatsApp, clean_parameter, strip_pleasantries
 
     client = WhatsApp(sender)
     if await _messaged_us_recently(sender, destination):
         await client.send_text(destination, text, call_id=call.id, timeout=TOOL_TIMEOUT_SECONDS)
         return "text"
-    body = clean_parameter(text)
+    # The template greets and closes by itself; a greeting and a sign-off
+    # inside the details read twice.
+    body = clean_parameter(strip_pleasantries(text))
     await client.send_template(
         destination, settings.whatsapp_followup_template.strip() or "call_followup",
         language=settings.whatsapp_followup_language.strip() or "en",
-        parameters=[(sender.name or "").strip() or "the team", body],
+        parameters=[await _sender_name(sender, call), body],
         call_id=call.id, timeout=TOOL_TIMEOUT_SECONDS, body=body,
     )
     return "template"
+
+
+async def _sender_name(tenant: Tenant, call: Call) -> str:
+    """{{1}} of the follow-up: the agent the caller spoke to, by name.
+
+    The agent's name ("BYD Pakistan"), not the account's ("Calling Agent"),
+    which a real follow-up arrived signed with. The company's name only when
+    the call had no named agent.
+    """
+    from ...repositories import agents as agent_repo
+
+    if call.agent_id:
+        try:
+            agent = await asyncio.wait_for(
+                agent_repo.get_agent(tenant.phone_number_id, call.agent_id), TOOL_TIMEOUT_SECONDS)
+            if agent is not None and agent.name.strip():
+                return agent.name.strip()
+        except Exception:  # noqa: BLE001 — the company's name still serves
+            log.exception("call %s: could not read the agent's name", call.id)
+    return (tenant.name or "").strip() or "the team"
 
 
 def _refusal_reason(exc: BaseException) -> str:

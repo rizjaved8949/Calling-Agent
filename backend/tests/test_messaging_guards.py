@@ -535,6 +535,106 @@ async def test_a_message_older_than_24_hours_does_not_open_the_window(fake_db, s
     assert sending[0][2]["kind"] == "template"
 
 
+async def test_the_template_is_signed_with_the_agents_name(fake_db, sending):
+    """A real follow-up arrived "during your call with Calling Agent", the
+    account's name. {{1}} is the agent the caller spoke to."""
+    from app.models.agent import Agent
+    from app.repositories import agents as agent_repo
+
+    agent = await agent_repo.save_agent(Agent(tenantId="t-1", name="BYD Pakistan"))
+    call = _call(agentId=agent.id)
+    _on_the_line(call, READ_BACK_CONFIRMED)
+    company = Tenant(phoneNumberId="t-1", name="Calling Agent", defaultCountryCode="92")
+    assert await _confirmed_send(company, call, sending) == "Sent."
+    assert sending[0][2]["parameters"][0] == "BYD Pakistan"
+
+
+async def test_the_company_name_is_used_only_when_the_agent_has_no_name(fake_db, sending):
+    from app.models.agent import Agent
+    from app.repositories import agents as agent_repo
+
+    unnamed = await agent_repo.save_agent(Agent(tenantId="t-1", name="   "))
+    company = Tenant(phoneNumberId="t-1", name="Calling Agent", defaultCountryCode="92")
+    call = _call(agentId=unnamed.id)
+    _on_the_line(call, READ_BACK_CONFIRMED)
+    await _confirmed_send(company, call, sending)
+    assert sending[0][2]["parameters"][0] == "Calling Agent"
+
+    no_agent = _call()
+    _on_the_line(no_agent, READ_BACK_CONFIRMED)
+    await _confirmed_send(company, no_agent, sending)
+    assert sending[1][2]["parameters"][0] == "Calling Agent"
+
+
+REAL_FOLLOW_UP = (
+    "Assalam-o-Alaikum, Alif! BYD Pakistan Virtual Assistant here.\n"
+    "Here are some details on our models:\n"
+    "ATTO 3: PKR 8,990,000\n"
+    "SEAL Dynamic: PKR 14,790,000\n"
+    "SEAL Premium: PKR 16,990,000\n"
+    "Drive safe!"
+)
+DETAILS_ONLY = (
+    "Here are some details on our models:\n"
+    "ATTO 3: PKR 8,990,000\n"
+    "SEAL Dynamic: PKR 14,790,000\n"
+    "SEAL Premium: PKR 16,990,000"
+)
+
+
+def test_a_greeting_an_introduction_and_a_sign_off_are_stripped_and_every_price_stays():
+    from app.services.whatsapp import strip_pleasantries
+
+    assert strip_pleasantries(REAL_FOLLOW_UP) == DETAILS_ONLY
+    assert strip_pleasantries("Hello! Salam Alif.\nATTO 2: PKR 7,290,000\nThank you. Allah hafiz!") == (
+        "ATTO 2: PKR 7,290,000")
+
+
+@pytest.mark.parametrize("text", [
+    "Thank you for choosing the ATTO 3 at PKR 8,990,000.",
+    "Hello, our helpline is 0300 123 4567.\nATTO 3: PKR 8,990,000\nCall 0300 123 4567 anytime, thanks.",
+    "ATTO 2: PKR 7,290,000\nDrive safe in your 2026 ATTO 3!",
+    "Advance: 20%\nDelivery: tentative",
+    "SEAL Premium: PKR 16,990,000. Booking advance 3,350,000.",
+])
+def test_a_sentence_with_a_number_or_a_detail_is_never_stripped(text):
+    from app.services.whatsapp import strip_pleasantries
+
+    assert strip_pleasantries(text) == text
+
+
+def test_a_text_that_is_only_pleasantries_is_left_alone():
+    from app.services.whatsapp import strip_pleasantries
+
+    assert strip_pleasantries("Hello! Thank you!") == "Hello! Thank you!"
+    assert strip_pleasantries("Drive safe!") == "Drive safe!"
+    assert strip_pleasantries("") == ""
+
+
+async def test_the_sent_parameter_is_the_details_only(fake_db, sending):
+    call = _call()
+    _on_the_line(call, READ_BACK_CONFIRMED)
+    assert await _confirmed_send(_tenant(), call, sending, text=REAL_FOLLOW_UP) == "Sent."
+    assert sending[0][2]["parameters"][1] == (
+        "Here are some details on our models: · ATTO 3: PKR 8,990,000 · "
+        "SEAL Dynamic: PKR 14,790,000 · SEAL Premium: PKR 16,990,000")
+
+
+def test_the_tool_and_the_writing_rules_say_details_only_and_every_item_quoted():
+    description = tools.SEND_WHATSAPP_MESSAGE["description"]
+    assert "no greeting, no self-introduction, no caller's name, no sign-off" in description
+    assert "the message template already greets and closes" in description
+    assert "include every item you told them on the call for that topic" in description
+    assert "stay within 900 characters" in description
+    assert "the rest is available on request" in description
+    text = " ".join(prompt.build(persona="P", context="C", can_send_whatsapp=True).split())
+    assert "The text is only the details themselves" in text
+    assert "no greeting, no self-introduction, no caller's name, no sign-off" in text
+    assert "Include every item you quoted" in text
+    assert "every model and price you quoted" in text
+    assert "ATTO 2: PKR 7,290,000" in text
+
+
 def test_the_template_parameter_is_cleaned_for_meta():
     from app.services.whatsapp import MAX_PARAMETER_CHARS, clean_parameter
 
