@@ -117,12 +117,14 @@ def test_the_last_meaningful_line_is_judged_not_the_noise_after_it():
     assert not turns.may_end(TAIL[:3] + [("caller", "aur SEAL ki price kya hai?")])
 
 
-def test_a_no_or_goodbye_after_the_agents_last_question_allows_the_end():
+def test_a_goodbye_after_the_agents_last_question_allows_the_end_but_a_no_does_not():
     asked = [("agent", "Kya main aapki gaari ki location jaan sakti hoon?")]
-    assert turns.may_end(asked + [("caller", "nahin")])
     assert turns.may_end(asked + [("caller", "allaah haafiz")])
-    assert turns.may_end(asked + [("caller", "nahin"), ("caller", "hmm?")])
+    assert not turns.may_end(asked + [("caller", "nahin")])
     assert not turns.may_end(asked + [("caller", "Lahore, Gulberg mein hoon")])
+    anything_else = [("agent", "Aur koi sawal?")]
+    assert turns.may_end(anything_else + [("caller", "nahin")])
+    assert turns.may_end(anything_else + [("caller", "nahin"), ("caller", "hmm?")])
 
 
 async def test_end_call_is_allowed_after_the_goodbye_and_the_noise(hangs, monkeypatch):
@@ -358,7 +360,7 @@ async def test_a_false_recorded_claim_is_corrected_on_the_next_turn(hangs, caplo
         session._note("agent", " record kar li hai.")
         await asyncio.sleep(0.05)
     assert session._agent.notes == [live.NOT_RECORDED_CORRECTION]
-    assert "NOT recorded anything" in live.NOT_RECORDED_CORRECTION
+    assert "not for the caller" in live.NOT_RECORDED_CORRECTION
     [warning] = [r.getMessage() for r in caplog.records if "claimed a request was recorded" in r.getMessage()]
     assert "record kar li hai" in warning
     # More of the same turn: no second correction.

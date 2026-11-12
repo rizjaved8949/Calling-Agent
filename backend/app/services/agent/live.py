@@ -379,6 +379,7 @@ def _tool_handler(tenant: Tenant, call: Call):
     read-back given on one call cannot confirm a send on another.
     """
     pending: dict[str, object] = {"confirmed": set()}
+    _pending[call.id] = pending
 
     async def handle(name: str, args: dict) -> str:
         if name == "send_whatsapp_message":
@@ -739,6 +740,34 @@ def _read_back(kind, values: dict, grouped_mobile: str, *, mobile_confirmed: boo
     return sentence
 
 
+#: The tool's answer when the details are complete but not yet confirmed.
+#: An instruction to act on, not a sentence to repeat: on a real call the
+#: agent turned "when the caller says it is right" into a "conditions" step
+#: it announced to the caller.
+READ_BACK_INSTRUCTION = (
+    "Not recorded yet. Read this back once, in the caller's language, and ask if "
+    "it is right. When they say yes, call record_request again with confirmed "
+    "true at once: no second read-back, no asking permission, no extra "
+    "conditions. Do not ask for optional details. "
+)
+
+
+def _agent_read_back(conversation: list[tuple[str, str]], mobile: str) -> bool:
+    """Whether the agent's turn before the caller's last one read the
+    request back: the mobile number, in digits or in words, is the mark."""
+    if not mobile or not conversation:
+        return False
+    agent_turn = ""
+    seen_caller = False
+    for who, text in reversed(conversation):
+        if who == "caller" and not seen_caller:
+            seen_caller = True
+        elif who == "agent" and seen_caller:
+            agent_turn = text
+            break
+    return bool(agent_turn) and phones.read_back_in(agent_turn, mobile)
+
+
 async def _record_request(tenant: Tenant, call: Call, args: dict,
                           pending: dict[str, str]) -> str:
     """Record what the caller asked for, once it is complete and read back.
@@ -751,6 +780,7 @@ async def _record_request(tenant: Tenant, call: Call, args: dict,
     from ...models.request import ReplyBy, RequestType, missing_fields
     from ...repositories import requests as request_repo
 
+    pending["request_started"] = True
     try:
         kind = RequestType(str(args.get("type") or "other").strip().lower())
     except ValueError:
@@ -804,12 +834,20 @@ async def _record_request(tenant: Tenant, call: Call, args: dict,
                 + ". Ask for at most two details per turn, never everything at once.")
 
     fingerprint = json.dumps({**values, "type": kind.value}, sort_keys=True)
+    already = pending.get("recorded") or {}
+    if fingerprint in already:
+        return (f"Already recorded. Reference {already[fingerprint]}. Do not record it "
+                "again; give the reference if the caller asks.")
     confirmed = bool(args.get("confirmed"))
-    if (not confirmed or pending.get("request") != fingerprint
-            or not turns_mod.last_caller_affirmative(conversation)):
+    # The caller has heard these details and said yes: read back by this
+    # tool, or by the agent in its own words, which the number in its turn
+    # shows. Insisting on the tool's own read-back after the agent's sent a
+    # real call round a second read-back and a "conditions" step.
+    heard = (pending.get("request") == fingerprint
+             or _agent_read_back(conversation, values["mobile"]))
+    if not confirmed or not heard or not turns_mod.last_caller_affirmative(conversation):
         pending["request"] = fingerprint
-        return ("Not recorded yet. Read this back; when the caller says it is right, "
-                "call again with confirmed true: "
+        return (READ_BACK_INSTRUCTION
                 + _read_back(kind, values, grouped_mobile, mobile_confirmed=mobile_confirmed))
 
     try:
@@ -819,6 +857,8 @@ async def _record_request(tenant: Tenant, call: Call, args: dict,
         log.exception("call %s: the request could not be stored", call.id)
         return NOT_SAVED
     pending.pop("request", None)
+    pending.pop("request_started", None)
+    pending.setdefault("recorded", {})[fingerprint] = record.reference
     if values["mobile"]:
         _confirmed_numbers(pending).add(values["mobile"])
     _recorded.setdefault(call.id, []).append(record.reference)
@@ -898,24 +938,47 @@ async def _end_call(tenant: Tenant, call: Call, args: dict, pending: dict) -> st
         )
     # The transcript, not the model, says whether the caller is done. On
     # real calls the agent hung up right after answering ("...Aur koi sawal?
-    # Allah Hafiz."). It may end after a goodbye, a "nothing else", a no to
-    # "anything else?", a request to end the call, or its own closing line.
+    # Allah Hafiz."), and once said "the caller said goodbye" over a caller
+    # who had said "nahin". It may end after a goodbye, a "nothing else", a
+    # no to "anything else?", a request to end the call, or its own closing
+    # line.
     #
     # And it is refused at most once per call. Refused four times on a real
     # call, with a goodbye it could not read, it asked "Kya main call end kar
     # doon?" until the caller hung up on it; the one check that can be wrong
-    # must not be able to hold a line hostage.
+    # must not be able to hold a line hostage. The one exception is a request
+    # half taken: that is refused until the caller says goodbye or asks to
+    # end, because a booking with the name and number taken and nothing
+    # recorded is the call having failed at the one thing it was for.
     if session is not None:
         await _let_transcription_land(session)
     conversation = _conversation(call.id)
-    refused_before = int(pending.get("end_refusals") or 0)
-    if (conversation is not None and refused_before < 1
-            and not _may_end(conversation, reason, session)):
-        pending["end_refusals"] = refused_before + 1
-        log.info("call %s: not ending the call yet (%r); the caller's last words "
-                 "were %r", call.id, reason,
-                 turns_mod.judged(turns_mod.last_turn(conversation, "caller")))
-        return NOT_YET
+    if conversation is not None:
+        _index, last_words = turns_mod.last_meaningful_caller_turn(conversation)
+        explicit = turns_mod.is_explicit_end(last_words)
+        if not explicit and _request_in_progress(call.id, conversation, pending, tenant):
+            spoke_within = getattr(session, "caller_spoke_within", None)
+            heard_lately = (bool(spoke_within(SILENT_CALLER_SECONDS))
+                            if callable(spoke_within) else True)
+            if heard_lately or not _claims_not_engaging(reason):
+                log.info("call %s: not ending the call: a request is in progress and the "
+                         "caller has not said goodbye (the agent said %r; the caller's "
+                         "last words were %r)", call.id, reason, turns_mod.judged(last_words))
+                return REQUEST_PENDING
+            log.info("call %s: ending the call with a request in progress: the caller "
+                     "has said nothing for %.0f seconds", call.id, SILENT_CALLER_SECONDS)
+        refused_before = int(pending.get("end_refusals") or 0)
+        if refused_before < 1 and not _may_end(conversation, reason, session):
+            pending["end_refusals"] = refused_before + 1
+            if _claims_goodbye(reason):
+                log.info("call %s: the agent said the caller said goodbye, but their last "
+                         "words were %r; not ending the call yet", call.id,
+                         turns_mod.judged(last_words))
+                return NOT_GOODBYE
+            log.info("call %s: not ending the call yet (%r); the caller's last words "
+                     "were %r", call.id, reason,
+                     turns_mod.judged(turns_mod.last_turn(conversation, "caller")))
+            return NOT_YET
     log.info("call %s: the agent is ending the call (%s)", call.id, reason)
     asyncio.create_task(_hang_up_after_goodbye(tenant, call, reason))
     # Not "say your goodbye now": the goodbye was said before this was
@@ -928,6 +991,66 @@ async def _end_call(tenant: Tenant, call: Call, args: dict, pending: dict) -> st
         "more. If the caller then asks something, answer it. If they "
         "only say goodbye back, call end_call again without speaking."
     )
+
+
+#: What the agent is told when it tries to end a call with a request half
+#: taken, and when it says the caller said goodbye and they did not.
+REQUEST_PENDING = (
+    "Do not end the call: the caller's request is not recorded yet. If they "
+    "have confirmed the details, call record_request now with confirmed true. "
+    "If a required detail is missing, ask for it. End only after the reference "
+    "is given, or if the caller says goodbye or asks to end the call."
+)
+NOT_GOODBYE = (
+    "The caller has not said goodbye. Answer what they actually said. End the "
+    "call only after they say goodbye, say there is nothing else, or say no "
+    "when you ask whether there is anything else."
+)
+
+#: A caller who has said nothing for this long may be gone: the one case a
+#: request in progress does not keep the line open.
+SILENT_CALLER_SECONDS = 20.0
+
+_GOODBYE_CLAIMS = ("goodbye", "good bye", "bye", "farewell", "hafiz", "said bye")
+#: Words in the agent's turns that show a request is being taken, not a
+#: message sent: the caller's number plus one of these is a request in
+#: progress until a reference exists.
+_REQUEST_FLOW_WORDS = turns_mod._phrases(
+    "test drive", "test draiw", "request", "record", "book", "booking", "callback",
+    "call back", "complaint", "shikayat", "darj", "cancellation",
+)
+
+
+def _claims_goodbye(reason: str) -> bool:
+    """Whether the agent's reason for ending says the caller said goodbye."""
+    said = reason.lower()
+    return any(word in said for word in _GOODBYE_CLAIMS)
+
+
+def _request_in_progress(call_id: str, conversation: list[tuple[str, str]],
+                         pending: dict, tenant: Tenant) -> bool:
+    """A request the caller started, with no reference for it yet.
+
+    Known for certain once record_request has been called and has not yet
+    returned a reference. Before that, from the call itself: the caller has
+    given a mobile number that has not been used for a message or a record,
+    while the agent has been taking a test drive, a booking, a complaint or
+    a callback.
+    """
+    if pending.get("request") or pending.get("request_started"):
+        return True
+    if _recorded.get(call_id):
+        return False
+    if not any(turns_mod._has_any(t, _REQUEST_FLOW_WORDS) for w, t in conversation if w == "agent"):
+        return False
+    confirmed = pending.get("confirmed") or set()
+    for who, text in conversation:
+        if who != "caller":
+            continue
+        found = phones.find_number(text, _country(tenant))
+        if found is not None and found[0] not in confirmed:
+            return True
+    return False
 
 
 #: An agent that ends a call because the caller has gone is not believed if
@@ -1026,41 +1149,86 @@ def finish_later(tenant: Tenant, call_id: str, reason: str = "") -> asyncio.Task
 CLOSING_END_SECONDS = 4.0
 CLOSING_END_REASON = "the agent said its closing line and the caller was done"
 
-#: What the agent is told when it says a request is recorded and none is.
+#: Notes put in front of the model between turns. They are instructions to
+#: act on, marked as such: the first version said "Say it is not recorded
+#: yet", and the agent said exactly that to the caller, twice, in the middle
+#: of a booking.
+NOTE_PREFIX = ("[Instruction from the system, not for the caller: do not read this "
+               "out or refer to it.] ")
 NOT_RECORDED_CORRECTION = (
-    "You have NOT recorded anything. Say it is not recorded yet, ask for the "
-    "missing details, then call record_request."
+    NOTE_PREFIX
+    + "No request has been recorded on this call: record_request has not "
+    "returned a reference. Do not tell the caller anything is recorded, noted "
+    "or booked. Carry on naturally: ask for any required detail still missing, "
+    "read the details back once, and when the caller says yes call "
+    "record_request with confirmed true."
 )
+RECORD_NOW_NOTE = (
+    NOTE_PREFIX
+    + "The caller has just confirmed the details you read back. Call "
+    "record_request now with confirmed true and the same details. Do not read "
+    "them back again, do not ask permission, do not add conditions."
+)
+
+#: Only a claim that something *has been* recorded counts. "Record kar
+#: loongi" (I will record) and "record karne ke liye" (in order to record)
+#: were taken for claims on a real call, and the corrections that followed
+#: derailed the booking. When in doubt, nothing is done.
 _RECORDED_CLAIMS = turns_mod._phrases(
-    "record kar li", "record kar liya", "record kar diya", "record kar di", "record ho gayi",
-    "record ho gaya", "record kar lia", "darj kar", "darj ho", "request record", "recorded",
-    "noted", "note kar li", "note kar liya", "note kar lia", "submitted", "submit kar",
-    "booked", "book kar li", "book kar liya", "book kar lia", "register kar", "likh li",
-    "likh liya", "likh lia", "record ho chuki", "record ho chuka",
+    "record kar li", "record kar liya", "record kar di", "record kar diya", "record kar lia",
+    "record ho gayi", "record ho gai", "record ho gaya", "record ho chuki", "record ho chuka",
+    "darj kar li", "darj kar liya", "darj kar di", "darj ho gayi", "darj ho gai", "darj ho gaya",
+    "note kar li", "note kar liya", "note kar lia", "note ho gayi", "note ho gai",
+    "book kar li", "book kar liya", "book kar lia", "book ho gayi", "book ho gai",
+    "book ho gaya", "likh li hai", "likh liya hai", "register kar li", "register kar liya",
+    "register ho gayi", "register ho gai", "submit kar di", "submit kar diya", "submit ho gayi",
+    "submit ho gai", "has been recorded", "is recorded", "been recorded", "have recorded",
+    "recorded it", "is booked", "has been booked", "have booked", "booked it", "is noted",
+    "has been noted", "have noted", "noted it", "is submitted", "has been submitted",
+    "have submitted", "submitted it", "recorded", "booked", "noted", "submitted",
 )
-_RECORDED_CLAIMS_SCRIPT = ("ریکارڈ کر لی", "ریکارڈ کر لیا", "درج کر", "نوٹ کر لی", "بک کر لی")
-#: Words that make a sentence an offer, a plan or a denial rather than a
-#: claim: "record kar sakti hoon", "abhi record nahi hui".
+_RECORDED_CLAIMS_SCRIPT = ("ریکارڈ کر لی", "ریکارڈ کر لیا", "ریکارڈ ہو گئی", "ریکارڈ ہو گیا",
+                           "درج کر لی", "درج ہو گئی", "نوٹ کر لی", "بک کر لی", "بک ہو گئی")
+#: Words that make a sentence a plan, an offer, a condition or a denial
+#: rather than a claim: "record kar loongi", "record kar sakti hoon",
+#: "record kar li jayegi", "abhi record nahi hui", "once recorded".
 _NOT_A_CLAIM = turns_mod._phrases(
-    "sakti", "sakta", "sakte", "sakoon", "sakun", "sakon", "karungi", "karunga", "karenge",
-    "karun", "karoon", "doon", "dun", "loon", "lun", "nahi", "nahin", "not", "yet", "abhi",
-    "pehle", "pahle", "will", "can", "could", "shall", "agar", "chahte", "chahti", "chahta",
-    "would", "once", "jab", "baad",
+    "sakti", "sakta", "sakte", "sakoon", "sakun", "sakon", "sakegi", "sakega", "sakenge",
+    "karungi", "karunga", "karoongi", "karoonga", "karenge", "karun", "karoon", "karne",
+    "karna", "karni", "loongi", "lungi", "loonga", "lunga", "lenge", "doongi", "dungi",
+    "doonga", "dunga", "denge", "doon", "dun", "loon", "lun", "deti", "deta", "dete", "leti",
+    "leta", "lete", "paungi", "paoongi", "paunga", "paoonga", "jaye", "jayegi", "jaayegi",
+    "jaegi", "jayega", "jaayega", "jaega", "jayen", "jaen", "jaaye", "nahi", "nahin", "not",
+    "yet", "abhi", "pehle", "pahle", "will", "can", "could", "shall", "should", "would",
+    "agar", "chahte", "chahti", "chahta", "once", "jab", "baad", "tabhi", "tab", "to be",
+    "going to", "about to", "need", "needs", "before", "after", "when", "if", "unless",
+    "zaroori", "zaruri",
 )
-_NOT_A_CLAIM_SCRIPT = ("نہیں", "سکتی", "سکتا", "سکتے", "ابھی", "پہلے")
+_NOT_A_CLAIM_SCRIPT = ("نہیں", "سکتی", "سکتا", "سکتے", "ابھی", "پہلے", "گی", "گا", "گے",
+                       "جائے", "اگر", "جب")
 _SENTENCES = re.compile(r"[^.!?؟۔।]+[.!?؟۔।]*")
 
 #: References record_request has handed out on each live call, so a claim
 #: of "recorded" can be checked against what actually happened.
 _recorded: dict[str, list[str]] = {}
+#: Each live call's tool state (`_tool_handler`'s `pending`), so the
+#: transcript watch can see a request in progress or a read-back pending.
+_pending: dict[str, dict] = {}
+
+_MESSAGING_WORDS = turns_mod._phrases(
+    "whatsapp", "message", "msg", "sms", "text", "bhej", "bhejti", "bhejta", "bhejoon",
+    "bhejun", "send", "sent", "bheja", "bheji",
+)
 
 
 def _claims_recorded(agent_text: str) -> bool:
-    """The agent said a request *was* recorded, noted, booked or submitted.
+    """The agent said a request *has been* recorded, noted, booked or
+    submitted.
 
-    Judged sentence by sentence: an offer ("record kar sakti hoon"), a
-    question ("record kar loon?") or a denial ("abhi record nahi hui") is
-    not a claim, however many of the words it shares with one.
+    Judged sentence by sentence: an offer ("record kar sakti hoon"), a plan
+    ("record kar loongi"), a purpose ("record karne ke liye"), a question
+    ("record kar loon?") or a denial ("abhi record nahi hui") is not a
+    claim, however many of the words it shares with one.
     """
     for sentence in _SENTENCES.findall(agent_text or ""):
         if sentence.rstrip().endswith(("?", "؟")):
@@ -1074,31 +1242,62 @@ def _claims_recorded(agent_text: str) -> bool:
     return False
 
 
-def _transcript_watch(tenant: Tenant, call: Call):
-    """What happens as the agent's own words arrive, fragment by fragment.
+def _number_read_back(agent_text: str, conversation: list[tuple[str, str]],
+                      tenant: Tenant) -> bool:
+    """The agent's turn read back a number the caller gave on this call."""
+    found = phones.find_number(phones.spoken_digits(agent_text), _country(tenant))
+    if found is None:
+        return False
+    return phones.said_on_call(turns_mod.caller_lines(conversation), found[1])
 
-    Two things a model cannot be trusted to do by itself:
+
+def _transcript_watch(tenant: Tenant, call: Call):
+    """What happens as the words arrive, fragment by fragment.
+
+    Three things a model cannot be trusted to do by itself:
 
     * end the call: once the agent has said its closing line, the server
       ends the call within `CLOSING_END_SECONDS` unless the caller asks
-      something new, whether or not the model ever calls end_call;
+      something new, whether or not the model ever calls end_call, and
+      never with a request half taken unless the caller said goodbye;
     * tell the truth about requests: "request record kar li hai" with no
       record_request behind it gets a correction in front of the model for
-      its next turn.
+      its next turn;
+    * record when the caller says yes: a yes to the agent's read-back of
+      the details is followed by a note to call record_request now, not a
+      second read-back.
     """
-    state: dict = {"armed_at": -1, "ending": None, "corrected": -1}
+    state: dict = {"armed_at": -1, "ending": None, "corrected": -1, "nudged": -1}
 
     def watch(who: str, _text: str) -> None:
-        if who != "agent":
-            return
         session = _sessions.get(call.id)
         if session is None:
             return
         conversation = session.turns()
-        if not conversation or conversation[-1][0] != "agent":
+        if not conversation or conversation[-1][0] != who:
             return
         turn_index = len(conversation) - 1
         latest = conversation[-1][1]
+        if who == "caller":
+            if state["nudged"] == turn_index or _recorded.get(call.id):
+                return
+            if not turns_mod.is_affirmative(latest) or turns_mod.is_new_request(latest):
+                return
+            agent_before = (conversation[turn_index - 1][1]
+                            if turn_index >= 1 and conversation[turn_index - 1][0] == "agent"
+                            else "")
+            pending = _pending.get(call.id) or {}
+            if pending.get("number") or turns_mod._has_any(agent_before, _MESSAGING_WORDS):
+                return                           # a message read-back, not a request
+            if not _number_read_back(agent_before, conversation, tenant):
+                return
+            state["nudged"] = turn_index
+            log.info("call %s: the caller confirmed the read-back; the agent is told to "
+                     "record the request now", call.id)
+            _keep(asyncio.create_task(session.note_to_agent(RECORD_NOW_NOTE)))
+            return
+        if who != "agent":
+            return
         if turns_mod.agent_said_closing(latest):
             if state["armed_at"] != turn_index:
                 state["armed_at"] = turn_index
@@ -1118,7 +1317,7 @@ def _transcript_watch(tenant: Tenant, call: Call):
 async def _end_after_closing(tenant: Tenant, call: Call, session: CallSession,
                              since: int, state: dict) -> None:
     """End the call from the server after the closing line, unless the caller
-    asks something new in the window."""
+    asks something new in the window, or a request is still in progress."""
     try:
         deadline = time.time() + 12
         while time.time() < deadline and session.speaking:
@@ -1131,6 +1330,16 @@ async def _end_after_closing(tenant: Tenant, call: Call, session: CallSession,
         if turns_mod.is_new_request(heard):
             log.info("call %s: the caller asked something after the closing line (%r); "
                      "the call goes on", call.id, turns_mod.judged(heard))
+            state["armed_at"] = -1
+            return
+        conversation = session.turns()
+        _index, last_words = turns_mod.last_meaningful_caller_turn(conversation)
+        pending = _pending.get(call.id) or {}
+        if (not turns_mod.is_explicit_end(last_words)
+                and _request_in_progress(call.id, conversation, pending, tenant)):
+            log.info("call %s: not ending the call from the server: a request is in "
+                     "progress and the caller has not said goodbye (their last words "
+                     "were %r)", call.id, turns_mod.judged(last_words))
             state["armed_at"] = -1
             return
         log.info("call %s: ending the call from the server: the agent said its closing "
@@ -1472,6 +1681,7 @@ async def finish(tenant: Tenant, call_id: str, reason: str = "", *, error: str =
     if limit is not None and limit is not asyncio.current_task():
         limit.cancel()
     _recorded.pop(call_id, None)
+    _pending.pop(call_id, None)
     session = _sessions.pop(call_id, None)
     if session is None:
         return

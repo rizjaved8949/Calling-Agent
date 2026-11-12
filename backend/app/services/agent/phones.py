@@ -127,6 +127,39 @@ def find_number(text: str, country: str = "") -> tuple[str, str] | None:
     return None
 
 
+#: Digits as the agent speaks them when reading a number back, in English
+#: and in Urdu. Only a run of three or more counts, so "do" (two, or "give")
+#: and "ek" on their own are never turned into digits.
+_SPOKEN_DIGIT = {
+    "zero": "0", "sifar": "0", "sifr": "0", "oh": "0",
+    "one": "1", "ek": "1", "aik": "1", "two": "2", "do": "2",
+    "three": "3", "teen": "3", "tin": "3", "four": "4", "chaar": "4", "char": "4",
+    "five": "5", "paanch": "5", "panch": "5", "six": "6", "chhe": "6", "che": "6",
+    "chay": "6", "chhay": "6", "seven": "7", "saat": "7", "sat": "7",
+    "eight": "8", "aath": "8", "ath": "8", "nine": "9", "nau": "9", "nou": "9",
+}
+_SPOKEN_RUN = re.compile(
+    r"(?:\b(?:" + "|".join(sorted(_SPOKEN_DIGIT, key=len, reverse=True)) + r")\b[\s,.\-]*){3,}",
+    re.IGNORECASE,
+)
+
+
+def spoken_digits(text: str) -> str:
+    """`text` with every run of three or more spoken digits ("zero three
+    zero zero, one two three") written as digits."""
+    def as_digits(match: re.Match) -> str:
+        words = re.findall(r"[A-Za-z]+", match.group(0))
+        return "".join(_SPOKEN_DIGIT.get(w.lower(), "") for w in words) + " "
+
+    return _SPOKEN_RUN.sub(as_digits, text or "")
+
+
+def read_back_in(agent_text: str, number: str) -> bool:
+    """Whether the agent's turn read this number back, in digits or in
+    words: the whole number, or at least its last four digits."""
+    return said_on_call([spoken_digits(agent_text)], number)
+
+
 def said_on_call(caller_turns: list[str], number: str) -> bool:
     """Whether the caller said this number on this call.
 

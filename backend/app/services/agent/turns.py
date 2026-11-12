@@ -252,9 +252,10 @@ def is_meaningful(text: str) -> bool:
             or is_negative(text) or is_thanks(text))
 
 
-def agent_asked(agent_text: str) -> bool:
-    """The agent's turn put a question to the caller."""
-    return "?" in (agent_text or "") or "؟" in (agent_text or "") or asked_anything_else(agent_text)
+def is_explicit_end(text: str) -> bool:
+    """The caller saying goodbye or asking for the call to end, in so many
+    words. The only thing that ends a call with a request half taken."""
+    return is_goodbye(text) or asked_to_end(text)
 
 
 def is_goodbye(text: str) -> bool:
@@ -320,10 +321,13 @@ def may_end(conversation: list[Turn]) -> bool:
     and the guard refused on that.
 
     (a) that line is a goodbye, a "nothing else", or asks to end the call, or
-    (b) the agent's last real question was answered with a no, a "nothing
-        else" or a goodbye, or
+    (b) the agent asked whether there was anything else and the caller
+        declined, or
     (c) the agent has said its closing line, and the caller has asked
         nothing new since.
+
+    A "no" to any other question is not an ending: on a real call "nahin" to
+    "Kya main aap ko padh kar sunaoon?" ended a booking with nothing recorded.
     """
     if not conversation:
         return False
@@ -332,8 +336,7 @@ def may_end(conversation: list[Turn]) -> bool:
         if index >= 0 else ""
     if last_caller and is_closing(last_caller):
         return True
-    if last_caller and agent_asked(agent_before) and (declined(last_caller)
-                                                      or is_goodbye(last_caller)):
+    if last_caller and asked_anything_else(agent_before) and declined(last_caller):
         return True
     # (c): after the agent's goodbye, nothing new has been asked. A goodbye
     # said in the same breath as the answer to a question does not count:

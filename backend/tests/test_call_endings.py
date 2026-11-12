@@ -168,9 +168,12 @@ async def test_the_refusal_logs_what_the_caller_said_without_the_number(ending, 
     live._sessions[call.id] = _Line([("caller", "mera number 03001234567 hai, aur price kya hai?")])
     with caplog.at_level(logging.INFO, logger="app.services.agent.live"):
         answer, _ = await _end(tenant, call)
-    assert answer == live.NOT_YET
+    assert answer == live.NOT_GOODBYE          # the reason claimed a goodbye; the words did not
     [line] = [r.getMessage() for r in caplog.records if "last words were" in r.getMessage()]
     assert "aur price kya hai?" in line and "03001234567" not in line
+    answer, _ = await _end(tenant, call, reason="the caller's question was answered",
+                           handle=live._tool_handler(tenant, call))
+    assert answer == live.NOT_YET
 
 
 async def test_the_guard_waits_for_the_callers_last_words_to_be_transcribed(ending):
@@ -208,7 +211,7 @@ async def test_the_wait_is_bounded(ending):
     live._sessions[call.id] = session
     started = time.time()
     answer, _ = await _end(tenant, call)
-    assert answer == live.NOT_YET
+    assert answer == live.NOT_GOODBYE
     assert 1.4 <= time.time() - started < 2.5
 
 
@@ -223,6 +226,9 @@ async def test_a_new_question_after_the_closing_line_is_answered_first(ending):
     tenant, call, hung = ending
     live._sessions[call.id] = _Line([("agent", CLOSING), ("caller", "aur SEAL ki price kya hai?")])
     answer, _ = await _end(tenant, call)
+    assert answer == live.NOT_GOODBYE and hung == []
+    answer, _ = await _end(tenant, call, reason="the caller's question was answered",
+                           handle=live._tool_handler(tenant, call))
     assert answer == live.NOT_YET and hung == []
 
 

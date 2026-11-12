@@ -103,7 +103,10 @@ RECORD_REQUEST: dict[str, Any] = {
         "they plan to buy are optional for every type: record them only if the "
         "caller volunteers them, never insist, and never call them a policy. If "
         "the caller gives only a day, record it with that day; a missing time is "
-        "not a reason to skip recording."
+        "not a reason to skip recording. If the caller declines or skips an "
+        "optional detail, never ask for it again. After the read-back and a yes, "
+        "call this with confirmed true at once: no second read-back, no asking "
+        "permission to read back, no extra conditions."
     ),
     "parameters": {
         "type": "object",
