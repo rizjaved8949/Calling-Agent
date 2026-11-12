@@ -52,6 +52,19 @@ HELLO_DONE_SECONDS = float(_settings.hello_done_seconds)
 #: The longest the greeting is ever held, so a noisy line cannot hold it.
 HELLO_MAX_SECONDS = float(_settings.hello_max_seconds)
 
+#: How many times a model session that dropped mid-call is reconnected.
+RECONNECT_ATTEMPTS = 1
+#: How much of the conversation the reconnected session is given.
+RESUME_TRANSCRIPT_CHARS = 6_000
+RESUME_NOTE = (
+    "\n\n### The connection dropped and was restored\n"
+    "This call was already in progress when the connection dropped. Here is "
+    "the conversation so far:\n{transcript}\n"
+    "Continue from exactly where it left off. Do not greet again and do not "
+    "introduce yourself again. Say one short sentence apologising for the "
+    "pause, then carry on with what the caller was asking."
+)
+
 
 class Handler(str, Enum):
     AGENT = "agent"
@@ -168,6 +181,12 @@ class CallSession:
         self._reply_latencies: list[float] = []
         self._last_frame_silent = True
         self._answered_up_to = 0.0
+        # When the caller's words last arrived as text, by the wall clock.
+        # Against `caller_spoke_at` it says whether what they just said has
+        # been transcribed yet, which a guard must wait for before judging.
+        self.caller_transcribed_at = 0.0
+        # How many times a dropped model session has been reconnected.
+        self._reconnects = 0
 
     # ---- lifecycle --------------------------------------------------------
 
@@ -253,28 +272,86 @@ class CallSession:
         """Run the model, and end the call rather than leave a silent line.
 
         A caller holding a line with nobody on it, hearing nothing, is worse
-        than a call that ends with an explanation.
+        than a call that ends with an explanation. But a model that drops a
+        conversation already in progress (a 1011 "internal error", four
+        minutes into a real call) is tried once more first, with the
+        transcript so far, so the caller hears a short pause rather than a
+        dial tone.
         """
         try:
             await agent.run()
         except asyncio.CancelledError:
             raise
         except AgentUnavailable as exc:
-            if self.handler is Handler.AGENT and not self._closed:
-                log.error("call %s: %s", self.call_id, exc)
-                # Recorded so the operator sees it on the platform screen
-                # rather than hearing about it from a customer. Explained
-                # first: what arrives here is the provider's own text — "1011
-                # None. Your prepayment credits are depleted..." — which names
-                # the cause but buries it, and this is the one reading an
-                # operator gets when nobody pressed Test.
-                from .. import platform_settings
-                platform_settings.note_failure(platform_settings.explain(str(exc)))
-                await self.end(str(exc))
-                # Reported from a task of its own: `end` has just cancelled
-                # this one (it is the agent task), so anything awaited here
-                # could be cut short before the call is dealt with.
-                self._failure_task = asyncio.create_task(self._report_failure(str(exc)))
+            if self.handler is not Handler.AGENT or self._closed:
+                return
+            dropped = getattr(agent, "connected", False)
+            if dropped and self._agent is agent and self._reconnects < RECONNECT_ATTEMPTS:
+                self._reconnects += 1
+                log.warning("call %s: the model dropped mid-call (%s); reconnecting, "
+                            "attempt %d of %d", self.call_id, exc, self._reconnects,
+                            RECONNECT_ATTEMPTS)
+                try:
+                    came_up = await self._reconnect_agent()
+                except Exception:  # noqa: BLE001 — fall through to the failure path
+                    log.exception("call %s: the reconnect could not be started", self.call_id)
+                    came_up = None
+                if came_up:
+                    log.info("call %s: reconnected to the model; continuing with the "
+                             "transcript so far", self.call_id)
+                    return
+                if came_up is False:
+                    # The new session is up and failing in its own supervisor,
+                    # which reports the loss; nothing more to do here.
+                    log.error("call %s: the reconnect did not come up", self.call_id)
+                    return
+            log.error("call %s: %s", self.call_id, exc)
+            # Recorded so the operator sees it on the platform screen
+            # rather than hearing about it from a customer. Explained
+            # first: what arrives here is the provider's own text — "1011
+            # None. Your prepayment credits are depleted..." — which names
+            # the cause but buries it, and this is the one reading an
+            # operator gets when nobody pressed Test.
+            from .. import platform_settings
+            platform_settings.note_failure(platform_settings.explain(str(exc)))
+            await self.end(str(exc))
+            # Reported from a task of its own: `end` has just cancelled
+            # this one (it is the agent task), so anything awaited here
+            # could be cut short before the call is dealt with.
+            self._failure_task = asyncio.create_task(self._report_failure(str(exc)))
+
+    def _resume_instructions(self) -> str:
+        """The agent's instructions plus the conversation so far, for a new
+        session that has to carry on where the dropped one stopped."""
+        transcript = self.transcript_text()
+        if len(transcript) > RESUME_TRANSCRIPT_CHARS:
+            transcript = "…" + transcript[-RESUME_TRANSCRIPT_CHARS:]
+        return self.persona.instructions + RESUME_NOTE.format(transcript=transcript or "(nothing yet)")
+
+    async def _reconnect_agent(self) -> bool:
+        """Start a fresh model session carrying the transcript so far.
+
+        True once it is up. False when it came up and went straight down
+        again: its own supervisor then reports the loss. The new session is
+        given no greeting, so the caller is not welcomed twice.
+        """
+        from dataclasses import replace
+
+        persona = replace(self.persona, greeting="", instructions=self._resume_instructions())
+        agent = engines.build(
+            self.live_settings,
+            persona,
+            on_audio=self._on_agent_audio,
+            on_transcript=self._note,
+            on_interrupted=self._on_interrupted,
+            on_tool=self.on_tool,
+            label=f"call {self.call_id[:12]} (reconnected)",
+        )
+        self._agent = agent
+        self._agent_task = asyncio.create_task(self._supervise(agent))
+        with contextlib.suppress(asyncio.TimeoutError):
+            await agent.wait_until_ready(timeout=20)
+        return bool(agent.live)
 
     async def _report_failure(self, reason: str) -> None:
         if self.on_agent_failed is None:
@@ -429,6 +506,8 @@ class CallSession:
 
     def _note(self, who: str, text: str) -> None:
         self.transcript.append((who, text))
+        if who == "caller" and (text or "").strip():
+            self.caller_transcribed_at = time.time()
         if self.on_transcript:
             with contextlib.suppress(Exception):
                 self.on_transcript(who, text)
@@ -442,8 +521,13 @@ class CallSession:
         space is added only where neither side already has one, and never
         before punctuation.
         """
+        from .script import strip_meta
+
         lines: list[str] = []
         for who, text in self.transcript:
+            # A model's note to itself ("Final output generated.") is not
+            # part of the conversation.
+            text = strip_meta(text) if who == "agent" else text
             if not text.strip():
                 continue
             if lines and lines[-1].startswith(f"{who}:"):

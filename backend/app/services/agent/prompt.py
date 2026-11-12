@@ -124,6 +124,8 @@ SPEAKING = Block(
         "- Speak in short, natural sentences, the way people actually talk.\n"
         "- Never read out punctuation, bullet points or formatting. There is "
         "nothing to look at.\n"
+        "- Never say system or formatting words aloud: no \"final output\", "
+        "\"final answer\" or \"output\". Only what you would say to a person.\n"
         "- Never say a URL or an email address aloud if you can send it instead.\n"
         "- One question at a time. Wait for the answer."
     ),
@@ -234,9 +236,16 @@ LIMITS = Block(
         "the call properly.\n"
         "- You cannot book, confirm, cancel or escalate anything yourself, and "
         "you cannot check the status of an individual application, booking or "
-        "account. You can **record a request** with record_request. Say a "
-        "request is recorded only after it returns a reference, and read that "
-        "reference out exactly. Never invent a reference.\n"
+        "account. You can **record a request** with record_request. **A "
+        "request exists only after record_request returns a reference.** Never "
+        "say recorded, noted, submitted or booked without a reference, never "
+        "read the details back in place of calling it, and read that reference "
+        "out exactly. Never invent a reference. If it could not be saved, say "
+        "so plainly and give the customer-care route from your material.\n"
+        "- When collecting details for a request, ask for at most two per "
+        "turn; never list everything at once. Details the material calls "
+        "optional are optional: never insist on them, and never call them a "
+        "policy.\n"
         "- A question you cannot answer from your material: offer to pass it "
         "to the team, who will answer on WhatsApp; only after a yes, record it "
         "as type question with the caller's WhatsApp number.\n"
@@ -291,7 +300,9 @@ ENDING = Block(
         "closing line. If they only say goodbye back, end the call without "
         "speaking. If they ask something new, answer it, then close again "
         "from step 1.\n"
-        "- Never ask the caller whether to end the call.\n"
+        "- Never ask the caller whether to end the call. If they say goodbye "
+        "or ask you to end it, say the closing line once and call end_call: "
+        "do not ask anything first.\n"
         "- Never say goodbye in the same turn as answering a question. A "
         "question is not an ending: somebody who has just asked something "
         "wants an answer, not a farewell.\n"
@@ -402,6 +413,15 @@ def _chosen(written: dict[str, str], block: Block) -> str:
     return (written.get(block.id) or "").strip() or block.default
 
 
+#: Given in place of the writing block on a call that cannot send a message:
+#: no WhatsApp number, a token the provider refused, or the number unverified.
+NO_WHATSAPP_RULE = (
+    "You cannot send WhatsApp on this call. Never offer it or agree to it; give "
+    "the information on the call instead. Do not mention technical problems. "
+    "(A question you record for the team may still be answered by the team on "
+    "WhatsApp; that is not you sending anything.)"
+)
+
 #: Said straight after the material, where it is read last and weighs most.
 #: These are the rules the financing call broke: it named two banks the
 #: material does not mention, restated a booking policy as a different one,
@@ -501,11 +521,18 @@ def build(
             pronunciations.strip(),
         ]
     if fallback_line.strip():
+        # Said only for a question the material does not answer. Without that
+        # condition the line was spoken right after a goodbye, because "I have
+        # nothing more to say" read to the model as "the answer is not here".
         out += [
             "",
-            "When the answer is not in your material, say this, in these "
-            "words, and then offer to take a message:",
+            "Only when the caller asks something your material does not answer, "
+            "say this, in these words, and then offer to record the question for "
+            "the team (record_request, type question):",
             fallback_line.strip(),
+            "Never say it at any other moment: not after a goodbye, not when you "
+            "have nothing to add, and never instead of answering a question the "
+            "material does answer.",
         ]
     if tone.strip():
         out += ["", "How this company wants you to sound:", tone.strip()]
@@ -516,6 +543,10 @@ def build(
         out += ["", _chosen(written, WRITING)]
         if writing_rule.strip():
             out.append("- " + writing_rule.strip())
+    else:
+        # Said plainly, because left unsaid the agent agreed to send a message
+        # on a call with no way to send one, then blamed a "technical problem".
+        out += ["", NO_WHATSAPP_RULE]
 
     # The company's own words again, at the end. Identity suffers the same
     # burial as everything else placed before a large knowledge base.

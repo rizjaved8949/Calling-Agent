@@ -194,19 +194,50 @@ def _word(word: str) -> str:
     return "".join(out)
 
 
-_WORD = re.compile(r"[ऀ-ॿ]+")
+#: A run of Devanagari, without the dandas: "।" is a full stop, not part of
+#: the word it follows, and inside the word it stopped the final vowel being
+#: dropped ("haafiza." for हाफ़िज़।).
+_WORD = re.compile(r"[ऀ-ॣ०-ॿ]+")
 
 
 def romanize(text: str) -> str:
     """Devanagari in `text` as Roman Urdu; everything else untouched."""
     if not has_devanagari(text):
         return text or ""
+    text = text.replace("।", ".").replace("॥", ".")
     return _WORD.sub(lambda m: _word(m.group(0)), text)
+
+
+# Phrases a model emits about its own output, which are not speech. One was
+# said aloud and transcribed on a real call ("Final output generated."), so
+# they are taken out of what is stored and shown.
+_META_PHRASES = (
+    "final output generated", "final output", "final answer", "final response",
+    "output generated", "end of output", "end of response", "end of turn",
+    "model response", "assistant response", "response generated",
+)
+_META = re.compile(
+    r"(?im)(?:\[\s*(?:end|end of turn|eot|done)\s*\]|</?\s*(?:output|response|final|answer)\s*>"
+    r"|^\s*(?:output|answer|response|final)\s*:"
+    r"|\b(?:" + "|".join(re.escape(p) for p in _META_PHRASES) + r")\b\s*[:.!]*)\s*"
+)
+
+
+def strip_meta(text: str) -> str:
+    """`text` without a model's notes to itself."""
+    if not text:
+        return text or ""
+    cleaned = _META.sub("", text)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    # A line left with only its speaker label is a line with nothing in it.
+    cleaned = re.sub(r"(?m)^(caller|agent|system): *$\n?", "", cleaned)
+    return cleaned.strip()
 
 
 def readable(transcript: str) -> str:
     """A transcript as it should be shown. Cheap enough to call on every read."""
-    return romanize(transcript) if has_devanagari(transcript) else (transcript or "")
+    shown = romanize(transcript) if has_devanagari(transcript) else (transcript or "")
+    return strip_meta(shown) if shown else shown
 
 
 # ---------------------------------------------------------------------------
@@ -249,15 +280,8 @@ async def to_roman_urdu(lines: list[str], *, api_key: str, model: str) -> list[s
 
     converted: list[str] | None = None
     if api_key.strip():
-        try:
-            converted = await asyncio.wait_for(
-                _ask_model([lines[k] for k in targets], api_key=api_key, model=model),
-                MODEL_TIMEOUT_SECONDS,
-            )
-        except Exception as exc:  # noqa: BLE001 — the fallback below still works
-            log.info("roman urdu: the text model was not used (%s: %s)",
-                     type(exc).__name__, str(exc)[:120])
-            converted = None
+        converted = await _ask_model_patiently(
+            [lines[k] for k in targets], api_key=api_key, model=model)
 
     for n, k in enumerate(targets):
         better = converted[n] if converted and n < len(converted) else ""
@@ -496,6 +520,45 @@ def _every_word_kept(said: list[str], written: list[str]) -> bool:
             if j < m:
                 step(i, j + 1, 0.0)      # a word added
     return best[n][m][0] == 0
+
+
+#: How long to wait before asking the text model a second time after it was
+#: busy. A 503 "high demand" clears in seconds, not milliseconds; a retry
+#: straight away is the same answer twice.
+RETRY_AFTER_SECONDS = 30.0
+_BUSY = ("503", "unavailable", "high demand", "overloaded", "429", "resource_exhausted",
+         "deadline", "timeout", "timed out")
+
+
+def _is_busy(exc: BaseException) -> bool:
+    """A failure worth trying again: the model was busy or slow, not wrong."""
+    if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+        return True
+    text = f"{type(exc).__name__} {exc}".lower()
+    return any(word in text for word in _BUSY)
+
+
+async def _ask_model_patiently(lines: list[str], *, api_key: str, model: str) -> list[str] | None:
+    """The model's answer, asking once more after a pause if it was busy.
+
+    This runs after the call has been settled, so nobody is waiting on it;
+    a second attempt half a minute later costs nothing and on a real call
+    was the difference between a readable transcript and letter-by-letter
+    Roman. Any other failure (a bad key, a bad answer) is not retried.
+    """
+    for attempt in (1, 2):
+        try:
+            return await asyncio.wait_for(
+                _ask_model(lines, api_key=api_key, model=model), MODEL_TIMEOUT_SECONDS)
+        except Exception as exc:  # noqa: BLE001 — the fallback still works
+            busy = _is_busy(exc)
+            log.info("roman urdu: the text model was not used on attempt %d (%s: %s)%s",
+                     attempt, type(exc).__name__, str(exc)[:120],
+                     f"; trying again in {RETRY_AFTER_SECONDS:.0f}s" if busy and attempt == 1 else "")
+            if not busy or attempt == 2:
+                return None
+            await asyncio.sleep(RETRY_AFTER_SECONDS)
+    return None
 
 
 async def _ask_model(lines: list[str], *, api_key: str, model: str) -> list[str] | None:

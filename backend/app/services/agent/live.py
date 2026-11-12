@@ -377,7 +377,7 @@ def _tool_handler(tenant: Tenant, call: Call):
     `pending` is this call's and nobody else's: a closure per call, so a
     read-back given on one call cannot confirm a send on another.
     """
-    pending: dict[str, str] = {}
+    pending: dict[str, object] = {"confirmed": set()}
 
     async def handle(name: str, args: dict) -> str:
         if name == "send_whatsapp_message":
@@ -387,10 +387,24 @@ def _tool_handler(tenant: Tenant, call: Call):
         if name == "calculate":
             return _calculate(args)
         if name == "end_call":
-            return await _end_call(tenant, call, args)
+            return await _end_call(tenant, call, args, pending)
         return "That is not something you can do on this call."
 
     return handle
+
+
+def _confirmed_numbers(pending: dict) -> set[str]:
+    """Numbers the caller has heard read back and said yes to on this call.
+
+    One memory for both tools: a number confirmed for a request is not read
+    back again for a message, and the other way round. On a real call the
+    same number was read back twice and the caller asked why.
+    """
+    found = pending.get("confirmed")
+    if not isinstance(found, set):
+        found = set()
+        pending["confirmed"] = found
+    return found
 
 
 # What the tools tell the model. Written as instructions, because the model
@@ -417,9 +431,19 @@ NO_SENDER = (
     "Give the information on the call, and do not promise a message."
 )
 NOT_YET = (
-    "Do not end yet. If their request is finished, ask once whether there is "
-    "anything else and wait for the answer."
+    "The caller may not be finished: answer what they actually said. If they "
+    "said goodbye, say the closing line once and call end_call again."
 )
+NOT_SAVED = (
+    "Not recorded: the request could not be saved. Tell the caller plainly that "
+    "it could not be recorded, give them the customer-care route from your "
+    "material (the helpline or care centre) so they can make it there, and do "
+    "not give a reference or say it is noted."
+)
+#: How long the end-call guard waits for the caller's last words to arrive
+#: as text before judging them. Transcription trails speech by about a
+#: second; judging the turn before it refused a goodbye that had been said.
+TRANSCRIPT_WAIT_SECONDS = 1.5
 
 
 def _country(tenant: Tenant) -> str:
@@ -447,6 +471,7 @@ async def _note_on_call(tenant: Tenant, call: Call, line: str) -> None:
     settling that happens when it ends. Never raises, and never waits long:
     this runs inside a tool call.
     """
+    line = script.strip_meta(line)
     try:
         async with asyncio.timeout(TOOL_TIMEOUT_SECONDS):
             fresh = await call_repo.get_call(tenant.phone_number_id, call.id)
@@ -500,8 +525,9 @@ async def _send_message(tenant: Tenant, call: Call, args: dict, pending: dict[st
         key = destination
 
     confirmed = bool(args.get("number_confirmed"))
-    if (not confirmed or pending.get("number") != key
-            or not turns_mod.last_caller_affirmative(conversation)):
+    already = key in _confirmed_numbers(pending)
+    if not already and (not confirmed or pending.get("number") != key
+                        or not turns_mod.last_caller_affirmative(conversation)):
         pending["number"] = key
         return (f"Not sent yet. Read this back and ask the caller to confirm: {spoken}. "
                 "Only then call again with number_confirmed true.")
@@ -531,18 +557,21 @@ async def _send_message(tenant: Tenant, call: Call, args: dict, pending: dict[st
         await _note_on_call(tenant, call, f"WhatsApp to …{phones.ending(destination)}: not sent ({why})")
         return NOT_SENT
     pending.pop("number", None)
+    _confirmed_numbers(pending).add(key)
     log.info("call %s: the agent sent a WhatsApp message to %s", call.id, mask(destination))
     await _note_on_call(tenant, call, f"WhatsApp to …{phones.ending(destination)}: sent")
     return "Sent."
 
 
-def _read_back(kind, values: dict, grouped_mobile: str) -> str:
+def _read_back(kind, values: dict, grouped_mobile: str, *, mobile_confirmed: bool = False) -> str:
     """One paragraph the agent reads to the caller before anything is stored."""
     what = kind.value.replace("_", " ")
     pieces = [f"A {what} request"]
     if values.get("name"):
         pieces.append(f"for {values['name']}")
-    if grouped_mobile:
+    if grouped_mobile and mobile_confirmed:
+        pieces.append(f"the mobile ending {grouped_mobile[-4:]} they already confirmed")
+    elif grouped_mobile:
         pieces.append(f"mobile {grouped_mobile}")
     if values.get("city"):
         pieces.append(f"in {values['city']}")
@@ -556,6 +585,10 @@ def _read_back(kind, values: dict, grouped_mobile: str) -> str:
         pieces.append(f"mileage {values['mileage']}")
     if values.get("preferred_times"):
         pieces.append("preferred " + " or ".join(values["preferred_times"]))
+    if values.get("occupation"):
+        pieces.append(f"occupation {values['occupation']}")
+    if values.get("purchase_timeline"):
+        pieces.append(f"planning to buy {values['purchase_timeline']}")
     sentence = ", ".join(pieces) + "."
     if values.get("details"):
         sentence += f" Details: {values['details']}."
@@ -591,6 +624,8 @@ async def _record_request(tenant: Tenant, call: Call, args: dict,
         "vehicle_model": str(args.get("vehicle_model") or "").strip(),
         "registration": str(args.get("registration") or "").strip(),
         "mileage": str(args.get("mileage") or "").strip(),
+        "occupation": str(args.get("occupation") or "").strip(),
+        "purchase_timeline": str(args.get("purchase_timeline") or "").strip(),
         "details": str(args.get("details") or "").strip(),
         "reply_by": ("whatsapp" if kind is RequestType.QUESTION
                      else str(args.get("reply_by") or "call").strip().lower()),
@@ -600,6 +635,7 @@ async def _record_request(tenant: Tenant, call: Call, args: dict,
 
     conversation = _conversation(call.id) or []
     grouped_mobile = ""
+    mobile_confirmed = False
     mobile = str(args.get("mobile") or "").strip()
     if mobile:
         parsed = phones.parse(mobile, _country(tenant))
@@ -612,11 +648,17 @@ async def _record_request(tenant: Tenant, call: Call, args: dict,
                     "call. Ask them to say the number, then call again.")
         values["mobile"] = e164
         grouped_mobile = phones.grouped(national)
+        mobile_confirmed = e164 in _confirmed_numbers(pending)
 
     missing = missing_fields(kind, values)
     if missing:
-        return (f"Not recorded yet. Still needed: {', '.join(missing)}. "
-                "Ask for at most two at a time.")
+        # The next one or two only: named all at once, the agent asked for
+        # five things in one breath.
+        ask = " and ".join(missing[:2])
+        rest = len(missing) - len(missing[:2])
+        return (f"Not recorded yet. Ask next for {ask}"
+                + (f"; {rest} more after that" if rest > 0 else "")
+                + ". Ask for at most two details per turn, never everything at once.")
 
     fingerprint = json.dumps({**values, "type": kind.value}, sort_keys=True)
     confirmed = bool(args.get("confirmed"))
@@ -624,16 +666,18 @@ async def _record_request(tenant: Tenant, call: Call, args: dict,
             or not turns_mod.last_caller_affirmative(conversation)):
         pending["request"] = fingerprint
         return ("Not recorded yet. Read this back; when the caller says it is right, "
-                "call again with confirmed true: " + _read_back(kind, values, grouped_mobile))
+                "call again with confirmed true: "
+                + _read_back(kind, values, grouped_mobile, mobile_confirmed=mobile_confirmed))
 
     try:
         record = await asyncio.wait_for(
             request_repo.create(tenant, call, kind, values), TOOL_TIMEOUT_SECONDS)
     except Exception:  # noqa: BLE001
         log.exception("call %s: the request could not be stored", call.id)
-        return ("Not recorded: the request could not be saved just now. Tell the "
-                "caller the team will call them back, and do not give a reference.")
+        return NOT_SAVED
     pending.pop("request", None)
+    if values["mobile"]:
+        _confirmed_numbers(pending).add(values["mobile"])
     await _note_on_call(tenant, call, "Request recorded: " + record.one_line())
     if kind is RequestType.QUESTION:
         return (f"Recorded. Reference {record.reference}. Say the team will send the "
@@ -674,7 +718,24 @@ def _may_end(conversation: list[tuple[str, str]], reason: str, session) -> bool:
     return _claims_not_engaging(reason) and not recently
 
 
-async def _end_call(tenant: Tenant, call: Call, args: dict) -> str:
+async def _let_transcription_land(session) -> None:
+    """Wait, briefly, for the caller's last words to arrive as text.
+
+    The caller's speech reaches `caller_spoke_at` at once and the transcript
+    about a second later. A guard that judged the turn before refused
+    goodbyes that had already been said.
+    """
+    transcribed_at = getattr(session, "caller_transcribed_at", None)
+    if transcribed_at is None:
+        return
+    deadline = time.time() + TRANSCRIPT_WAIT_SECONDS
+    while time.time() < deadline:
+        if session.caller_transcribed_at >= session.caller_spoke_at:
+            return
+        await asyncio.sleep(0.1)
+
+
+async def _end_call(tenant: Tenant, call: Call, args: dict, pending: dict) -> str:
     reason = str(args.get("reason") or "the agent ended the call")[:200]
     session = _sessions.get(call.id)
     if (session is not None and _claims_caller_gone(reason)
@@ -693,12 +754,23 @@ async def _end_call(tenant: Tenant, call: Call, args: dict) -> str:
         )
     # The transcript, not the model, says whether the caller is done. On
     # real calls the agent hung up right after answering ("...Aur koi sawal?
-    # Allah Hafiz.") and asked whether it should hang up. Now it may end only
-    # after a goodbye, a "nothing else", or a no to "anything else?".
+    # Allah Hafiz."). It may end after a goodbye, a "nothing else", a no to
+    # "anything else?", a request to end the call, or its own closing line.
+    #
+    # And it is refused at most once per call. Refused four times on a real
+    # call, with a goodbye it could not read, it asked "Kya main call end kar
+    # doon?" until the caller hung up on it; the one check that can be wrong
+    # must not be able to hold a line hostage.
+    if session is not None:
+        await _let_transcription_land(session)
     conversation = _conversation(call.id)
-    if conversation is not None and not _may_end(conversation, reason, session):
-        log.info("call %s: not ending the call yet (%r): the caller has not said "
-                 "they are done", call.id, reason)
+    refused_before = int(pending.get("end_refusals") or 0)
+    if (conversation is not None and refused_before < 1
+            and not _may_end(conversation, reason, session)):
+        pending["end_refusals"] = refused_before + 1
+        log.info("call %s: not ending the call yet (%r); the caller's last words "
+                 "were %r", call.id, reason,
+                 turns_mod.judged(turns_mod.last_turn(conversation, "caller")))
         return NOT_YET
     log.info("call %s: the agent is ending the call (%s)", call.id, reason)
     asyncio.create_task(_hang_up_after_goodbye(tenant, call, reason))

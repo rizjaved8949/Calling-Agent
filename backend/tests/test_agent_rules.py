@@ -292,6 +292,8 @@ def test_the_ending_rules_thank_the_caller_and_never_ask_whether_to_end():
 
 def test_the_end_call_tool_says_when_it_may_be_used():
     description = tools.END_CALL["description"]
-    assert "said goodbye or said there is nothing else" in description
+    assert "If the caller says goodbye or asks you to end the call" in description
+    assert "do not ask anything first" in description
+    assert "said there is nothing else" in description
     assert "never ask the caller whether to end the call" in description
     assert "Never end right after answering a question" in description

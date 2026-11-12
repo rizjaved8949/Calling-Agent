@@ -153,6 +153,10 @@ class GeminiLiveSession:
         self._ready = asyncio.Event()
         self._greeted = False
         self._sends: set[asyncio.Task] = set()
+        #: Whether the model ever accepted this session. A loss after that
+        #: is a drop mid-call, worth reconnecting; a loss before it is a
+        #: refusal, which a retry would only repeat.
+        self.connected = False
 
     # ---- state -----------------------------------------------------------
 
@@ -274,6 +278,7 @@ class GeminiLiveSession:
         try:
             async with client.aio.live.connect(model=self.settings.model, config=config) as session:
                 self._session = session
+                self.connected = True
                 self._ready.set()
                 log.info("%s: connected to %s", self.label, self.settings.model)
                 if self.persona.greeting and not self._greeted:

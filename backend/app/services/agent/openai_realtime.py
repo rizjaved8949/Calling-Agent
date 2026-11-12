@@ -108,6 +108,8 @@ class OpenAIRealtimeSession:
         self._closed = False
         self._ready = asyncio.Event()
         self._greeted = False
+        #: Whether the model ever accepted this session; see `GeminiLiveSession`.
+        self.connected = False
         self._sends: set[asyncio.Task] = set()
         self._to_model = RateConverter(*PHONE_TO_OPENAI)
 
@@ -224,6 +226,7 @@ class OpenAIRealtimeSession:
                 await self._send(socket, {
                     "type": "session.update", "session": self._session_config(),
                 })
+                self.connected = True
                 self._ready.set()
                 log.info("%s: connected to %s", self.label, self.settings.model)
                 if self.persona.greeting and not self._greeted:

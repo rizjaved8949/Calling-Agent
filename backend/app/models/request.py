@@ -87,7 +87,12 @@ LABELS = {
     "mileage": "the mileage",
     "preferred_times": "a preferred day and time",
     "booking_reference": "the booking reference",
+    "occupation": "their occupation",
+    "purchase_timeline": "when they plan to buy",
 }
+#: Fields a request may carry but never needs. Asked for only if the
+#: material says to, and dropped the moment the caller would rather not say.
+OPTIONAL_FIELDS = ("occupation", "purchase_timeline", "location", "mileage")
 
 
 def missing_fields(kind: RequestType, values: dict[str, Any]) -> list[str]:
@@ -143,6 +148,10 @@ class RecordedRequest(BaseModel):
     registration: str = ""
     mileage: str = ""
     details: str = ""
+    # Offered, never required: a caller who does not want to say what they
+    # do is still a caller who wants a test drive.
+    occupation: str = ""
+    purchase_timeline: str = Field(default="", alias="purchaseTimeline")
     reply_by: ReplyBy = Field(default=ReplyBy.CALL, alias="replyBy")
     #: The number the call was with, for the team; the caller may have given
     #: a different one to be reached on.
@@ -169,6 +178,8 @@ class RecordedRequest(BaseModel):
             "registration": self.registration or None,
             "mileage": self.mileage or None,
             "details": self.details or None,
+            "occupation": self.occupation or None,
+            "purchaseTimeline": self.purchase_timeline or None,
             "replyBy": self.reply_by.value,
             "callerNumber": self.caller_number or None,
             "createdAt": self.created_at,

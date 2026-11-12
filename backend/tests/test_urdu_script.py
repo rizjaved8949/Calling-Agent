@@ -8,6 +8,8 @@ trusted with is kept exactly as heard.
 """
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from app.services.agent import script
@@ -60,11 +62,55 @@ async def test_a_version_that_changes_what_was_said_keeps_the_original(monkeypat
 
 async def test_a_model_failure_keeps_the_line(monkeypatch):
     async def broken(_lines, **_k):
-        raise RuntimeError("OUT OF QUOTA")
+        raise RuntimeError("400 API key not valid")
 
     monkeypatch.setattr(script, "_ask_model", broken)
     assert await script.to_roman_urdu([URDU], api_key="k", model="m") == [URDU]
     assert await script.to_roman_urdu([URDU], api_key="", model="m") == [URDU]
+
+
+async def test_a_busy_model_is_asked_again_after_a_pause(monkeypatch):
+    """On a real call the first answer was a 503 "high demand", and the whole
+    transcript stayed letter by letter for the sake of one retry."""
+    asked: list[list[str]] = []
+
+    async def model(lines, **_k):
+        asked.append(lines)
+        if len(asked) == 1:
+            raise RuntimeError("503 UNAVAILABLE. This model is currently experiencing high demand")
+        return [ROMAN]
+
+    monkeypatch.setattr(script, "_ask_model", model)
+    monkeypatch.setattr(script, "RETRY_AFTER_SECONDS", 0.01)
+    assert await script.to_roman_urdu([URDU], api_key="k", model="m") == [ROMAN]
+    assert len(asked) == 2
+
+
+async def test_a_timeout_is_also_retried_once_and_then_given_up(monkeypatch):
+    asked: list[int] = []
+
+    async def slow(_lines, **_k):
+        asked.append(1)
+        await asyncio.sleep(10)
+
+    monkeypatch.setattr(script, "_ask_model", slow)
+    monkeypatch.setattr(script, "MODEL_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(script, "RETRY_AFTER_SECONDS", 0.01)
+    assert await script.to_roman_urdu([URDU], api_key="k", model="m") == [URDU]
+    assert len(asked) == 2
+
+
+async def test_a_bad_key_is_not_retried(monkeypatch):
+    asked: list[int] = []
+
+    async def rejected(_lines, **_k):
+        asked.append(1)
+        raise RuntimeError("403 PERMISSION_DENIED: API key not valid")
+
+    monkeypatch.setattr(script, "_ask_model", rejected)
+    monkeypatch.setattr(script, "RETRY_AFTER_SECONDS", 0.01)
+    assert await script.to_roman_urdu([URDU], api_key="k", model="m") == [URDU]
+    assert len(asked) == 1
 
 
 def test_numbers_in_urdu_digits_are_preserved():

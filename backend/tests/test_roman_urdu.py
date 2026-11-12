@@ -111,6 +111,7 @@ async def test_a_model_that_fails_or_hangs_falls_back(monkeypatch):
 
     monkeypatch.setattr(script, "_ask_model", hangs)
     monkeypatch.setattr(script, "MODEL_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(script, "RETRY_AFTER_SECONDS", 0.01)  # a timeout is retried once
     assert await script.to_roman_urdu([ASKED], api_key="k", model="m") == [
         script.romanize(ASKED)]
 

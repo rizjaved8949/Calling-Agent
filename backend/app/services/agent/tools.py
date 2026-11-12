@@ -78,14 +78,20 @@ RECORD_REQUEST: dict[str, Any] = {
         "complaint, a callback, a cancellation, a question you could not answer "
         "from your material, or something else. The team reads it and contacts "
         "the caller. Nothing is booked, confirmed or cancelled by this; say so. "
-        "Collect the details first, at most two per turn, then call this with "
-        "confirmed false: the result says what is still needed, or gives you a "
-        "read-back. Read the read-back to the caller, and when they say it is "
-        "right call again with confirmed true. The result then gives a "
-        "reference, which you read out exactly as given. For a question: offer "
-        "to pass it to the team, who will answer on WhatsApp; only after a yes, "
-        "ask for their WhatsApp number, read it back, and put the question in "
-        "details. A name is optional for a question; do not insist on one."
+        "A request exists only after this returns a reference: never say "
+        "recorded, noted, submitted or booked before that, and never read back "
+        "the details yourself in place of calling this. Collect the details "
+        "first, asking for at most two per turn and never listing everything at "
+        "once, then call this with confirmed false: the result names the next "
+        "one or two details still needed, or gives you a read-back. Read the "
+        "read-back to the caller, and when they say it is right call again with "
+        "confirmed true. The result then gives a reference, which you read out "
+        "exactly as given. For a question: offer to pass it to the team, who "
+        "will answer on WhatsApp; only after a yes, ask for their WhatsApp "
+        "number, read it back, and put the question in details. A name is "
+        "optional for a question; do not insist on one. Occupation and when "
+        "they plan to buy are optional for every type: record them only if the "
+        "caller volunteers them, never insist, and never call them a policy."
     ),
     "parameters": {
         "type": "object",
@@ -120,6 +126,14 @@ RECORD_REQUEST: dict[str, Any] = {
                 "description": "The vehicle's registration number, if relevant.",
             },
             "mileage": {"type": "string", "description": "The mileage, if relevant."},
+            "occupation": {
+                "type": "string",
+                "description": "Optional: what the caller does, only if they said it.",
+            },
+            "purchase_timeline": {
+                "type": "string",
+                "description": "Optional: when they plan to buy, only if they said it.",
+            },
             "details": {
                 "type": "string",
                 "description": (
@@ -170,9 +184,11 @@ END_CALL: dict[str, Any] = {
     "name": "end_call",
     "description": (
         "End the call. Say your goodbye first, in the same turn, then call this. "
-        "Use it only when the caller has said goodbye or said there is nothing "
-        "else, or when you asked whether there is anything else and they said "
-        "no, or when the call is going nowhere: somebody testing you, repeating "
+        "If the caller says goodbye or asks you to end the call, say the closing "
+        "line once and call this at once; do not ask anything first. Otherwise "
+        "use it only when the caller has said there is nothing else, or when you "
+        "asked whether there is anything else and they said no, or when the call "
+        "is going nowhere: somebody testing you, repeating "
         "themselves, being abusive, or silent after you have twice asked whether "
         "they are still there. Never end right after answering a question, never "
         "ask the caller whether to end the call, and never as a way to avoid a "

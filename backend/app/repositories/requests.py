@@ -167,5 +167,5 @@ async def create(tenant: Tenant, call: Call | None, kind: RequestType,
 
 _STORED = {
     "name", "mobile", "city", "location", "preferred_times", "vehicle_model",
-    "registration", "mileage", "details", "reply_by",
+    "registration", "mileage", "details", "reply_by", "occupation", "purchase_timeline",
 }

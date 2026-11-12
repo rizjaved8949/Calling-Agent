@@ -4,22 +4,67 @@ Reading the conversation so far, to decide what the agent may do next.
 The model says it was asked to send a message, or that the caller is done;
 the transcript says whether that is so. These helpers turn the transcript
 fragments into turns and answer the small, plain questions the tool guards
-ask: did the caller say yes, did they say goodbye, did the agent offer
-WhatsApp, did the caller ask for it, did they say to use the number they are
-calling from.
+ask: did the caller say yes, did they say goodbye, did they ask to end the
+call, did the agent offer WhatsApp, did the caller ask for it, did they say
+to use the number they are calling from.
 
-Word lists rather than a model, in Urdu (Roman and script), Hindi and
-English, because a guard that calls a model is a guard that stalls the call.
-They are deliberately generous with yes and strict with no: a "nahi" anywhere
-in the answer wins.
+Word lists rather than a model, because a guard that calls a model is a guard
+that stalls the call. They are deliberately generous with yes and strict with
+no: a "nahi" anywhere in the answer wins.
+
+Every line is normalised first (`normalise`), because the live transcription
+writes the same words many ways. On two real calls it wrote the caller's Urdu
+in Devanagari, and the guard, which knew only Roman Urdu, Urdu script and
+English, refused "जी नहीं, बहुत शुक्रिया" four times. So Devanagari is read
+letter by letter into Roman, and Roman spellings are folded ("naheen" and
+"nahin", "shukriyaa" and "shukriya", "kuchh" and "kuch") before anything is
+compared. Urdu script keeps its own lists, matched as written.
 """
 from __future__ import annotations
 
 import re
 
+from .script import romanize
+
 Turn = tuple[str, str]
 
 _PUNCT = re.compile(r"[^\w\s']+", re.UNICODE)
+_LONG_VOWELS = (("aa", "a"), ("ee", "i"), ("oo", "u"), ("ii", "i"), ("uu", "u"),
+                ("hh", "h"), ("ay", "ai"), ("ey", "ai"))
+
+
+def _fold(text: str) -> str:
+    """One spelling for the many the transcription uses, in Roman letters."""
+    text = text.lower()
+    for long, short in _LONG_VOWELS:
+        text = text.replace(long, short)
+    return text
+
+
+def normalise(text: str) -> str:
+    """`text` as the lists are written: Devanagari romanised, Roman folded."""
+    return _fold(romanize(text or ""))
+
+
+def _words(text: str) -> list[str]:
+    return _PUNCT.sub(" ", normalise(text)).split()
+
+
+def _phrases(*items: str) -> tuple[str, ...]:
+    """A word list, folded the same way the text will be."""
+    return tuple(dict.fromkeys(" ".join(_words(item)) for item in items))
+
+
+def _has_any(text: str, phrases: tuple[str, ...]) -> bool:
+    """Whether any phrase appears as whole words in `text`."""
+    padded = " " + " ".join(_words(text)) + " "
+    return any(f" {phrase} " in padded for phrase in phrases)
+
+
+def _has_script(text: str, phrases: tuple[str, ...]) -> bool:
+    """Urdu-script phrases, matched as written: word boundaries do not
+    apply across scripts."""
+    return any(phrase in (text or "") for phrase in phrases)
 
 
 def turns(transcript: list[Turn]) -> list[Turn]:
@@ -47,37 +92,34 @@ def last_turn(conversation: list[Turn], who: str) -> str:
     return ""
 
 
-def _words(text: str) -> list[str]:
-    return _PUNCT.sub(" ", (text or "").lower()).split()
+_DIGIT_RUN = re.compile(r"\d{3,}")
 
 
-def _has_any(text: str, phrases: tuple[str, ...]) -> bool:
-    """Whether any phrase appears as whole words in `text`."""
-    padded = " " + " ".join(_words(text)) + " "
-    return any(f" {phrase} " in padded for phrase in phrases)
-
-
-def _has_script(text: str, phrases: tuple[str, ...]) -> bool:
-    """Urdu-script phrases, matched as written: word boundaries do not
-    apply across scripts."""
-    return any(phrase in (text or "") for phrase in phrases)
+def judged(text: str, limit: int = 120) -> str:
+    """A caller's words as they may be logged: digits masked, length capped."""
+    masked = _DIGIT_RUN.sub("…", text or "")
+    return masked if len(masked) <= limit else masked[:limit - 1] + "…"
 
 
 # ---------------------------------------------------------------------------
 # Yes and no
 # ---------------------------------------------------------------------------
 
-_YES = (
+_YES = _phrases(
     "ji", "jee", "g", "haan", "han", "ha", "hanji", "haanji", "jihan", "ji haan",
-    "haan ji", "yes", "yeah", "yep", "yup", "zaroor", "zarur", "theek", "thik",
-    "theek hai", "thik hai", "ok", "okay", "okey", "bilkul", "sahi", "sure",
+    "haan ji", "yes", "yeah", "yep", "yup", "zaroor", "zarur", "theek", "thik", "teek",
+    "theek hai", "thik hai", "ok", "okay", "okey", "bilkul", "bilkula", "sahi", "sure",
     "please", "acha", "achha", "accha", "bhej dein", "bhej do", "bhejo", "bhej den",
-    "kar dein", "kar do", "kar den", "send it", "go ahead", "of course", "why not",
-    "chalega", "correct", "right", "sahi hai", "ji bilkul", "bilkul sahi", "ok ji",
-    "yes please", "kardo", "bhejdo", "karein", "kijiye", "kijye", "kar dijiye",
+    "kar dein", "kar do", "kar den", "kar dijiye", "kar dijie", "kar dijiyega",
+    "kardijiye", "kardein", "send it", "go ahead", "of course", "why not", "chalega",
+    "correct", "right", "sahi hai", "ji bilkul", "bilkul sahi", "ok ji", "yes please",
+    "kardo", "bhejdo", "karein", "kijiye", "kijye", "100", "100%", "sau fisad",
+    "hundred percent", "yahi", "yehi", "wahi", "exactly", "confirm", "confirmed",
+    "theek hai ji", "bilkul theek", "haan ji bilkul", "ji haan bilkul",
 )
-_YES_SCRIPT = ("جی", "ہاں", "بالکل", "ضرور", "ٹھیک", "بھیج", "کر دیں", "صحیح")
-_NO = (
+_YES_SCRIPT = ("جی", "ہاں", "بالکل", "ضرور", "ٹھیک", "بھیج", "کر دیں", "صحیح", "یہی",
+               "کر دیجیے", "کر دیجئے")
+_NO = _phrases(
     "nahi", "nahin", "nai", "nhi", "nah", "no", "nope", "mat", "na", "never",
     "dont", "don't", "not", "no thanks", "koi nahi", "kuch nahi", "nahi chahiye",
     "nahi chahie", "rehne dein", "rehne do", "rehne den", "zaroorat nahi",
@@ -102,38 +144,63 @@ def is_affirmative(text: str) -> bool:
 # Ending
 # ---------------------------------------------------------------------------
 
-_GOODBYE = (
+_GOODBYE = _phrases(
     "allah hafiz", "khuda hafiz", "allah hafez", "khuda hafez", "allahafiz",
-    "khudahafiz", "bye", "goodbye", "good bye", "bye bye", "take care",
-    "phir milenge", "shab bakhair", "fi amanillah", "ok bye", "thik hai bye",
+    "khudahafiz", "hafiz", "hafij", "hafija", "hafez", "bye", "goodbye", "good bye",
+    "bye bye", "take care", "phir milenge", "shab bakhair", "fi amanillah", "ok bye",
+    "thik hai bye", "allah hafiz ji", "khuda hafiz ji",
 )
-_GOODBYE_SCRIPT = ("اللہ حافظ", "خدا حافظ", "الله حافظ")
-_NOTHING_ELSE = (
+_GOODBYE_SCRIPT = ("اللہ حافظ", "خدا حافظ", "الله حافظ", "حافظ")
+_NOTHING_ELSE = _phrases(
     "bas", "bus", "koi nahi", "kuch nahi", "nothing else", "nothing more",
     "that's all", "thats all", "that is all", "that's it", "thats it", "no more",
     "aur nahi", "aur kuch nahi", "bas itna", "bas yehi", "itna hi", "bas theek hai",
-    "bas thik hai", "done", "that will be all", "no that's all", "nothing",
-    "koi aur nahi", "aur koi nahi", "bas ji", "bas shukriya", "enough",
+    "bas thik hai", "done", "that will be all", "nothing", "koi aur nahi",
+    "aur koi nahi", "bas ji", "bas shukriya", "enough", "kuch nahi puchna",
+    "kuch nahi poochna", "nahi puchna", "nahi poochna", "kuch aur nahi", "mazeed nahi",
+    "aur kuch nahi puchna", "kuch nahi puchna chahta", "kuch nahi poochna chahta",
 )
-_NOTHING_ELSE_SCRIPT = ("بس", "کوئی نہیں", "کچھ نہیں", "اور نہیں")
-_THANKS = (
+_NOTHING_ELSE_SCRIPT = ("بس", "کوئی نہیں", "کچھ نہیں", "اور نہیں", "مزید نہیں")
+_THANKS = _phrases(
     "shukriya", "shukria", "shukrya", "thank", "thanks", "thankyou", "thank you",
-    "jazakallah", "jazak", "mehrbani", "meharbani", "thanku",
+    "jazakallah", "jazak", "mehrbani", "meharbani", "thanku", "bahut shukriya",
+    "bohat shukriya", "bohot shukriya",
 )
 _THANKS_SCRIPT = ("شکریہ", "مہربانی", "جزاک")
-_ANYTHING_ELSE = (
+#: The caller asking for the call to end, including what the transcription
+#: makes of "call end" on a Pakistani line: "kol end", "call and".
+_END_CALL = _phrases(
+    "call end", "kol end", "col end", "call and", "kol and", "end kar", "and kar",
+    "end karo", "end karen", "end kardo", "end kar do", "end kar den", "end kar dein",
+    "band kar", "band karo", "band karen", "band kardo", "khatam kar", "khatm kar",
+    "cut kar", "cut karo", "cut kardo", "rakh dein", "rakh do", "rakh den", "rakhdo",
+    "phone rakh", "phone band", "hang up", "end the call", "end call", "disconnect",
+    "call khatam", "call band", "call cut", "call rakh", "end it", "end this call",
+    "call ko end", "call ko band", "kol ko end", "kol band",
+)
+_END_CALL_SCRIPT = ("کال بند", "بند کر", "ختم کر", "کال ختم", "رکھ دیں", "کاٹ دیں",
+                    "کال اینڈ", "اینڈ کر", "کال کاٹ")
+#: The agent's own closing line: thanks for calling, and the goodbye.
+_CLOSING_LINE = _phrases(
+    "call karne ka shukriya", "call karne ke liye shukriya", "thank you for calling",
+    "thanks for calling", "rabta karne ka shukriya", "contact karne ka shukriya",
+    "call karne ka bohat shukriya",
+)
+_ANYTHING_ELSE = _phrases(
     "anything else", "koi aur", "aur koi", "aur kuch", "kuch aur", "aur sawal",
     "aur kisi", "kisi aur", "any other", "aur madad", "aur help", "koi sawal",
     "else i can", "further", "something else", "anything more", "aur kuch bataun",
-    "koi aur sawal", "kisi aur cheez", "aur koi cheez",
+    "koi aur sawal", "kisi aur cheez", "aur koi cheez", "mazeed", "iske alawa",
+    "is ke alawa", "koi aur baat",
 )
-_ANYTHING_ELSE_SCRIPT = ("اور کوئی", "کوئی اور", "اور کچھ", "کچھ اور")
-_QUESTION_WORDS = (
+_ANYTHING_ELSE_SCRIPT = ("اور کوئی", "کوئی اور", "اور کچھ", "کچھ اور", "مزید", "اس کے علاوہ")
+_QUESTION_WORDS = _phrases(
     "kya", "kia", "kitna", "kitni", "kitne", "kab", "kahan", "kahaan", "kaun",
     "kon", "kaise", "kese", "kyun", "kyu", "kis", "konsa", "konsi", "what", "how",
     "when", "where", "which", "who", "why", "can you", "could you", "tell me",
     "bata", "batao", "batayein", "batain", "batayen", "chahiye", "chahie", "want",
     "need", "possible", "ho sakta", "hoga", "milega", "milegi", "please tell",
+    "bata dein", "bata do", "batana",
 )
 
 
@@ -153,17 +220,30 @@ def is_thanks(text: str) -> bool:
     return _has_any(text, _THANKS) or _has_script(text, _THANKS_SCRIPT)
 
 
+def asked_to_end(text: str) -> bool:
+    """The caller asking for the call to end, in any of its forms."""
+    return _has_any(text, _END_CALL) or _has_script(text, _END_CALL_SCRIPT)
+
+
 def is_closing(text: str) -> bool:
-    """A goodbye, a "nothing else", or thanks said with a no: the caller is done."""
+    """A goodbye, a "nothing else", thanks said with a no, or asking to end:
+    the caller is done. Asking to end wins even when phrased as a question."""
+    if asked_to_end(text) or is_goodbye(text):
+        return True
     if looks_like_question(text):
         return False
-    if is_goodbye(text) or is_nothing_else(text):
+    if is_nothing_else(text):
         return True
     return is_thanks(text) and is_negative(text)
 
 
 def asked_anything_else(agent_text: str) -> bool:
     return _has_any(agent_text, _ANYTHING_ELSE) or _has_script(agent_text, _ANYTHING_ELSE_SCRIPT)
+
+
+def agent_said_closing(agent_text: str) -> bool:
+    """The agent's closing line: a goodbye, or thanks for calling."""
+    return is_goodbye(agent_text) or _has_any(agent_text, _CLOSING_LINE)
 
 
 def declined(text: str) -> bool:
@@ -177,12 +257,16 @@ def declined(text: str) -> bool:
 def may_end(conversation: list[Turn]) -> bool:
     """Whether the conversation itself says the call may end now.
 
-    (a) the caller's latest turn is a goodbye or a "nothing else", or
+    (a) the caller's latest turn is a goodbye, a "nothing else", or asks
+        for the call to end, or
     (b) the agent asked whether there was anything else and the caller
-        declined.
+        declined, or
+    (c) the agent has said its closing line, and the caller has not asked a
+        new question since.
     """
     if not conversation:
         return False
+    last_who, last_text = conversation[-1]
     last_caller = ""
     agent_before = ""
     seen_caller = False
@@ -194,36 +278,46 @@ def may_end(conversation: list[Turn]) -> bool:
         if who == "agent" and seen_caller:
             agent_before = text
             break
-    if not last_caller:
-        return False
-    if is_closing(last_caller):
+    if last_caller and is_closing(last_caller):
         return True
-    return asked_anything_else(agent_before) and declined(last_caller)
+    if last_caller and asked_anything_else(agent_before) and declined(last_caller):
+        return True
+    # (c): after the agent's goodbye, nothing new has been asked. A goodbye
+    # said in the same breath as the answer to a question does not count:
+    # the caller has not had a chance to say whether they are done.
+    if (last_who == "agent" and agent_said_closing(last_text)
+            and not looks_like_question(last_caller)):
+        return True
+    if (last_who == "caller" and agent_said_closing(agent_before)
+            and not looks_like_question(last_caller)):
+        return True
+    return False
 
 
 # ---------------------------------------------------------------------------
 # Messaging
 # ---------------------------------------------------------------------------
 
-_MESSAGING = (
+_MESSAGING = _phrases(
     "whatsapp", "whats app", "whatsap", "message", "msg", "sms", "likh",
     "in writing", "written", "write", "text", "text me", "send", "bhej", "bhejna",
 )
 _MESSAGING_SCRIPT = ("واٹس", "میسج", "پیغام", "لکھ", "بھیج")
-_CALLER_ASKS = (
+_CALLER_ASKS = _phrases(
     "whatsapp", "whats app", "whatsap", "message", "msg", "sms", "likh", "likh kar",
     "likh ke", "likhkar", "in writing", "written", "text me", "text kar",
     "send me", "bhej do", "bhej dein", "bhej den", "bhejo", "bhej dijiye", "likh do",
-    "likh dein", "likh dijiye", "likh kar bhej",
+    "likh dein", "likh dijiye", "likh kar bhej", "send kar", "send kar dein",
 )
 _CALLER_ASKS_SCRIPT = ("واٹس", "میسج", "پیغام", "لکھ", "بھیج")
-_SAME_NUMBER = (
+_SAME_NUMBER = _phrases(
     "same number", "this number", "calling number", "jis se call", "jisse call",
     "jis say call", "jis se main", "jisse main", "isi number", "issi number",
     "is number", "yehi number", "yahi number", "ye number", "yeh number",
     "isi pe", "isi par", "issi pe", "issi par", "isi pr", "is pe", "is par",
     "isi wale", "same one", "this one", "number i am calling", "number i'm calling",
     "ye wala", "yeh wala", "yehi wala", "isi se", "same", "yehi", "isi",
+    "jis par aap call", "jis par baat", "jis se baat", "yeh wala number",
 )
 _SAME_NUMBER_SCRIPT = ("اسی نمبر", "اس نمبر", "یہی نمبر", "اسی پر", "اسی پہ", "جس سے")
 
