@@ -106,6 +106,27 @@ def ending(number: str) -> str:
     return digits[-4:] if len(digits) >= 4 else digits
 
 
+#: A run of digits long enough to be a phone number, with the spaces,
+#: dashes and brackets people put in one. Amounts ("16,990,000") have
+#: commas, which are not in the run, so they do not match.
+_NUMBER_RUN = re.compile(r"\+?\d(?:[\d\s\-()]{7,}\d)")
+
+
+def find_number(text: str, country: str = "") -> tuple[str, str] | None:
+    """The first phone number dictated in `text`, parsed, or None.
+
+    At least ten digits, so a price or a year is never taken for a number.
+    """
+    for match in _NUMBER_RUN.finditer(normalise_digits(text or "")):
+        candidate = match.group(0)
+        if len(digits_only(candidate)) < 10:
+            continue
+        parsed = parse(candidate, country)
+        if parsed is not None:
+            return parsed
+    return None
+
+
 def said_on_call(caller_turns: list[str], number: str) -> bool:
     """Whether the caller said this number on this call.
 

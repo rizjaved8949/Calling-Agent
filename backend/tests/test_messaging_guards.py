@@ -26,8 +26,9 @@ def _tenant(**extra) -> Tenant:
 
 
 def _call(**extra) -> Call:
-    return Call(tenantId="t-1", channel=Channel.PHONE, direction=Direction.INBOUND,
-                counterparty="+923191611020", **extra)
+    fields = dict(tenantId="t-1", channel=Channel.PHONE, direction=Direction.INBOUND,
+                  counterparty="+923191611020")
+    return Call(**{**fields, **extra})
 
 
 class _Line:
@@ -185,9 +186,18 @@ async def test_a_ten_digit_number_is_refused(fake_db, sending):
 
 async def test_a_number_the_caller_never_said_is_refused(fake_db, sending):
     call = _call()
-    _on_the_line(call, OFFER_AND_YES)
+    _on_the_line(call, OFFER_AND_YES[:4])            # consent given, no number yet
     _, answer = await _send(_tenant(), call, to="0300 999 8877", number_confirmed=True)
     assert answer == live.NOT_SPOKEN and sending == []
+
+
+async def test_a_number_other_than_the_one_the_caller_gave_is_redirected(fake_db, sending):
+    """They said 0300 123 4567; the model passes another: confirm theirs."""
+    call = _call()
+    _on_the_line(call, OFFER_AND_YES)
+    _, answer = await _send(_tenant(), call, to="0300 999 8877", number_confirmed=True)
+    assert sending == []
+    assert "the caller last gave 0300 123 4567, not 0300 999 8877" in answer
 
 
 async def test_urdu_digits_count_as_said(fake_db, sending):
@@ -215,6 +225,113 @@ async def test_calling_number_the_caller_asked_for_is_read_back_then_sent(fake_d
                           {"text": TEXT, "to": "calling_number", "number_confirmed": True})
     assert answer == "Sent."
     assert sending[0][0] == "+923191611020"
+
+
+# ---------------------------------------------------------------------------
+# The number is the one the caller chose, not the one the model passed
+# ---------------------------------------------------------------------------
+#
+# On a real call the caller gave a number for a test-drive request, then
+# asked for the WhatsApp on "the number I'm calling from". The model passed
+# the earlier number; it had been confirmed for the request, so the tool
+# would have sent to it without a read-back.
+
+GAVE_FOR_REQUEST = [
+    ("caller", "Mera naam Alif hai aur mera number 0300 123 4567 hai, Lahore, ATTO 2"),
+    ("agent", "...sahi hai?"), ("caller", "ji bilkul sahi hai"),
+]
+CHOSE_CALLING_NUMBER = GAVE_FOR_REQUEST + [
+    ("agent", "Kya main yeh details aapko WhatsApp par bhej doon?"), ("caller", "ji bhej dein"),
+    ("agent", "Kis number par bhejun?"), ("caller", "jis number se main call kar raha hoon, isi number par"),
+]
+
+
+async def test_the_calling_number_the_caller_chose_is_read_back_not_the_earlier_one(fake_db, sending):
+    call = _call(counterparty="+923011114604")
+    _on_the_line(call, CHOSE_CALLING_NUMBER)
+    handle = live._tool_handler(_tenant(), call)
+    # The earlier number is already confirmed on this call (the request).
+    handle_pending = await handle("record_request", {
+        "type": "test_drive", "name": "Alif", "mobile": "0300 123 4567", "city": "Lahore",
+        "vehicle_model": "ATTO 2", "preferred_times": ["Sat 12"], "details": "test drive",
+        "confirmed": True})
+    assert "Read this back" in handle_pending
+    live._sessions[call.id].transcript = list(CHOSE_CALLING_NUMBER)
+    # (The record confirmation needs the last caller turn to be a yes.)
+    live._sessions[call.id].transcript.append(("caller", "ji"))
+    recorded = await handle("record_request", {
+        "type": "test_drive", "name": "Alif", "mobile": "0300 123 4567", "city": "Lahore",
+        "vehicle_model": "ATTO 2", "preferred_times": ["Sat 12"], "details": "test drive",
+        "confirmed": True})
+    assert recorded.startswith("Recorded.")
+    live._sessions[call.id].transcript = list(CHOSE_CALLING_NUMBER)
+
+    # The model substitutes the earlier, already-confirmed number.
+    answer = await handle("send_whatsapp_message",
+                          {"text": TEXT, "to": "0300 123 4567", "number_confirmed": True})
+    assert sending == [], "sent to the wrong number"
+    assert "the caller chose the number they are calling from, not 0300 123 4567" in answer
+    assert "the number ending 4604" in answer
+    assert "to calling_number and number_confirmed true" in answer
+
+    # Read back as the tool said, the caller says yes, and it goes to the right one.
+    live._sessions[call.id].transcript += [("agent", "4604 par khatam hone wale number par?"),
+                                           ("caller", "ji")]
+    answer = await handle("send_whatsapp_message",
+                          {"text": TEXT, "to": "calling_number", "number_confirmed": True})
+    assert answer == "Sent."
+    assert [to for to, _, _ in sending] == ["+923011114604"]
+
+
+async def test_a_number_dictated_after_choosing_the_calling_number_wins(fake_db, sending):
+    call = _call(counterparty="+923011114604")
+    _on_the_line(call, OFFER_AND_YES[:4] + [
+        ("caller", "isi number par"), ("agent", "4604 wale par?"),
+        ("caller", "nahi, 0300 999 8877 par bhej dein")])
+    handle = live._tool_handler(_tenant(), call)
+    answer = await handle("send_whatsapp_message", {"text": TEXT, "to": "calling_number"})
+    assert sending == []
+    assert "the caller last gave 0300 999 8877, not the number they are calling from" in answer
+    assert "confirm: 0300 999 8877" in answer
+
+
+async def test_a_number_other_than_the_one_just_dictated_is_not_sent_to(fake_db, sending):
+    call = _call()
+    _on_the_line(call, GAVE_FOR_REQUEST + [
+        ("agent", "Kya main WhatsApp par bhej doon?"), ("caller", "ji"),
+        ("agent", "Kis number par?"), ("caller", "0300 999 8877 par"),
+        ("agent", "0300 999 8877, sahi hai?"), ("caller", "ji")])
+    handle = live._tool_handler(_tenant(), call)
+    answer = await handle("send_whatsapp_message",
+                          {"text": TEXT, "to": "0300 123 4567", "number_confirmed": True})
+    assert sending == []
+    assert "the caller last gave 0300 999 8877, not 0300 123 4567" in answer
+
+
+async def test_that_number_means_the_one_given_before(fake_db, sending):
+    call = _call(counterparty="+923011114604")
+    _on_the_line(call, GAVE_FOR_REQUEST + [
+        ("agent", "Kya main WhatsApp par bhej doon?"), ("caller", "ji"),
+        ("agent", "Isi number par ya kisi aur par?"), ("caller", "wahi number jo maine bataya tha")])
+    handle = live._tool_handler(_tenant(), call)
+    answer = await handle("send_whatsapp_message", {"text": TEXT, "to": "calling_number"})
+    assert sending == []
+    assert "the caller last gave 0300 123 4567" in answer
+
+
+def test_a_dictated_number_is_found_in_a_sentence():
+    from app.services.agent import phones, turns
+
+    assert phones.find_number("mera number 0300 123 4567 hai", "92") == ("+923001234567", "03001234567")
+    assert phones.find_number("call me on +92 300-1234567", "") == ("+923001234567", "03001234567")
+    assert phones.find_number("۰۳۰۰ ۱۲۳ ۴۵۶۷ par", "92") == ("+923001234567", "03001234567")
+    assert phones.find_number("SEAL Premium PKR 16,990,000 aur advance 3,350,000", "92") is None
+    assert phones.find_number("0300", "92") is None
+    assert turns.mentions_calling_number("jis number se main call kar raha hoon")
+    assert turns.mentions_calling_number("इसी नंबर पर भेज दें")
+    assert turns.mentions_calling_number("اسی نمبر پر")
+    assert not turns.mentions_calling_number("wahi number jo maine bataya")
+    assert turns.mentions_earlier_number("wahi number jo maine bataya")
 
 
 # ---------------------------------------------------------------------------

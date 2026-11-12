@@ -506,23 +506,48 @@ async def _send_message(tenant: Tenant, call: Call, args: dict, pending: dict[st
     if not to:
         return "NOT sent: ask which number to send it to, then call again with it."
 
+    country = _country(tenant)
+    # What the caller most recently chose decides, not what the model passed.
+    # On a real call the caller said "the number I'm calling from" and the
+    # model passed the number they had given earlier for a request, which had
+    # already been confirmed, so it would have gone out unread.
+    chosen = _caller_chose(conversation, call, country)
     if phones.normalise_digits(to).lower().replace(" ", "_") == phones.CALLING_NUMBER:
+        destination = call.counterparty
+        if chosen and chosen[0] == "number" and chosen[1] != destination:
+            # They chose a number they dictated ("that number I gave you");
+            # the model passed the calling number instead.
+            pending["number"] = chosen[1]
+            theirs = _spoken_number(chosen[1], country)
+            return (f"Not sent yet: the caller last gave {theirs}, not the number they are "
+                    f"calling from. Read this back and ask them to confirm: {theirs}. Only "
+                    "then call again with that number and number_confirmed true.")
         if not turns_mod.said_calling_number(conversation):
             return NOT_SAME_NUMBER
-        destination = call.counterparty
         if not destination:
             return "NOT sent: the number they are calling from is not known. Ask which number to use."
         spoken = f"the number ending {phones.ending(destination)}"
-        key = phones.CALLING_NUMBER
     else:
-        parsed = phones.parse(to, _country(tenant))
+        parsed = phones.parse(to, country)
         if parsed is None:
             return "Not sent: that number looks incomplete. Ask for it again."
         destination, national = parsed
+        if chosen and chosen[0] == "calling" and destination != chosen[1]:
+            pending["number"] = chosen[1]
+            return (f"Not sent yet: the caller chose the number they are calling from, not "
+                    f"{phones.grouped(national)}. Read this back and ask them to confirm: the "
+                    f"number ending {phones.ending(chosen[1])}. Only then call again with to "
+                    "calling_number and number_confirmed true.")
+        if chosen and chosen[0] == "number" and destination != chosen[1]:
+            pending["number"] = chosen[1]
+            theirs = _spoken_number(chosen[1], country)
+            return (f"Not sent yet: the caller last gave {theirs}, not "
+                    f"{phones.grouped(national)}. Read this back and ask them to confirm: "
+                    f"{theirs}. Only then call again with that number and number_confirmed true.")
         if not phones.said_on_call(turns_mod.caller_lines(conversation), national):
             return NOT_SPOKEN
         spoken = phones.grouped(national)
-        key = destination
+    key = destination
 
     confirmed = bool(args.get("number_confirmed"))
     already = key in _confirmed_numbers(pending)
@@ -613,6 +638,49 @@ def _refusal_reason(exc: BaseException) -> str:
     text = str(detail or exc or type(exc).__name__).strip()
     text = text.replace("\n", " ")[:160]
     return f"could not be sent: {text}" if text else "could not be sent"
+
+
+def _spoken_number(e164: str, country: str) -> str:
+    """A number as it is read back: grouped, in its national form."""
+    parsed = phones.parse(e164, country)
+    return phones.grouped(parsed[1]) if parsed else e164
+
+
+def _caller_chose(conversation: list[tuple[str, str]], call: Call,
+                  country: str) -> tuple[str, str] | None:
+    """The number the caller most recently chose, from their own words.
+
+    `("number", e164)` for a number they dictated, `("calling", e164)` for
+    "the number I am calling from", and a "that number" points back at the
+    one they dictated before. None when they have not said. Read from the
+    latest caller turn backwards, so a choice made a minute ago does not
+    outrank one made just now.
+    """
+    for index in range(len(conversation) - 1, -1, -1):
+        who, text = conversation[index]
+        if who != "caller":
+            continue
+        found = phones.find_number(text, country)
+        if found is not None:
+            return ("number", found[0])
+        if turns_mod.mentions_calling_number(text):
+            # "Ji, yahi number hai" straight after the agent read a number
+            # back is "yes, that one", not "the number I am calling from".
+            agent_before = next((t for w, t in reversed(conversation[:index]) if w == "agent"), "")
+            read_back = (phones.find_number(agent_before, country)
+                         if turns_mod.is_affirmative(text) else None)
+            if read_back is not None:
+                return ("number", read_back[0])
+            if call.counterparty:
+                return ("calling", call.counterparty)
+        if turns_mod.mentions_earlier_number(text):
+            for earlier_who, earlier in reversed(conversation[:index]):
+                if earlier_who != "caller":
+                    continue
+                found = phones.find_number(earlier, country)
+                if found is not None:
+                    return ("number", found[0])
+    return None
 
 
 def _read_back(kind, values: dict, grouped_mobile: str, *, mobile_confirmed: bool = False) -> str:

@@ -38,7 +38,8 @@ def _fold(text: str) -> str:
     text = text.lower()
     for long, short in _LONG_VOWELS:
         text = text.replace(long, short)
-    return text
+    # Devanagari नंबर romanises as "nambar"; the lists say "number".
+    return text.replace("nambar", "number")
 
 
 def normalise(text: str) -> str:
@@ -359,6 +360,39 @@ def said_calling_number(conversation: list[Turn]) -> bool:
                                 or _has_script(text, _SAME_NUMBER_SCRIPT)):
             return True
     return False
+
+
+#: Unmistakably "the number I am calling from": the number itself named,
+#: not a bare "wahi" or "same" that may mean the one given earlier.
+_CALLING_CHOICE = _phrases(
+    "isi number", "issi number", "is number", "yehi number", "yahi number", "ye number",
+    "yeh number", "same number", "this number", "calling number", "jis se call",
+    "jisse call", "jis say call", "jis se main", "jisse main", "jis par aap call",
+    "jis par baat", "jis se baat", "number i am calling", "number i'm calling",
+    "yeh wala number", "ye wala number", "isi pe", "isi par", "issi pe", "issi par",
+    "is pe", "is par", "isi se", "isi wale", "jis number se call", "jis se baat ho rahi",
+    "the number i am on", "number i'm on", "jis pe call", "jis pe baat", "jis number se",
+    "jis number par", "jis number pe", "is number se",
+)
+_CALLING_CHOICE_SCRIPT = ("اسی نمبر", "اس نمبر", "یہی نمبر", "اسی پر", "اسی پہ", "جس سے")
+#: "That number", "the one I gave before": the number dictated earlier.
+_EARLIER_CHOICE = _phrases(
+    "wahi number", "wohi number", "us number", "pehle wala", "pehla number", "pehle wale",
+    "that number", "the number i gave", "jo number maine", "jo maine diya", "jo maine bataya",
+    "same as before", "wahi jo", "wo number", "woh number", "pehle diya", "pehle bataya",
+    "jo number bataya", "jo number diya", "the one i gave", "the earlier number",
+)
+_EARLIER_CHOICE_SCRIPT = ("وہی نمبر", "پہلے والا", "پہلا نمبر", "جو نمبر میں نے")
+
+
+def mentions_calling_number(text: str) -> bool:
+    """This turn names the number the caller is calling from."""
+    return _has_any(text, _CALLING_CHOICE) or _has_script(text, _CALLING_CHOICE_SCRIPT)
+
+
+def mentions_earlier_number(text: str) -> bool:
+    """This turn points back at a number the caller gave before."""
+    return _has_any(text, _EARLIER_CHOICE) or _has_script(text, _EARLIER_CHOICE_SCRIPT)
 
 
 def last_caller_affirmative(conversation: list[Turn]) -> bool:
