@@ -108,7 +108,10 @@ RECORD_REQUEST: dict[str, Any] = {
         "call this with confirmed true at once: no second read-back, no asking "
         "permission to read back, no extra conditions. For a complaint: the "
         "name and mobile first, then the registration or model and what "
-        "happened, then read back and record it before anything else."
+        "happened, then read back and record it before anything else. Include "
+        "every detail the caller has already given on this call in every call "
+        "to this tool. 'Ask next for' means nothing failed: ask for those "
+        "details and call again. Never ask permission to record."
     ),
     "parameters": {
         "type": "object",

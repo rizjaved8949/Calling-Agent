@@ -173,9 +173,9 @@ class OpenAIRealtimeSession:
             "response": {"instructions": text},
         })
 
-    async def note(self, text: str) -> None:
-        """Add to the conversation without asking for a reply; the model sees
-        it on its next turn. See `GeminiLiveSession.note`."""
+    async def note(self, text: str, urgent: bool = False) -> None:
+        """Add to the conversation. Not urgent: the model sees it on its next
+        turn. Urgent: it answers it now. See `GeminiLiveSession.note`."""
         socket = self._socket
         if socket is None or self._closed:
             return
@@ -184,6 +184,8 @@ class OpenAIRealtimeSession:
             "item": {"type": "message", "role": "user",
                      "content": [{"type": "input_text", "text": text}]},
         })
+        if urgent:
+            await self._send(socket, {"type": "response.create"})
 
     # ---- running ----------------------------------------------------------
 
@@ -310,6 +312,7 @@ class OpenAIRealtimeSession:
             heard = event.get("transcript") or ""
             if heard and self.on_transcript:
                 self.on_transcript("caller", heard)
+                self.on_transcript("caller:done", "")
 
         elif kind == "response.function_call_arguments.done":
             await self._answer_tool(socket, event)

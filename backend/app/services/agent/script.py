@@ -223,11 +223,36 @@ _META = re.compile(
 )
 
 
+#: The tools the agent can call. A model that writes one as words
+#: ("calculate{expression:1Shukriya...") has leaked a function call into its
+#: speech; on a real call it was read out to the caller and stored.
+TOOL_NAMES = ("send_whatsapp_message", "record_request", "calculate", "end_call")
+_TOOL_CALL = re.compile(
+    r"\b(?:" + "|".join(TOOL_NAMES) + r")\s*"
+    r"(?:\{[^{}]*\}|\([^()]*\)|[{(]\s*[a-z_]*\s*[:=]?\s*[\d.+\-*/%\s]*)"
+    r"|\b(?:send_whatsapp_message|record_request|end_call)\b",
+)
+
+
+def strip_tool_calls(text: str) -> tuple[str, int]:
+    """`text` without any function call written into it, and how many there
+    were. A closed call (`calculate{expression: 1+2}`) goes whole; an unclosed
+    one goes up to where the words start again."""
+    if not text:
+        return text or "", 0
+    cleaned, count = _TOOL_CALL.subn("", text)
+    if count:
+        cleaned = re.sub(r"[ \t]{2,}", " ", cleaned).strip()
+    return cleaned, count
+
+
 def strip_meta(text: str) -> str:
-    """`text` without a model's notes to itself."""
+    """`text` without a model's notes to itself, or a function call written
+    as words."""
     if not text:
         return text or ""
-    cleaned = _META.sub("", text)
+    cleaned, _ = strip_tool_calls(text)
+    cleaned = _META.sub("", cleaned)
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
     # A line left with only its speaker label is a line with nothing in it.
     cleaned = re.sub(r"(?m)^(caller|agent|system): *$\n?", "", cleaned)

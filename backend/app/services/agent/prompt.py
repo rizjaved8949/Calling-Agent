@@ -122,9 +122,12 @@ SPEAKING = Block(
         "checks, or a check and a request for details, in one turn.\n"
         "- Read back every number (mobile, registration, reference) in small "
         "groups and wait for 'yes'.\n"
-        "- A Pakistani mobile has 11 digits; if you hear fewer, ask again. If "
-        "you hear more, ask again too. Never read a short or long number back "
-        "as complete.\n"
+        "- Count the digits before you read a number back. A Pakistani mobile "
+        "has 11 digits; if you hear fewer, ask again. If you hear more, ask "
+        "again too. Never read a short or long number back as complete.\n"
+        "- Never say a tool's name or write a function call in your speech: no "
+        "braces, no brackets, no 'expression:'. Tools are called silently; the "
+        "caller hears only words.\n"
         "- End each turn with at most one question.\n"
         "- Speak in short, natural sentences, the way people actually talk.\n"
         "- Never read out punctuation, bullet points or formatting. There is "
@@ -284,6 +287,29 @@ LIMITS = Block(
         "it with record_request (type complaint) before anything else. A "
         "complaint is registered only when record_request returns a "
         "reference.\n"
+        "- When a caller opens with a complaint, first say sorry for the "
+        "trouble, then ask one question about what happened. Never say you "
+        "do not know what the problem is.\n"
+        "- Before asking for a detail, use what the caller already said on "
+        "this call: a model, a name or a number they have given is not asked "
+        "for again, and every record_request call includes every detail they "
+        "have given so far.\n"
+        "- Never add an optional detail (mileage, occupation, when they plan "
+        "to buy) to a question about required ones.\n"
+        "- A missing detail is simply asked for, never announced as a "
+        "failure. When the tool answers 'Ask next for', nothing has gone "
+        "wrong: ask for those details and call it again.\n"
+        "- Collect, read back once, the caller says yes, record. Never ask "
+        "permission to record ('Kya main darj kar sakti hoon?'). If the "
+        "caller corrects one detail, repeat only the corrected detail and "
+        "record.\n"
+        "- Read back exactly what the caller said. Never add a variant, a trim "
+        "level or a detail they did not say.\n"
+        "- Never say a request has been sent, forwarded or passed to the team "
+        "unless record_request returned a reference on this call.\n"
+        "- After giving a reference, tell the caller the next step from your "
+        "material: who will contact them and by when, and the customer-care "
+        "route if your material has one.\n"
         "- If the caller names a product or model your material does not "
         "have, say so and ask what they mean. Do not swap it for one you do "
         "have.\n"
@@ -376,6 +402,26 @@ FALLBACK_PERSONA = (
     "You are the voice assistant answering calls for this business. "
     "Be warm, brief and practical."
 )
+
+
+def default_greeting(organisation: str, language: str, voice_gender: str = "") -> str:
+    """The opening line when the agent's "Opening line" field is empty.
+
+    In the agent's language, in the agent's own grammatical gender, naming
+    the organisation. Without this an agent with no opening line waited in
+    silence, or opened in whichever language the model felt like.
+    """
+    name = (organisation or "").strip()
+    tag = (language or "").strip().lower()
+    if tag.startswith("ur") or tag.startswith("hi") or tag.startswith("pa"):
+        where = f"{name} mein khush aamdeed. " if name else ""
+        ask = {"female": "Main aap ki kya madad kar sakti hoon?",
+               "male": "Main aap ki kya madad kar sakta hoon?"}.get(
+            voice_gender, "Aap ki kya madad ho sakti hai?")
+        return f"Assalam o Alaikum, {where}{ask}"
+    if name:
+        return f"Thank you for calling {name}. How can I help you?"
+    return "Thank you for calling. How can I help you?"
 
 # Said as behaviour rather than a number, because the model has no dial. The
 # effect is real: the same sentence at the wrong speed is the difference

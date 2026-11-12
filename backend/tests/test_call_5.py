@@ -227,8 +227,8 @@ async def test_the_tool_names_at_most_two_missing_details(quiet, fake_db):
     live._sessions[call.id] = _session(call.id, [L2])
     handle = live._tool_handler(_tenant(), call)
     answer = await handle("record_request", {"type": "complaint", "details": L2[1]})
-    assert answer.startswith("Not recorded yet. Ask next for the caller's name and a mobile "
-                             "number; 1 more after that.")
+    assert answer.startswith("Ask next for the caller's name and a mobile number; 1 more "
+                             "after that.")
 
 
 async def test_the_complaint_is_read_back_and_recorded_without_a_city(quiet, fake_db):

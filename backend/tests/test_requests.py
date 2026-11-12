@@ -80,10 +80,10 @@ async def test_missing_fields_are_named_two_at_a_time(fake_db):
     live._sessions[call.id] = _Line(GAVE_NUMBER)
     handle = live._tool_handler(_tenant(), call)
     answer = await handle("record_request", {"type": "test_drive", "name": "Saman"})
-    assert answer.startswith("Not recorded yet. Ask next for a mobile number and the city; "
+    assert answer.startswith("Ask next for a mobile number and the city; "
                             "3 more after that."), answer
     assert "the vehicle model" not in answer, "more than two were named"
-    assert "never everything at once" in answer
+    assert "at most two per turn" in answer and "Nothing has failed" in answer
     assert _rows(fake_db) == []
 
     answer = await handle("record_request", {**DETAILS, "preferred_times": []})

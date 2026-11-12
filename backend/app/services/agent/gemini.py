@@ -216,12 +216,14 @@ class GeminiLiveSession:
             turn_complete=True,
         )
 
-    async def note(self, text: str) -> None:
-        """Put something in front of the model for its next turn, without
-        making it speak now.
+    async def note(self, text: str, urgent: bool = False) -> None:
+        """Put something in front of the model.
 
-        Unlike `say`, the turn is left open: the model reads this when the
-        caller next speaks. How a correction reaches it mid-call.
+        Not urgent: for its next turn, without making it speak now; the turn
+        is left open and the model reads this when the caller next speaks.
+        How a correction reaches it mid-call. Urgent: the turn is closed, so
+        the model answers it at once, cutting in on what it was saying. How
+        "that number has ten digits" gets ahead of the read-back.
         """
         session = self._session
         if session is None or self._closed:
@@ -230,7 +232,7 @@ class GeminiLiveSession:
 
         await session.send_client_content(
             turns=types.Content(role="user", parts=[types.Part(text=text)]),
-            turn_complete=False,
+            turn_complete=urgent,
         )
 
     # ---- running ----------------------------------------------------------
@@ -354,6 +356,8 @@ class GeminiLiveSession:
                         said = getattr(content, "output_transcription", None)
                         if heard is not None and getattr(heard, "text", ""):
                             self.on_transcript("caller", heard.text)
+                        if heard is not None and getattr(heard, "finished", False):
+                            self.on_transcript("caller:done", "")
                         if said is not None and getattr(said, "text", ""):
                             self.on_transcript("agent", said.text)
 

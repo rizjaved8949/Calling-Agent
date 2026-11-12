@@ -201,9 +201,13 @@ async def persona_for(tenant: Tenant, call: Call | None = None,
         can_send_whatsapp=can_message,
     )
 
+    # The agent's own "Opening line" field, word for word; without one, a
+    # line in the agent's language and gender that names the organisation.
+    greeting = (voice["greeting"] or "").strip() or prompt.default_greeting(
+        tenant.name, language, voices.gender_of(voice.get("ttsVoice") or ""))
     return AgentPersona(
         instructions=instructions,
-        greeting=(voice["greeting"] or "").strip(),
+        greeting=greeting,
         voice=(voice["ttsVoice"] or "").strip(),
         language=language,
         pace=(voice.get("pace") or "").strip(),
@@ -744,6 +748,8 @@ def _read_back(kind, values: dict, grouped_mobile: str, *, mobile_confirmed: boo
 #: An instruction to act on, not a sentence to repeat: on a real call the
 #: agent turned "when the caller says it is right" into a "conditions" step
 #: it announced to the caller.
+#: How a missing detail is asked for. An instruction, not a verdict.
+ASK_NEXT = "Ask next for "
 READ_BACK_INSTRUCTION = (
     "Not recorded yet. Read this back once, in the caller's language, and ask if "
     "it is right. When they say yes, call record_request again with confirmed "
@@ -785,6 +791,13 @@ async def _record_request(tenant: Tenant, call: Call, args: dict,
         kind = RequestType(str(args.get("type") or "other").strip().lower())
     except ValueError:
         kind = RequestType.OTHER
+    # Everything the caller gave on an earlier call to this tool stays given:
+    # on a real call the model dropped the model name it had been told and
+    # asked for it again ("main model aapko pahle hi bata chuka hun").
+    given: dict = pending.setdefault("given", {})
+    earlier = dict(given.get(kind.value) or {})
+    args = {**earlier, **{k: v for k, v in args.items() if v not in (None, "", [])}}
+    given[kind.value] = {k: v for k, v in args.items() if k != "confirmed" and v}
     times = args.get("preferred_times") or []
     if isinstance(times, str):
         times = [times]
@@ -829,9 +842,13 @@ async def _record_request(tenant: Tenant, call: Call, args: dict,
         # five things in one breath.
         ask = " and ".join(missing[:2])
         rest = len(missing) - len(missing[:2])
-        return (f"Not recorded yet. Ask next for {ask}"
+        # Not "not recorded": the model turned that into "shikayat darj nahi
+        # ho saki" on a real call. Nothing has failed; a detail is wanted.
+        return (f"{ASK_NEXT}{ask}"
                 + (f"; {rest} more after that" if rest > 0 else "")
-                + ". Ask for at most two details per turn, never everything at once.")
+                + ". Nothing has failed: do not mention recording or any problem to the "
+                "caller. Ask for these, at most two per turn, then call record_request "
+                "again with every detail they have given.")
 
     fingerprint = json.dumps({**values, "type": kind.value}, sort_keys=True)
     already = pending.get("recorded") or {}
@@ -867,7 +884,8 @@ async def _record_request(tenant: Tenant, call: Call, args: dict,
         return (f"Recorded. Reference {record.reference}. Say the team will send the "
                 "answer on WhatsApp. Do not say anything has been sent.")
     return (f"Recorded. Reference {record.reference}. Tell the caller it is a request, "
-            "not a confirmation; the team will contact them.")
+            "not a confirmation, then give the next step from your material: who will "
+            "contact them and by when, and the customer-care route if it has one.")
 
 
 def _calculate(args: dict) -> str:
@@ -980,6 +998,12 @@ async def _end_call(tenant: Tenant, call: Call, args: dict, pending: dict) -> st
                      turns_mod.judged(turns_mod.last_turn(conversation, "caller")))
             return NOT_YET
     log.info("call %s: the agent is ending the call (%s)", call.id, reason)
+    hold = getattr(session, "hold_after_goodbye", None)
+    if (callable(hold) and conversation
+            and turns_mod.agent_said_closing(turns_mod.last_turn(conversation, "agent"))):
+        # The goodbye is said. Anything more the model says before the caller
+        # does is the goodbye again, and it is not heard.
+        hold()
     asyncio.create_task(_hang_up_after_goodbye(tenant, call, reason))
     # Not "say your goodbye now": the goodbye was said before this was
     # called, so that invited a second closing line, and the agent
@@ -1113,10 +1137,18 @@ async def _hang_up_after_goodbye(tenant: Tenant, call: Call, reason: str) -> Non
         if turns_mod.is_new_request(heard):
             log.info("call %s: the caller asked something after the goodbye (%r); "
                      "staying on the line", call.id, turns_mod.judged(heard))
+            _release_hold(session)
             return
         log.info("call %s: heard %r after the goodbye, not a new request; ending",
                  call.id, turns_mod.judged(heard) or "nothing transcribed")
     await hang_up(tenant, call, reason)
+
+
+def _release_hold(session) -> None:
+    """The call goes on: what the model said after the goodbye is heard."""
+    release = getattr(session, "release_hold", None)
+    if callable(release):
+        release()
 
 
 def _caller_said_since(session, index: int) -> str:
@@ -1174,9 +1206,39 @@ MOBILE_LENGTH_NOTE = (
     + "The mobile number the caller just gave has {n} digits; a Pakistani mobile "
     "has 11. Say so and ask for it again; do not read it back as complete."
 )
+NOTHING_SENT_CORRECTION = (
+    NOTE_PREFIX
+    + "Nothing has been recorded or sent. Ask for any missing details (mobile "
+    "first), read back, then call record_request."
+)
 #: How long after a caller's words arrive before the number in them is
-#: counted: the rest of a number said slowly may still be on its way.
+#: counted, when the recogniser has not said the turn is finished: the rest
+#: of a number said slowly may still be on its way. A finished turn is
+#: counted at once.
 MOBILE_NOTE_DELAY_SECONDS = 1.5
+
+#: The agent saying a request is on its way to the team: "team ko bhej rahi
+#: hoon", "forward kar diya", "team tak pohncha diya". With no reference on
+#: the call, nothing is on its way anywhere.
+_FORWARD_CLAIMS = turns_mod._phrases(
+    "team ko bhej", "team ko forward", "team tak pohncha", "team tak pahuncha",
+    "team tak pohancha", "team tak bhej", "team ko de di", "team ko de diya", "team ko pass",
+    "team ko bata di", "team ko bata diya", "team ko send", "team ko pohncha", "aage bhej",
+    "aage forward", "forward kar rahi", "forward kar raha", "forward kar diya",
+    "forward kar di", "forward kar dia", "forwarded", "forwarding", "passed on", "passed it on",
+    "sent to the team", "sending to the team", "sent it to the team", "escalate kar",
+    "escalated", "escalating", "department ko bhej", "department ko forward",
+    "concerned team ko", "team ko bheja", "team ko bheji",
+)
+
+
+def _claims_forwarded(agent_text: str) -> bool:
+    """The agent said the request is being, or has been, sent on to the team."""
+    for clause in _clauses(agent_text):
+        if (turns_mod._has_any(clause, _FORWARD_CLAIMS)
+                and not turns_mod._has_any(clause, _NOT_A_CLAIM)):
+            return True
+    return False
 
 #: Only a claim that something *has been* recorded counts. "Record kar
 #: loongi" (I will record) and "record karne ke liye" (in order to record)
@@ -1223,6 +1285,20 @@ _NOT_A_CLAIM = turns_mod._phrases(
 _NOT_A_CLAIM_SCRIPT = ("نہیں", "سکتی", "سکتا", "سکتے", "ابھی", "گی", "گا", "گے",
                        "جائے", "اگر", "جب")
 _SENTENCES = re.compile(r"[^.!?؟۔।]+[.!?؟۔।]*")
+#: Where one statement ends and another starts inside a sentence: "mujhe
+#: maloom nahi ..., lekin main team ko bhej rahi hoon" is a denial and a
+#: claim, and the claim is not excused by the denial's "nahi".
+_CLAUSE_BREAK = re.compile(r"[,;:]|(?:lekin|magar|but|phir|aur|and|to|toh)", re.I)
+
+
+def _clauses(agent_text: str):
+    """Each statement in the agent's words, questions left out."""
+    for sentence in _SENTENCES.findall(agent_text or ""):
+        if sentence.rstrip().endswith(("?", "؟")):
+            continue
+        for clause in _CLAUSE_BREAK.split(sentence):
+            if clause and clause.strip():
+                yield clause
 
 #: References record_request has handed out on each live call, so a claim
 #: of "recorded" can be checked against what actually happened.
@@ -1246,14 +1322,12 @@ def _claims_recorded(agent_text: str) -> bool:
     ("record kar loon?") or a denial ("abhi record nahi hui") is not a
     claim, however many of the words it shares with one.
     """
-    for sentence in _SENTENCES.findall(agent_text or ""):
-        if sentence.rstrip().endswith(("?", "؟")):
-            continue
-        if turns_mod._has_any(sentence, _RECORDED_CLAIMS):
-            if not turns_mod._has_any(sentence, _NOT_A_CLAIM):
+    for clause in _clauses(agent_text):
+        if turns_mod._has_any(clause, _RECORDED_CLAIMS):
+            if not turns_mod._has_any(clause, _NOT_A_CLAIM):
                 return True
-        elif turns_mod._has_script(sentence, _RECORDED_CLAIMS_SCRIPT):
-            if not turns_mod._has_script(sentence, _NOT_A_CLAIM_SCRIPT):
+        elif turns_mod._has_script(clause, _RECORDED_CLAIMS_SCRIPT):
+            if not turns_mod._has_script(clause, _NOT_A_CLAIM_SCRIPT):
                 return True
     return False
 
@@ -1284,23 +1358,36 @@ def _transcript_watch(tenant: Tenant, call: Call):
       second read-back.
     """
     state: dict = {"armed_at": -1, "ending": None, "corrected": -1, "nudged": -1,
-                   "counted": -1}
+                   "counted": set()}
 
     def watch(who: str, _text: str) -> None:
         session = _sessions.get(call.id)
         if session is None:
             return
         conversation = session.turns()
+        if who == "caller:done":
+            # The caller's turn is finished: a number in it is counted now,
+            # and the model is told before it can read a short one back.
+            if not conversation or conversation[-1][0] != "caller":
+                return
+            turn_index = len(conversation) - 1
+            count = phones.wrong_length_mobile(conversation[-1][1], _country(tenant))
+            if count is not None and turn_index not in state["counted"]:
+                state["counted"].add(turn_index)
+                log.info("call %s: the caller gave a mobile number with %d digits; the "
+                         "agent is told to ask for it again", call.id, count)
+                _keep(asyncio.create_task(session.note_to_agent(
+                    MOBILE_LENGTH_NOTE.format(n=count), urgent=True)))
+            return
         if not conversation or conversation[-1][0] != who:
             return
         turn_index = len(conversation) - 1
         latest = conversation[-1][1]
         if who == "caller":
-            if (state["counted"] != turn_index
+            if (turn_index not in state["counted"]
                     and phones.wrong_length_mobile(latest, _country(tenant)) is not None):
-                state["counted"] = turn_index
                 _keep(asyncio.create_task(
-                    _note_mobile_length(tenant, call, session, turn_index)))
+                    _note_mobile_length(tenant, call, session, turn_index, state)))
             if state["nudged"] == turn_index or _recorded.get(call.id):
                 return
             if not turns_mod.is_affirmative(latest) or turns_mod.is_new_request(latest):
@@ -1326,33 +1413,41 @@ def _transcript_watch(tenant: Tenant, call: Call):
                 since = len(session.transcript)
                 state["ending"] = _keep(asyncio.create_task(
                     _end_after_closing(tenant, call, session, since, state)))
-        elif _claims_recorded(latest) and not _recorded.get(call.id):
+        elif not _recorded.get(call.id) and (_claims_recorded(latest)
+                                             or _claims_forwarded(latest)):
             if state["corrected"] != turn_index:
                 state["corrected"] = turn_index
-                log.warning("call %s: the agent claimed a request was recorded, and none "
-                            "was: %r", call.id, turns_mod.judged(latest))
-                _keep(asyncio.create_task(session.note_to_agent(NOT_RECORDED_CORRECTION)))
+                forwarded = not _claims_recorded(latest)
+                log.warning("call %s: the agent claimed a request was %s, and none was: %r",
+                            call.id, "sent on" if forwarded else "recorded",
+                            turns_mod.judged(latest))
+                note = NOTHING_SENT_CORRECTION if forwarded else NOT_RECORDED_CORRECTION
+                _keep(asyncio.create_task(session.note_to_agent(note)))
 
     return watch
 
 
 async def _note_mobile_length(tenant: Tenant, call: Call, session: CallSession,
-                              turn_index: int) -> None:
+                              turn_index: int, state: dict) -> None:
     """Tell the model a mobile number was the wrong length, once the caller's
-    turn has had time to finish arriving. Only the count is logged."""
+    turn has had time to finish arriving. The fallback for a recogniser that
+    never says the turn is finished; only the count is logged."""
     try:
         await asyncio.sleep(MOBILE_NOTE_DELAY_SECONDS)
         if _sessions.get(call.id) is not session or session.closed:
             return
+        if turn_index in state["counted"]:
+            return                                   # counted when the turn finished
         conversation = session.turns()
         if turn_index >= len(conversation) or conversation[turn_index][0] != "caller":
             return
         count = phones.wrong_length_mobile(conversation[turn_index][1], _country(tenant))
         if count is None:
             return                                   # the rest of it arrived
+        state["counted"].add(turn_index)
         log.info("call %s: the caller gave a mobile number with %d digits; the agent "
                  "is told to ask for it again", call.id, count)
-        await session.note_to_agent(MOBILE_LENGTH_NOTE.format(n=count))
+        await session.note_to_agent(MOBILE_LENGTH_NOTE.format(n=count), urgent=True)
     except asyncio.CancelledError:
         raise
     except Exception:  # noqa: BLE001
@@ -1376,6 +1471,7 @@ async def _end_after_closing(tenant: Tenant, call: Call, session: CallSession,
             log.info("call %s: the caller asked something after the closing line (%r); "
                      "the call goes on", call.id, turns_mod.judged(heard))
             state["armed_at"] = -1
+            _release_hold(session)
             return
         conversation = session.turns()
         _index, last_words = turns_mod.last_meaningful_caller_turn(conversation)
@@ -1386,6 +1482,7 @@ async def _end_after_closing(tenant: Tenant, call: Call, session: CallSession,
                      "progress and the caller has not said goodbye (their last words "
                      "were %r)", call.id, turns_mod.judged(last_words))
             state["armed_at"] = -1
+            _release_hold(session)
             return
         log.info("call %s: ending the call from the server: the agent said its closing "
                  "line and the caller said %r", call.id,

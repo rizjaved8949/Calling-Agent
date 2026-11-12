@@ -54,6 +54,9 @@ HELLO_MAX_SECONDS = float(_settings.hello_max_seconds)
 
 #: How many times a model session that dropped mid-call is reconnected.
 RECONNECT_ATTEMPTS = 1
+#: How long the model's words after the goodbye may wait for the end-call
+#: guard's decision before they are played anyway.
+HOLD_MAX_SECONDS = 20.0
 #: How much of the conversation the reconnected session is given.
 RESUME_TRANSCRIPT_CHARS = 6_000
 RESUME_NOTE = (
@@ -185,6 +188,16 @@ class CallSession:
         # Against `caller_spoke_at` it says whether what they just said has
         # been transcribed yet, which a guard must wait for before judging.
         self.caller_transcribed_at = 0.0
+        # When the recogniser last said the caller's turn was complete; what
+        # must be judged on a whole turn (a number's length) is judged then.
+        self.caller_turn_done_at = 0.0
+        # After the goodbye: what the model says next waits, unheard, until
+        # the end-call guard decides whether the caller asked something new.
+        # See `hold_after_goodbye`.
+        self._closing_hold = False
+        self._held_since = 0.0
+        self._held_audio: list[bytes] = []
+        self._held_lines: list[tuple[str, str]] = []
         # How many times a dropped model session has been reconnected.
         self._reconnects = 0
 
@@ -440,6 +453,12 @@ class CallSession:
     def _on_agent_audio(self, pcm24: bytes, _rate: int) -> None:
         if self._closed or self.handler is not Handler.AGENT:
             return
+        if self._closing_hold:
+            if time.time() - self._held_since > HOLD_MAX_SECONDS:
+                self.release_hold()                  # nobody decided; better heard than lost
+            else:
+                self._held_audio.append(self._agent_to_line.process(pcm24))
+                return
         # Not recorded here. This is the model's burst, not the line's
         # timeline — `_to_line` records each frame as it actually goes out.
         self._pacer.offer(self._agent_to_line.process(pcm24))
@@ -505,6 +524,28 @@ class CallSession:
                 self.on_clear()
 
     def _note(self, who: str, text: str) -> None:
+        if who == "caller:done":
+            # The recogniser has finished the caller's turn. Not a line of
+            # the transcript; a moment the watchers can act on.
+            self.caller_turn_done_at = time.time()
+            if self.on_transcript:
+                with contextlib.suppress(Exception):
+                    self.on_transcript(who, "")
+            return
+        if who == "agent":
+            from .script import strip_tool_calls
+
+            text, leaked = strip_tool_calls(text)
+            if leaked:
+                log.warning("call %s: the model spoke a function call (%d); taken out of "
+                            "the transcript", self.call_id, leaked)
+                if not text.strip():
+                    return
+            if self._closing_hold:
+                # Said after the goodbye and not heard yet (see
+                # hold_after_goodbye): kept aside, with its audio.
+                self._held_lines.append((who, text))
+                return
         self.transcript.append((who, text))
         if who == "caller" and (text or "").strip():
             self.caller_transcribed_at = time.time()
@@ -556,17 +597,58 @@ class CallSession:
         return " ".join(text.strip() for who, text in self.transcript[index:]
                         if who == "caller" and text.strip())
 
-    async def note_to_agent(self, text: str) -> None:
-        """Tell the model something for its next turn, without making it speak.
-        Never raises: a correction that cannot be delivered is logged."""
+    async def note_to_agent(self, text: str, *, urgent: bool = False) -> None:
+        """Tell the model something. Not urgent: for its next turn, without
+        making it speak. Urgent: now, cutting in on whatever it was about to
+        say, which is how "that number is too short" reaches it before the
+        read-back. Never raises: a note that cannot be delivered is logged."""
         agent = self._agent
         note = getattr(agent, "note", None)
         if self._closed or agent is None or not callable(note):
             return
         try:
-            await note(text)
+            try:
+                await note(text, urgent=urgent)
+            except TypeError:
+                await note(text)
         except Exception:  # noqa: BLE001
             log.exception("call %s: could not pass a note to the model", self.call_id)
+
+    def hold_after_goodbye(self) -> None:
+        """The goodbye has been said: what the model says next waits, unheard.
+
+        A model told "say nothing more" said the closing line a second time
+        on a real call. What it says after the goodbye, with the caller
+        silent or making noise, is the goodbye again, and the hang-up
+        discards it. What it says after the caller asks something new is an
+        answer, and `release_hold` plays it, audio and transcript, when the
+        end-call guard decides the call goes on.
+        """
+        if self._closing_hold:
+            return
+        self._closing_hold = True
+        self._held_since = time.time()
+        self._held_audio = []
+        self._held_lines = []
+
+    def release_hold(self) -> None:
+        """The caller asked something after the goodbye: what the model said
+        meanwhile is said now, and the line is open again."""
+        if not self._closing_hold:
+            return
+        self._closing_hold = False
+        audio, lines = self._held_audio, self._held_lines
+        self._held_audio, self._held_lines = [], []
+        for pcm in audio:
+            self._pacer.offer(pcm)
+        for who, text in lines:
+            self._note(who, text)
+        log.info("call %s: the call goes on after the goodbye; %d held frames released",
+                 self.call_id, len(audio))
+
+    @property
+    def holding_after_goodbye(self) -> bool:
+        return self._closing_hold
 
     def timing_summary(self) -> str:
         """How quickly the agent answered, for the settled log line."""
