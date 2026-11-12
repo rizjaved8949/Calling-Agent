@@ -20,7 +20,7 @@ from __future__ import annotations
 import asyncio
 import time
 
-from ..errors import AppError
+from ..errors import AppError, UpstreamError
 from ..models.call import Call
 from ..models.tenant import Tenant
 from .telephony import Infobip
@@ -88,6 +88,56 @@ async def _twilio_turn(account_sid: str) -> None:
         _twilio_last[account_sid] = time.monotonic()
 
 
+#: What the Numbers screen says when Infobip refused the key on a call.
+INFOBIP_KEY_REJECTED = "Infobip rejected the API key. Update it on Numbers and press Verify."
+
+
+async def _line_must_be_verified(tenant: Tenant, call: Call) -> None:
+    """Refuse to dial on a line the provider has not accepted.
+
+    The dialer checks this when a line is chosen; a campaign did not, and a
+    line that failed verification yesterday would still be dialled today.
+    One chokepoint for every path, at the cost of one read per call.
+    """
+    from ..repositories import numbers as number_repo
+
+    line_id = tenant.line_id or call.line_id
+    if not line_id:
+        return
+    number = await number_repo.get_safe(tenant.phone_number_id, line_id)
+    if number is not None and not number.verified:
+        raise AppError(
+            409,
+            f"{number.label or number.phone_number} is not verified"
+            f"{': ' + number.status_detail if number.status_detail else ''}. "
+            "Press Verify on the Numbers page before calling from it.",
+            code="number_not_verified",
+        )
+
+
+async def _mark_line_failed(tenant: Tenant, call: Call, detail: str) -> None:
+    """Record on the line that its credentials were refused. Never raises."""
+    from ..repositories import numbers as number_repo
+    from ..models.number import NumberStatus
+
+    line_id = tenant.line_id or call.line_id
+    if not line_id:
+        return
+    try:
+        number = await number_repo.get(tenant.phone_number_id, line_id)
+        if number is None:
+            return
+        number.status = NumberStatus.FAILED
+        number.status_detail = detail
+        number.verified_at = None
+        await number_repo.save(number)
+    except Exception:  # noqa: BLE001
+        import logging
+
+        logging.getLogger(__name__).exception(
+            "number %s: could not mark it failed after the carrier refused its key", line_id)
+
+
 async def place_call(tenant: Tenant, call: Call, destination: str) -> dict:
     """Ring `destination` for `call`, and record the carrier's call id on it.
 
@@ -97,7 +147,12 @@ async def place_call(tenant: Tenant, call: Call, destination: str) -> dict:
     The call row is updated in memory; saving it is the caller's job, as it
     was before. The carrier's raw answer is returned for anything else the
     caller wants from it (the dialer keeps Infobip's dialog id).
+
+    A line the provider has not verified is refused before anything is
+    dialled, and a key Infobip rejects (a 401 on the call itself) marks the
+    line failed with what to do, instead of a generic 502 that said nothing.
     """
+    await _line_must_be_verified(tenant, call)
     carrier = carrier_for(tenant)
     if is_twilio(tenant):
         number_id = tenant.line_id or call.line_id
@@ -112,7 +167,13 @@ async def place_call(tenant: Tenant, call: Call, destination: str) -> dict:
         )
         call.provider_call_id = str(result.get("sid") or "")
         return result
-    result = await carrier.place_call(destination)
+    try:
+        result = await carrier.place_call(destination)
+    except UpstreamError as exc:
+        if exc.http_status in (401, 403):
+            await _mark_line_failed(tenant, call, INFOBIP_KEY_REJECTED)
+            raise AppError(409, INFOBIP_KEY_REJECTED, code="infobip_auth") from exc
+        raise
     call.provider_call_id = str(result.get("id") or result.get("callId") or "")
     return result
 

@@ -33,6 +33,9 @@ from collections import Counter
 log = logging.getLogger(__name__)
 
 _DEVANAGARI = re.compile(r"[ऀ-ॿ]")
+#: Urdu in its own script: the Arabic block, its supplements and the
+#: presentation forms a recogniser sometimes emits.
+_ARABIC = re.compile(r"[؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿]")
 
 #: How long the text model gets before the letter-by-letter version stands.
 MODEL_TIMEOUT_SECONDS = 20.0
@@ -40,6 +43,21 @@ MODEL_TIMEOUT_SECONDS = 20.0
 
 def has_devanagari(text: str) -> bool:
     return bool(text) and bool(_DEVANAGARI.search(text))
+
+
+def has_arabic_script(text: str) -> bool:
+    return bool(text) and bool(_ARABIC.search(text))
+
+
+def needs_respelling(text: str) -> bool:
+    """Whether a transcript has lines in a script its readers do not type in.
+
+    Devanagari always; Urdu script too, because a transcript that mixes
+    Urdu script, Roman Urdu and English line by line is three transcripts
+    interleaved. Both are respelled by the text model after the call; only
+    Devanagari has a letter-by-letter fallback.
+    """
+    return has_devanagari(text) or has_arabic_script(text)
 
 
 # ---------------------------------------------------------------------------
@@ -196,18 +214,18 @@ def readable(transcript: str) -> str:
 # ---------------------------------------------------------------------------
 
 _INSTRUCTIONS = (
-    "You convert phone-call transcript lines from Devanagari script into Roman "
-    "Urdu: Urdu written in English letters, the way people in Pakistan type it "
-    "in WhatsApp messages (for example \"Mujhe registration ki fees bata dein\"). "
-    "The speakers are Urdu speakers whose words were written down in Hindi "
-    "script by mistake. Use Urdu spellings (\"qeemat\", \"zaroorat\", "
-    "\"akhrajaat\"), and never add or remove words. Write English words "
-    "that appear in Devanagari as normal English (\"रजिस्ट्रेशन\" is "
-    "\"registration\"). Keep any text that is not Devanagari exactly as it is, "
-    "and keep punctuation. Only the spelling changes: keep every number, "
-    "amount and name exactly as said, a number spoken as a word stays a word "
-    "(\"पाँच सौ\" is \"paanch sau\", never \"500\"), and do not translate, "
-    "summarise, reorder or correct what was said.\n\n"
+    "You convert phone-call transcript lines written in Devanagari (Hindi) "
+    "script or in Urdu (Arabic) script into Roman Urdu: Urdu written in English "
+    "letters, the way people in Pakistan type it in WhatsApp messages (for "
+    "example \"Mujhe registration ki fees bata dein\"). The speakers are Urdu "
+    "speakers. Use Urdu spellings (\"qeemat\", \"zaroorat\", \"akhrajaat\"), and "
+    "never add or remove words. Write English words that appear in another "
+    "script as normal English (\"रजिस्ट्रेशन\" and \"رجسٹریشن\" are "
+    "\"registration\"). Keep any text that is already in Latin letters exactly "
+    "as it is, and keep punctuation. Only the spelling changes: keep every "
+    "number, amount and name exactly as said, a number spoken as a word stays "
+    "a word (\"पाँच सौ\" and \"پانچ سو\" are \"paanch sau\", never \"500\"), "
+    "and do not translate, summarise, reorder or correct what was said.\n\n"
     "You receive a JSON array of strings. Reply with only a JSON array of the "
     "same length, each item the converted version of the item at the same "
     "position."
@@ -215,13 +233,16 @@ _INSTRUCTIONS = (
 
 
 async def to_roman_urdu(lines: list[str], *, api_key: str, model: str) -> list[str]:
-    """`lines` with Devanagari rewritten as Roman Urdu by the text model.
+    """`lines` with Devanagari and Urdu script rewritten as Roman Urdu by the
+    text model.
 
-    Same length and order as given. Any line the model leaves out, garbles or
-    still writes in Devanagari is converted letter by letter instead, so the
-    result never contains Devanagari whatever the model does.
+    Same length and order as given. A Devanagari line the model leaves out,
+    garbles or still writes in another script is converted letter by letter
+    instead, so the result never contains Devanagari whatever the model
+    does. An Urdu-script line has no letter-by-letter fallback: if the model
+    cannot be trusted with it, it is kept as it was.
     """
-    targets = [k for k, line in enumerate(lines) if has_devanagari(line)]
+    targets = [k for k, line in enumerate(lines) if needs_respelling(line)]
     result = list(lines)
     if not targets:
         return result
@@ -242,10 +263,82 @@ async def to_roman_urdu(lines: list[str], *, api_key: str, model: str) -> list[s
         better = converted[n] if converted and n < len(converted) else ""
         good = isinstance(better, str) and faithful(lines[k], better)
         if converted and not good:
-            log.info("roman urdu: line %d kept letter by letter (the model's "
-                     "version did not match what was said)", k)
-        result[k] = better.strip() if good else romanize(lines[k])
+            log.info("roman urdu: line %d kept as it was (the model's version did "
+                     "not match what was said)", k)
+        if good:
+            result[k] = better.strip()
+        elif has_devanagari(lines[k]):
+            result[k] = romanize(lines[k])
+        # Urdu script with no good respelling: kept exactly as heard.
     return result
+
+
+# Urdu letters as the consonant skeleton `_sounds` reduces Roman text to, so
+# an Urdu-script line and its respelling can be compared the way a Devanagari
+# line is compared with its letter-by-letter form. Vowel letters and marks
+# say nothing; و and ی are vowels more often than not.
+_URDU_SOUNDS = {
+    "ب": "b", "پ": "p", "ت": "t", "ٹ": "t", "ث": "s", "ج": "j", "چ": "ch",
+    "ح": "", "خ": "kh", "د": "d", "ڈ": "d", "ذ": "z", "ر": "r", "ڑ": "r",
+    "ز": "z", "ژ": "zh", "س": "s", "ش": "sh", "ص": "s", "ض": "z", "ط": "t",
+    "ظ": "z", "ع": "", "غ": "gh", "ف": "f", "ق": "k", "ک": "k", "گ": "g",
+    "ل": "l", "م": "m", "ن": "n", "ں": "", "ه": "", "ہ": "", "ھ": "", "ء": "",
+    "ی": "", "ے": "", "ئ": "", "و": "", "ا": "", "آ": "", "أ": "", "ؤ": "",
+}
+
+
+def _urdu_word_sounds(word: str) -> str:
+    """One Urdu-script word as the consonant skeleton `_sounds` produces."""
+    letters = []
+    for index, ch in enumerate(word):
+        if ch == "و" and index == 0:
+            letters.append("w")                  # a word-initial و is a consonant
+        elif ch in _URDU_SOUNDS:
+            letters.append(_URDU_SOUNDS[ch])
+        elif ch.isascii() and ch.isalnum():
+            letters.append(ch.lower())
+        elif ch in _DIGITS:
+            letters.append(_DIGITS[ch])
+        elif ch in _URDU_DIGITS:
+            letters.append(_URDU_DIGITS[ch])
+    return _sounds("".join(letters))
+
+
+def _urdu_skeleton(text: str) -> str:
+    """The consonants of an Urdu-script line, as `_sounds` would write them."""
+    return "".join(_urdu_word_sounds(w) for w in re.split(r"\s+", text or "") if w)
+
+
+#: An Urdu-script line and its respelling, compared on consonants only, agree
+#: less exactly than a Devanagari pair: looser by design, with the digit,
+#: name and length checks doing the rest.
+MIN_SIMILARITY_URDU_SCRIPT = 0.6
+
+
+def _faithful_urdu_script(original: str, candidate: str) -> bool:
+    """`faithful` for an Urdu-script original: no letter-by-letter yardstick,
+    so digits, Latin words, length and the consonant skeleton carry it."""
+    if _digits(original) != _digits(candidate):
+        return False
+    if any(original.count(m) != candidate.count(m) for m in _KEPT_MARKS):
+        return False
+    have = Counter(w.lower() for w in _LATIN_WORD.findall(candidate))
+    kept = Counter(w.lower() for w in _LATIN_WORD.findall(_ARABIC.sub(" ", original)))
+    if any(have[word] < times for word, times in kept.items()):
+        return False
+    said_words = [w for w in original.split() if w]
+    words, theirs = len(said_words), len(candidate.split())
+    if abs(words - theirs) > max(2, round(words * 0.25)):
+        return False
+    wanted, got = _urdu_skeleton(original), _sounds(candidate)
+    if not wanted:
+        return True
+    if difflib.SequenceMatcher(None, wanted, got).ratio() < MIN_SIMILARITY_URDU_SCRIPT:
+        return False
+    # Word by word too, as for Devanagari: a translation keeps the numbers
+    # and the names and still says something else.
+    return _every_word_kept([_urdu_word_sounds(w) for w in said_words],
+                            [_sounds(w) for w in candidate.split()])
 
 
 # ---------------------------------------------------------------------------
@@ -292,8 +385,12 @@ def _sounds(text: str) -> str:
     return re.sub(r"[aeiouyh]", "", text)
 
 
+_URDU_DIGITS = {chr(0x06F0 + i): str(i) for i in range(10)}
+_URDU_DIGITS.update({chr(0x0660 + i): str(i) for i in range(10)})
+
+
 def _digits(text: str) -> list[str]:
-    plain = "".join(_DIGITS.get(ch, ch) for ch in text)
+    plain = "".join(_DIGITS.get(ch, _URDU_DIGITS.get(ch, ch)) for ch in text)
     return sorted(_DIGIT_RUN.findall(plain))
 
 
@@ -304,8 +401,10 @@ def faithful(original: str, candidate: str) -> bool:
     nicer spelling: the letter-by-letter version is used instead.
     """
     candidate = (candidate or "").strip()
-    if not candidate or has_devanagari(candidate):
+    if not candidate or has_devanagari(candidate) or has_arabic_script(candidate):
         return False
+    if not has_devanagari(original) and has_arabic_script(original):
+        return _faithful_urdu_script(original, candidate)
     plain = romanize(original)
 
     # Numbers: the same figures, and no new ones ("paanch sau" is not "500").
@@ -340,7 +439,8 @@ def faithful(original: str, candidate: str) -> bool:
         return False
     # ...and word by word, so one name or one word swapped for another in an
     # otherwise faithful line ("Ali" for "Ahmed") is caught too.
-    return _every_word_kept(plain.split(), candidate.split())
+    return _every_word_kept([_sounds(w) for w in plain.split()],
+                            [_sounds(w) for w in candidate.split()])
 
 
 #: How alike one said word and its respelling must sound (0-1). Loanwords
@@ -348,8 +448,8 @@ def faithful(original: str, candidate: str) -> bool:
 MIN_WORD_SIMILARITY = 0.5
 
 
-def _alike(said: str, written: str) -> float:
-    a, b = _sounds(said), _sounds(written)
+def _alike(a: str, b: str) -> float:
+    """How alike two words sound, given their consonant skeletons."""
     if not a and not b:
         return 1.0                       # "है" / "hai": nothing to compare
     if not a or not b:
@@ -362,9 +462,10 @@ def _alike(said: str, written: str) -> float:
 def _every_word_kept(said: list[str], written: list[str]) -> bool:
     """Whether the words line up one to one, each sounding like itself.
 
-    Aligned in order, allowing one said word written as two ("aapki" as
-    "aap ki") or two as one. A said word with no counterpart, or matched to
-    one that sounds different, means the line was changed, not respelled.
+    Both sides are consonant skeletons (`_sounds`). Aligned in order,
+    allowing one said word written as two ("aapki" as "aap ki") or two as
+    one. A said word with no counterpart, or matched to one that sounds
+    different, means the line was changed, not respelled.
     """
     n, m = len(said), len(written)
     worst = float("inf")

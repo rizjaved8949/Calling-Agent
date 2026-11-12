@@ -149,6 +149,7 @@ def fake_db(monkeypatch) -> Iterator[FakeSupabase]:
         "app.repositories.knowledge",
         "app.repositories.agents",
         "app.repositories.numbers",
+        "app.repositories.requests",
         "app.repositories.support",
         "app.security.superadmin",
         "app.services.platform_settings",

@@ -87,7 +87,15 @@ def _cell(value: Any, limit: int = 32_000) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def build_workbook(tenant: Tenant, calls: list[Call]) -> bytes:
+REQUEST_HEADERS = (
+    "Reference", "Date", "Time", "Type", "Status", "Name", "Mobile", "City",
+    "Location", "Vehicle", "Registration", "Mileage", "Preferred times", "Details",
+    "Reply by", "Call ID", "Note",
+)
+
+
+def build_workbook(tenant: Tenant, calls: list[Call],
+                   requests: list[Any] | None = None) -> bytes:
     """The workbook itself. Synchronous and CPU-bound — call it in a thread."""
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font, PatternFill
@@ -154,7 +162,35 @@ def build_workbook(tenant: Tenant, calls: list[Call]) -> bytes:
         cell.alignment = Alignment(wrap_text=True, vertical="top")
     transcripts.freeze_panes = "A2"
 
-    # --- Sheet 3: the summary the company actually looks at ------------------
+    # --- Sheet 3: what callers asked for ------------------------------------
+    # Every request the agent recorded, with the reference the caller was
+    # given. This is the team's work list until there is a screen for it.
+    sheet_requests = book.create_sheet("Requests")
+    sheet_requests.append(list(REQUEST_HEADERS))
+    for item in requests or []:
+        date, clock = _stamp(item.created_at)
+        sheet_requests.append([
+            _cell(item.reference), date, clock,
+            item.type.value.replace("_", " ").title(),
+            item.status.value.replace("_", " ").title(),
+            _cell(item.name), _cell(item.mobile), _cell(item.city), _cell(item.location),
+            _cell(item.vehicle_model), _cell(item.registration), _cell(item.mileage),
+            _cell("; ".join(item.preferred_times)), _cell(item.details),
+            item.reply_by.value.title(), _cell(item.call_id), _cell(item.note),
+        ])
+    for column, title in enumerate(REQUEST_HEADERS, start=1):
+        cell = sheet_requests.cell(row=1, column=column)
+        cell.font = header_font
+        cell.fill = header_fill
+        width = max(len(title) + 4, 12)
+        if title in {"Details", "Note"}:
+            width = 48
+        elif title in {"Call ID", "Reference"}:
+            width = 24
+        sheet_requests.column_dimensions[get_column_letter(column)].width = width
+    sheet_requests.freeze_panes = "A2"
+
+    # --- Sheet 4: the summary the company actually looks at ------------------
     overview = book.create_sheet("Overview", 0)
     answered = [c for c in calls if c.answered_at]
     stored = [c for c in calls if c.recording_state == RecordingState.READY]
@@ -190,8 +226,16 @@ def build_workbook(tenant: Tenant, calls: list[Call]) -> bytes:
 
 
 async def workbook_for(tenant: Tenant, *, limit: int = 5000) -> bytes:
+    from ..repositories import requests as request_repo
+
     calls = await call_repo.list_calls(tenant.phone_number_id, limit=limit)
-    return await asyncio.to_thread(build_workbook, tenant, calls)
+    try:
+        requests = await request_repo.list_for(tenant.phone_number_id, limit=limit)
+    except Exception:  # noqa: BLE001 — the table may not be migrated yet
+        log.warning("tenant %s: could not read requests for the report; the sheet "
+                    "will be empty", tenant.phone_number_id)
+        requests = []
+    return await asyncio.to_thread(build_workbook, tenant, calls, requests)
 
 
 # ---------------------------------------------------------------------------

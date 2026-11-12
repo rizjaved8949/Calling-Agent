@@ -56,8 +56,13 @@ class UpstreamError(AppError):
     502 rather than 500: the caller's request was fine, and a retry may work.
     """
 
-    def __init__(self, message: str, *, details: Any = None):
+    def __init__(self, message: str, *, details: Any = None, http_status: int = 0,
+                 provider_code: int | None = None):
         super().__init__(502, message, code="upstream_error", details=details)
+        # What the provider actually answered, for the callers that act on
+        # it: a 401 from Meta or Infobip means a dead credential, not a retry.
+        self.http_status = http_status
+        self.provider_code = provider_code
 
 
 def _envelope(status: int, message: str, code: str, details: Any = None) -> JSONResponse:

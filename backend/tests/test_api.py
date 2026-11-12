@@ -534,7 +534,7 @@ def test_workbook_downloads_and_opens(client, tenant_factory, auth):
     assert "Northwind" in response.headers["content-disposition"]
 
     book = load_workbook(BytesIO(response.content))
-    assert book.sheetnames == ["Overview", "Calls", "Transcripts"]
+    assert book.sheetnames == ["Overview", "Calls", "Transcripts", "Requests"]
     rows = list(book["Calls"].values)
     assert rows[0][0] == "Call ID"
     assert rows[1][0] == "x-1"

@@ -65,6 +65,12 @@ async def health() -> dict:
             # Twilio line needs the public address to be https.
             "twilioReachable": settings.public_base_url.strip().startswith("https://"),
             "callsInProgress": live.active(),
+            # The same count under the name the model's own limit uses: every
+            # call is one live model session, and the key allows only so many
+            # at once. Set MAX_CONCURRENT_CALLS to that limit, so a call past
+            # it is turned away politely rather than refused by the model
+            # mid-greeting. Counts only; nothing here names a key.
+            "liveSessions": live.active(),
             # How many more this process will take before it starts refusing.
             # Visible here so headroom can be read off the health check during
             # a busy period, rather than inferred from a call that failed.

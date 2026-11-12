@@ -24,8 +24,10 @@ import time
 from enum import Enum
 from typing import Any, Awaitable, Callable
 
+from ...config import settings as _settings
 from .audio_rate import FRAME_MS, PHONE_RATE, SILENT_FRAME, RateConverter, gemini_to_phone
 from . import engines
+from . import turns as turns_mod
 from .caller_level import VOICE_FLOOR, CallerLevel, rms
 from .gemini import AgentPersona, AgentUnavailable, LiveSettings, turn_timing
 from .pacer import HUMAN_PREROLL_FRAMES, PREROLL_FRAMES, FramePacer
@@ -38,13 +40,17 @@ log = logging.getLogger(__name__)
 ECHO_TAIL_SECONDS = 1.0
 
 # An outbound call's greeting waits for the person's "hello". See
-# `CallSession.hold_for_hello`.
-#: How long to wait for anyone to speak before greeting anyway.
-HELLO_WAIT_SECONDS = 1.5
+# `CallSession.hold_for_hello`. Read from the settings (HELLO_WAIT_SECONDS,
+# HELLO_DONE_SECONDS, HELLO_MAX_SECONDS in the environment) so they can be
+# tuned on the host without a deploy; held here as module values so a test
+# can set them too.
+#: How long to wait for anyone to speak before greeting anyway. 1.5 s
+#: missed the person's hello on six calls in thirteen; 0.8 s catches it.
+HELLO_WAIT_SECONDS = float(_settings.hello_wait_seconds)
 #: How much quiet after they spoke means their "hello" is finished.
-HELLO_DONE_SECONDS = 0.4
+HELLO_DONE_SECONDS = float(_settings.hello_done_seconds)
 #: The longest the greeting is ever held, so a noisy line cannot hold it.
-HELLO_MAX_SECONDS = 4.0
+HELLO_MAX_SECONDS = float(_settings.hello_max_seconds)
 
 
 class Handler(str, Enum):
@@ -81,13 +87,14 @@ class CallSession:
         # and the agent's pace, so every way of starting a call — inbound,
         # outbound, the browser test socket — gets the same treatment rather
         # than three places remembering to do it.
-        from ...config import settings as _settings
-
         live_settings.vad_prefix_ms, live_settings.vad_silence_ms = turn_timing(
             persona.pace,
             prefix_ms=_settings.vad_prefix_ms,
             silence_ms=_settings.vad_silence_ms,
         )
+        live_settings.vad_start_sensitivity = _settings.vad_start_sensitivity
+        live_settings.vad_end_sensitivity = _settings.vad_end_sensitivity
+        live_settings.temperature = _settings.gemini_temperature
 
         # A call an employee placed from the dialer: a person from the start,
         # no model, and when they leave the call ends rather than an agent
@@ -153,6 +160,14 @@ class CallSession:
         # Set while an outbound greeting waits for the person's "hello":
         # (since, heard_at), wall clock; heard_at is 0 until they speak.
         self._hello: list[float] | None = None
+        # How quickly the agent answers, measured rather than guessed: when
+        # the line was picked up, when the agent's first word went out, and
+        # how long after the caller stopped speaking each reply began.
+        self.pickup_at = 0.0
+        self.first_audio_at = 0.0
+        self._reply_latencies: list[float] = []
+        self._last_frame_silent = True
+        self._answered_up_to = 0.0
 
     # ---- lifecycle --------------------------------------------------------
 
@@ -167,6 +182,7 @@ class CallSession:
         seconds later. See `attach_transport`.
         """
         if paced:
+            self.pickup_at = self.pickup_at or time.time()
             self._pacer_task = asyncio.create_task(self._run_pacer())
         if not self.human:
             await self._start_agent()
@@ -180,6 +196,7 @@ class CallSession:
         """
         self._transport = send_to_caller
         self.attached = True
+        self.pickup_at = self.pickup_at or time.time()
         if self._pacer_task is None and not self._closed:
             self._pacer_task = asyncio.create_task(self._run_pacer())
 
@@ -202,7 +219,18 @@ class CallSession:
         """
         self._transport(frame)
         if frame != SILENT_FRAME:
-            self.agent_audible_at = time.time()
+            now = time.time()
+            self.agent_audible_at = now
+            if not self.first_audio_at:
+                self.first_audio_at = now
+            if self._last_frame_silent and self.caller_spoke_at > self._answered_up_to:
+                # A reply has just begun, and the caller said something since
+                # the last one: how long they waited for it.
+                self._reply_latencies.append(now - self.caller_spoke_at)
+                self._answered_up_to = self.caller_spoke_at
+            self._last_frame_silent = False
+        else:
+            self._last_frame_silent = True
         if self._recorder and self._line_to_record:
             with contextlib.suppress(Exception):
                 self._recorder.feed("agent", self._line_to_record.process(frame))
@@ -307,7 +335,11 @@ class CallSession:
             return
         if self._recorder and self._caller_to_record:
             self._recorder.feed("caller", self._caller_to_record.process(pcm16))
-        voiced = rms(pcm16) >= VOICE_FLOOR
+        # Judged on what the model hears, after the level is raised: a quiet
+        # caller's "hello?" sat under the floor in the raw audio, and the
+        # greeting talked over it.
+        heard = self.caller_level.process(pcm16) if self.caller_level else pcm16
+        voiced = rms(heard) >= VOICE_FLOOR
         if voiced and not self.agent_may_be_echoing():
             self.caller_spoke_at = time.time()
         if self._hello is not None:
@@ -316,7 +348,6 @@ class CallSession:
             self._check_hello()
         if self.handler is Handler.AGENT:
             if self._agent:
-                heard = self.caller_level.process(pcm16) if self.caller_level else pcm16
                 if self._hello is not None:
                     # Their "hello" is answered by the greeting, not by the
                     # model: heard as well, it would reply to it as a turn of
@@ -431,6 +462,23 @@ class CallSession:
             else:
                 lines.append(f"{who}: {text.strip()}")
         return "\n".join(lines)
+
+    def turns(self) -> list[tuple[str, str]]:
+        """The conversation as turns, for the tool guards to read."""
+        return turns_mod.turns(self.transcript)
+
+    def timing_summary(self) -> str:
+        """How quickly the agent answered, for the settled log line."""
+        parts: list[str] = []
+        if self.pickup_at and self.first_audio_at:
+            parts.append(f"first audio {self.first_audio_at - self.pickup_at:.1f}s after pickup")
+        if self._reply_latencies:
+            average = sum(self._reply_latencies) / len(self._reply_latencies)
+            parts.append(
+                f"reply after the caller stopped avg {average:.1f}s max "
+                f"{max(self._reply_latencies):.1f}s over {len(self._reply_latencies)} turns"
+            )
+        return ", ".join(parts)
 
     def caller_spoke_within(self, seconds: float) -> bool:
         """Whether the caller was heard in the last `seconds`."""

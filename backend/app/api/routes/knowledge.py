@@ -39,7 +39,7 @@ async def list_documents(
     return {
         "documents": documents,
         "totalChars": sum(d["chars"] for d in documents),
-        "limitChars": knowledge.MAX_CONTEXT_CHARS,
+        "limitChars": knowledge.max_chars(),
     }
 
 
@@ -103,14 +103,23 @@ async def remove(tenant: CurrentTenant, document_id: str) -> None:
 
 
 @router.get("/preview")
-async def preview(tenant: CurrentTenant) -> dict:
-    """Exactly what the agent will be given. Worth seeing before trusting it."""
-    context = await knowledge.context_for(tenant.phone_number_id)
+async def preview(tenant: CurrentTenant, knowledgeBaseId: str = "") -> dict:
+    """Exactly what the agent will be given. Worth seeing before trusting it.
+
+    `chars` is the whole of the material, before any of it is cut to fit;
+    `cut` says whether the agent sees less than that, and `cutAt` names the
+    first heading it will never see. `truncated` is only about this preview
+    being shortened to its first two thousand characters.
+    """
+    built = await knowledge.report(tenant.phone_number_id, knowledgeBaseId)
     return {
-        "chars": len(context),
-        "limitChars": knowledge.MAX_CONTEXT_CHARS,
-        "preview": context[:2000],
-        "truncated": len(context) > 2000,
+        "chars": built.chars,
+        "includedChars": len(built.text),
+        "limitChars": knowledge.max_chars(),
+        "cut": built.cut,
+        "cutAt": built.cut_at or None,
+        "preview": built.text[:2000],
+        "truncated": len(built.text) > 2000,
     }
 
 

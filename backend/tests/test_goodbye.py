@@ -139,12 +139,14 @@ async def test_speech_before_the_goodbye_does_not_keep_the_line(goodbye):
 
 
 async def test_after_end_call_the_agent_is_told_to_say_nothing_more(goodbye, monkeypatch):
-    tenant, call, _session_, _hung_up = goodbye
+    tenant, call, session, _hung_up = goodbye
 
     async def hold(*_a):
         pass
 
     monkeypatch.setattr(live, "_hang_up_after_goodbye", hold)
+    # The caller has said they are done, so the end is allowed.
+    session._note("caller", "nahi, bas. Allah hafiz")
     answer = await live._tool_handler(tenant, call)("end_call", {"reason": "done"})
     assert "say nothing more" in answer
     assert "Say your goodbye now" not in answer, "that invited a second closing line"

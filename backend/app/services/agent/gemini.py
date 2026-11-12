@@ -58,7 +58,17 @@ class LiveSettings:
     # voice leaks back through the caller's handset, and a sensitive detector
     # reads that as the caller speaking and cuts her off mid-sentence.
     vad_prefix_ms: int = 300
-    vad_silence_ms: int = 700
+    vad_silence_ms: int = 500
+    #: "low" or "high"; see `config.vad_start_sensitivity`.
+    vad_start_sensitivity: str = "low"
+    vad_end_sensitivity: str = "high"
+    #: None leaves the model's own default in place.
+    temperature: float | None = None
+
+
+def sensitivity(value: str) -> str:
+    """"HIGH" or "LOW", for the session config; anything else is LOW."""
+    return "HIGH" if (value or "").strip().lower() == "high" else "LOW"
 
 
 #: How much longer or shorter to wait for the caller to finish, by pace.
@@ -204,12 +214,11 @@ class GeminiLiveSession:
 
     # ---- running ----------------------------------------------------------
 
-    async def run(self) -> None:
-        """Hold the session open until it is closed or the model goes away."""
-        from google import genai
-        from google.genai import types
+    def session_config(self) -> dict[str, Any]:
+        """What the model is told when the session opens.
 
-        client = genai.Client(api_key=self.settings.api_key)
+        Its own method so a test can read it without a key or a connection.
+        """
         config: dict[str, Any] = {
             "response_modalities": ["AUDIO"],
             "system_instruction": self.persona.instructions,
@@ -219,13 +228,19 @@ class GeminiLiveSession:
             "output_audio_transcription": {},
             "realtime_input_config": {
                 "automatic_activity_detection": {
-                    "start_of_speech_sensitivity": "START_SENSITIVITY_LOW",
-                    "end_of_speech_sensitivity": "END_SENSITIVITY_LOW",
+                    "start_of_speech_sensitivity":
+                        f"START_SENSITIVITY_{sensitivity(self.settings.vad_start_sensitivity)}",
+                    "end_of_speech_sensitivity":
+                        f"END_SENSITIVITY_{sensitivity(self.settings.vad_end_sensitivity)}",
                     "prefix_padding_ms": self.settings.vad_prefix_ms,
                     "silence_duration_ms": self.settings.vad_silence_ms,
                 }
             },
         }
+        # Off unless set: Google advises leaving Gemini 3 models at their
+        # default temperature, and nothing on real calls has shown otherwise.
+        if self.settings.temperature is not None:
+            config["temperature"] = float(self.settings.temperature)
         # Voice and language travel together, and the language is why: Urdu
         # and Hindi are the same spoken language to a recogniser, so without
         # being told which one this is it picks, and it picks Devanagari. The
@@ -246,6 +261,14 @@ class GeminiLiveSession:
             config["speech_config"] = speech
         if self.persona.tools:
             config["tools"] = [{"function_declarations": self.persona.tools}]
+        return config
+
+    async def run(self) -> None:
+        """Hold the session open until it is closed or the model goes away."""
+        from google import genai
+
+        client = genai.Client(api_key=self.settings.api_key)
+        config = self.session_config()
 
         lost: str | None = None
         try:

@@ -1169,7 +1169,18 @@ def dialer(client, tenant_factory, auth, twilio_api, monkeypatch):
     asyncio.run(repo.save(_twilio_number(status=NumberStatus.VERIFIED, mode=NumberMode.BOTH,
                                          outboundAgentId="agent-1")))
     twilio_api.replies[("POST", "/Calls.json")] = (201, {"sid": CALL_SID, "status": "queued"})
-    return {"headers": auth(key), "api": twilio_api}
+
+    # Placing a call now warms the agent up while the phone rings. Spied,
+    # not run: there is no model here, and a real warm-up would reach for one.
+    from app.services.agent import live
+
+    warmed: list[str] = []
+
+    async def warm_up(_tenant, call, **_kw):
+        warmed.append(call.id)
+
+    monkeypatch.setattr(live, "warm_up", warm_up)
+    return {"headers": auth(key), "api": twilio_api, "warmed": warmed}
 
 
 def test_pick_line_offers_twilio_numbers_for_phone_calls(fake_db):

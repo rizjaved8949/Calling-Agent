@@ -87,6 +87,11 @@ class PhoneNumber(BaseModel):
     status: NumberStatus = NumberStatus.PENDING
     status_detail: str = Field(default="", alias="statusDetail")
     verified_at: float | None = Field(default=None, alias="verifiedAt")
+    # When a send on this number was last refused for its credentials (a
+    # Meta 401 or error 190: the token is dead). While it is recent the
+    # agent is not offered the messaging tool at all, so it cannot promise a
+    # message that will bounce. Cleared by a successful verify.
+    send_auth_failed_at: float | None = Field(default=None, alias="sendAuthFailedAt")
 
     inbound_agent_id: str = Field(default="", alias="inboundAgentId")
     outbound_agent_id: str = Field(default="", alias="outboundAgentId")

@@ -123,7 +123,7 @@ class Infobip:
                         response.text[:300])
             raise UpstreamError(
                 f"The carrier refused the request ({response.status_code}).",
-                details=response.text[:300],
+                details=response.text[:300], http_status=response.status_code,
             )
         return response
 

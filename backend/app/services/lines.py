@@ -44,6 +44,11 @@ async def verify(tenant: Tenant, number: PhoneNumber) -> PhoneNumber:
         number.status = NumberStatus.VERIFIED
         number.status_detail = detail[:400]
         number.verified_at = time.time()
+        # The provider accepted these credentials just now, so a send that
+        # was refused for them earlier no longer says anything.
+        number.send_auth_failed_at = None
+        if number.kind is NumberKind.WHATSAPP:
+            _auth_failed.pop(tenant.phone_number_id, None)
     await number_repo.save(number)
     log.info("number %s (%s) verification: %s", number.id, number.kind.value, number.status.value)
     return number
@@ -263,6 +268,26 @@ def normalise_base_url(value: str) -> str:
     return value
 
 
+#: How long after Meta refused a token the number is kept out of the agent's
+#: hands, even before anyone has pressed Verify.
+AUTH_FAILURE_MEMORY_SECONDS = 30 * 60
+
+#: What the Numbers screen says when a send was refused for the token.
+META_TOKEN_REJECTED = (
+    "Meta rejected the access token (it may have expired). Paste a permanent "
+    "System User token and press Verify again."
+)
+
+#: Companies whose sends were refused for their *company-row* credentials
+#: (the setup from before numbers existed), by company id. A number keeps
+#: the same fact on its own row; this is for the ones without a row.
+_auth_failed: dict[str, float] = {}
+
+
+def _recently_failed(at: float | None) -> bool:
+    return bool(at) and time.time() - at < AUTH_FAILURE_MEMORY_SECONDS
+
+
 async def whatsapp_sender(tenant: Tenant) -> Tenant | None:
     """This company, speaking through a WhatsApp number that can send.
 
@@ -270,6 +295,12 @@ async def whatsapp_sender(tenant: Tenant) -> Tenant | None:
     credentials and no Meta ones. Sending a message from it would fail, so the
     company's own WhatsApp number is found instead. Returns None when there is
     none, which is how the agent is stopped from offering to text somebody.
+
+    None, too, for a number whose token Meta refused in the last half hour
+    (`note_send_auth_failure`): thirteen calls in a row promised a message
+    from a line whose token had expired twelve days earlier, and every one
+    of them bounced after the caller had hung up. The tool simply disappears
+    until a new token verifies.
     """
     company_id = tenant.phone_number_id
     try:
@@ -278,12 +309,43 @@ async def whatsapp_sender(tenant: Tenant) -> Tenant | None:
         log.exception("tenant %s: could not read numbers", company_id)
         return None
     for number in numbers:
-        if number.kind is NumberKind.WHATSAPP and number.verified:
+        if (number.kind is NumberKind.WHATSAPP and number.verified
+                and not _recently_failed(number.send_auth_failed_at)):
             company = tenant.model_copy(update={"line_id": "", "meta_phone_number_id": ""})
             return number_repo.as_tenant(company, number)
     # A company from before numbers existed keeps its credentials on its own
     # row, and those still work.
-    return tenant if tenant.configured else None
+    if tenant.configured and not _recently_failed(_auth_failed.get(company_id)):
+        return tenant
+    return None
+
+
+async def note_send_auth_failure(sender: Tenant) -> None:
+    """Meta refused `sender`'s token: say so where the owner will see it.
+
+    The number is marked failed with what to do, which also takes it out of
+    `whatsapp_sender` straight away, and the moment is kept so it stays out
+    even if the row is read before the save lands. Never raises: this runs
+    inside a tool call, on a line with a caller waiting.
+    """
+    company_id = sender.phone_number_id
+    _auth_failed[company_id] = time.time()
+    if not sender.line_id:
+        log.warning("tenant %s: WhatsApp token refused on the company's own credentials",
+                    company_id)
+        return
+    try:
+        number = await number_repo.get(company_id, sender.line_id)
+        if number is None:
+            return
+        number.status = NumberStatus.FAILED
+        number.status_detail = META_TOKEN_REJECTED
+        number.verified_at = None
+        number.send_auth_failed_at = time.time()
+        await number_repo.save(number)
+        log.warning("number %s: marked failed, Meta rejected the access token", number.id)
+    except Exception:  # noqa: BLE001
+        log.exception("tenant %s: could not mark the WhatsApp number failed", company_id)
 
 
 async def tenant_for_call(tenant: Tenant, call: Call) -> Tenant:

@@ -140,10 +140,19 @@ class WhatsApp:
     def _url(self, path: str) -> str:
         return f"{GRAPH}/{graph_version(self.tenant)}/{path.lstrip('/')}"
 
-    async def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    async def _post(self, path: str, payload: dict[str, Any], *,
+                    timeout: float | None = None) -> dict[str, Any]:
+        """One Graph request.
+
+        `timeout` is for a send made mid-call: the agent cannot speak until
+        the tool returns, so a request from inside a call waits five seconds
+        at most, where one from a dashboard button may wait twenty-five.
+        """
         self._require()
+        total = timeout or 25.0
+        limits = httpx.Timeout(total, connect=min(10.0, total))
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(25.0, connect=10.0)) as client:
+            async with httpx.AsyncClient(timeout=limits) as client:
                 response = await client.post(
                     self._url(path), headers=self._headers, json=payload
                 )
@@ -152,7 +161,10 @@ class WhatsApp:
         if response.status_code >= 400:
             detail = _graph_error(response)
             log.warning("WhatsApp %s -> %s: %s", path, response.status_code, detail)
-            raise UpstreamError(f"WhatsApp refused the request: {detail}", details=detail)
+            raise UpstreamError(
+                f"WhatsApp refused the request: {detail}", details=detail,
+                http_status=response.status_code, provider_code=_graph_code(response),
+            )
         return response.json() or {}
 
     async def _get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -171,7 +183,8 @@ class WhatsApp:
 
     # ---- Messages ---------------------------------------------------------
 
-    async def send_text(self, to: str, body: str, *, call_id: str = "") -> Message:
+    async def send_text(self, to: str, body: str, *, call_id: str = "",
+                        timeout: float | None = None) -> Message:
         """Send a plain, non-template message.
 
         Legal only inside the 24-hour customer service window. Outside it Meta
@@ -187,7 +200,8 @@ class WhatsApp:
             # answer under a thumbnail. These answers are text.
             "text": {"preview_url": False, "body": body[:MAX_BODY]},
         }
-        result = await self._post(f"{self.tenant.graph_number_id}/messages", payload)
+        result = await self._post(f"{self.tenant.graph_number_id}/messages", payload,
+                                  timeout=timeout)
         return await self._record(
             to=to, body=body, kind="text", result=result, call_id=call_id
         )
@@ -418,6 +432,30 @@ def fill(body: str, values: list[str]) -> str:
         return values[index] if 0 <= index < len(values) else match.group(0)
 
     return PLACEHOLDER.sub(swap, body)
+
+
+#: Graph's own number for "the access token is invalid or has expired".
+GRAPH_BAD_TOKEN = 190
+
+
+def _graph_code(response: httpx.Response) -> int | None:
+    try:
+        code = ((response.json() or {}).get("error") or {}).get("code")
+    except ValueError:
+        return None
+    return code if isinstance(code, int) else None
+
+
+def auth_rejected(exc: BaseException) -> bool:
+    """Whether Meta refused the *credential*, as opposed to the request.
+
+    A 401, or Graph's error 190 inside any status, means the token is dead:
+    every later send will fail the same way until somebody pastes a new one,
+    so the caller should stop offering messages rather than retry.
+    """
+    return isinstance(exc, UpstreamError) and (
+        exc.http_status == 401 or exc.provider_code == GRAPH_BAD_TOKEN
+    )
 
 
 def _graph_error(response: httpx.Response) -> str:

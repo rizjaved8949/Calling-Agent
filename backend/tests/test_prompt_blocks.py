@@ -460,11 +460,14 @@ def test_the_right_figure_is_used_when_several_are_given():
     assert "most recent qualification" in text
 
 
-def test_an_unanswerable_question_becomes_a_real_promise():
+def test_an_unanswerable_question_becomes_a_recorded_request():
+    """It used to be "send the question on WhatsApp", which on real calls
+    became a message nobody asked for, from a line that could not send.
+    Now the question is recorded for the team, with a reference, after a yes."""
     from app.services.agent import prompt
 
     text = " ".join(prompt.build(persona="You answer calls.", context="",
                                  can_send_whatsapp=True).split())
-    assert "pass the question to the team" in text
-    assert "the answer will come to them on WhatsApp" in text
-    assert "call send_whatsapp_message with their question written out" in text
+    assert "offer to pass it to the team, who will answer on WhatsApp" in text
+    assert "record it as type question with the caller's WhatsApp number" in text
+    assert "call send_whatsapp_message with their question written out" not in text

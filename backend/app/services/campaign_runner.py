@@ -213,6 +213,12 @@ async def _dial(tenant: Tenant, campaign: Campaign, call: Call, destination: str
     """
     if campaign.channel is Channel.PHONE:
         await carriers.place_call(tenant, call, destination)
+        if carriers.is_twilio(tenant) and call.mode != "human":
+            # Warmed while the phone rings, as the dialer does; see
+            # `routes/calls.start_call`.
+            from .agent import live
+
+            asyncio.create_task(live.warm_up(tenant, call))
     else:
         from .agent import whatsapp_media
 

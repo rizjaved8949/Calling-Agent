@@ -1194,9 +1194,15 @@ async def twilio_status(number_id: str, request: Request) -> Response:
         call.answered_at = call.answered_at or time.time()
     elif outcome in _TWILIO_FINAL:
         _settle_twilio_call(call, outcome, form.get("CallDuration", ""))
+        # Saved before the session is finished, not after: `finish` re-reads
+        # the row, and a session warmed while the phone rang (every outbound
+        # call now has one) would otherwise race this save and lose the
+        # outcome. Finishing it is what frees the capacity it was holding.
+        await call_repo.save_call(call)
         if live.get(call.id) is not None:
             asyncio.create_task(live.finish(tenant, call.id, "the call ended"))
         reports.schedule_sync(tenant)
+        return _twiml()
     else:
         # queued / initiated: nothing to record that the row does not say.
         return _twiml()

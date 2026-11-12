@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import time
 from typing import Callable
@@ -27,8 +28,12 @@ from ...repositories import calls as call_repo
 from ...repositories import knowledge
 from .. import recordings as recording_service
 from .. import reports
+from . import amounts
+from . import calculator
+from . import phones
 from . import prompt
 from . import script
+from . import turns as turns_mod
 from . import voices
 from . import tools as tool_catalogue
 from .gemini import AgentPersona, LiveSettings
@@ -37,6 +42,11 @@ from .session import CallSession
 log = logging.getLogger(__name__)
 
 _sessions: dict[str, CallSession] = {}
+
+#: The most a tool may wait on the network. Function calling on the live
+#: model is synchronous: the agent cannot speak until the tool returns, and
+#: a caller hears every second of that as dead air.
+TOOL_TIMEOUT_SECONDS = 5.0
 
 
 def get(call_id: str) -> CallSession | None:
@@ -173,23 +183,8 @@ async def persona_for(tenant: Tenant, call: Call | None = None,
         persona=voice["persona"] or "",
         context=context,
         written=voice.get("promptBlocks") or {},
-        language_rule=(
-            f"Speak {_language_name(language)} unless the caller uses another "
-            "language, in which case follow them. Mirror their mix of languages "
-            "rather than forcing one. "
-            # Said because it is routinely got wrong: Urdu and Hindi are one
-            # spoken language and two scripts, so anything written down —
-            # a WhatsApp message, a transcript line — comes back in whichever
-            # the model reached for, and Devanagari is unreadable to the
-            # people whose call it was.
-            f"When you write anything, write {_language_name(language)} in its "
-            "own script, the one its readers actually use. Never transliterate "
-            "it into another script, and never use Devanagari for Urdu."
-            if language
-            else "Speak whatever language the caller speaks, and mirror their "
-                 "mix of languages rather than forcing one. Write each language "
-                 "in its own script rather than transliterating it."
-        ),
+        language_rule=spoken_language_rule(language),
+        writing_rule=written_language_rule(language),
         pace=(voice.get("pace") or "").strip(),
         # Derived from the chosen voice rather than asked for separately: the
         # two have to agree, and a second setting is a second thing to get
@@ -277,8 +272,13 @@ async def prepare() -> None:
             try:
                 await tenant_repo.get(tenant.phone_number_id)
                 bases = await agent_repo.list_knowledge_bases(tenant.phone_number_id)
+                spoken = amounts.wants_spoken(
+                    tenant.language,
+                    tenant.default_country_code or settings.default_country_code,
+                )
                 if not await knowledge.warm(tenant.phone_number_id,
-                                            [kb.id for kb in bases]):
+                                            [kb.id for kb in bases],
+                                            spoken_amounts=spoken):
                     log.info("prepare: the document cache is full (%d MB); the "
                              "remaining companies load on their first call",
                              settings.document_cache_mb)
@@ -310,6 +310,40 @@ def _language_name(tag: str) -> str:
     return _LANGUAGE_NAMES.get(base, tag)
 
 
+#: The "mirror their mix of languages" rule this replaced produced English
+#: sentences inside Urdu calls. One language per call, in the caller's own.
+_ONE_LANGUAGE = (
+    "With an Urdu speaker, speak Urdu throughout; keep only model names, units "
+    "and technical terms in English. Do not insert English sentences, and do "
+    "not switch language mid-reply unless the caller switches."
+)
+
+
+def spoken_language_rule(language: str) -> str:
+    """What the agent speaks, from the agent's language setting."""
+    if language:
+        return (f"Speak {_language_name(language)} unless the caller speaks another "
+                f"language, in which case speak theirs. {_ONE_LANGUAGE}")
+    return f"Speak the caller's language. {_ONE_LANGUAGE}"
+
+
+def written_language_rule(language: str) -> str:
+    """How a WhatsApp message is written: in the language's own script.
+
+    Urdu and Hindi are one spoken language and two scripts, and a model left
+    to choose picks Devanagari, which the people reading the message cannot.
+    Scoped to messages: a transcript is the recogniser's, not the agent's.
+    """
+    if language:
+        return (f"When you write a WhatsApp message, write {_language_name(language)} "
+                "in its own script, the one its readers actually use. Never "
+                "transliterate it into another script, and never use Devanagari "
+                "for Urdu.")
+    return ("When you write a WhatsApp message, write each language in its own "
+            "script rather than transliterating it, and never use Devanagari for "
+            "Urdu.")
+
+
 async def _can_send_whatsapp(tenant: Tenant) -> bool:
     """Whether this company could actually deliver a message if asked to.
 
@@ -334,72 +368,350 @@ def _tool_handler(tenant: Tenant, call: Call):
     does with it. "Sent." is better than a JSON blob, and a failure has to come
     back as words the agent can own — telling the caller a message is on its
     way when it is not is the one outcome worth protecting against.
+
+    The guards here decide; the prompt only explains. Prompt rules alone had
+    the agent say "sent" with nothing sent in thirteen calls out of thirteen,
+    so each tool now checks the transcript for what the caller actually said
+    before it acts.
+
+    `pending` is this call's and nobody else's: a closure per call, so a
+    read-back given on one call cannot confirm a send on another.
     """
-    from ...services.whatsapp import to_e164
+    pending: dict[str, str] = {}
 
     async def handle(name: str, args: dict) -> str:
         if name == "send_whatsapp_message":
-            text = str(args.get("text") or "").strip()
-            if not text:
-                return "No message was sent: there was nothing to say."
-            from .. import lines
-            from ...services.whatsapp import WhatsApp
-
-            sender = await lines.whatsapp_sender(tenant)
-            if sender is None:
-                return (
-                    "That did not send: this company has no WhatsApp number. "
-                    "Offer to have someone follow up instead."
-                )
-            # The number on the call unless they named a different one, which
-            # is what keeps the agent from asking for a number it already has.
-            destination = str(args.get("to") or "").strip() or call.counterparty
-            try:
-                await WhatsApp(sender).send_text(
-                    to_e164(destination, sender), text, call_id=call.id
-                )
-            except Exception as exc:  # noqa: BLE001
-                log.warning("call %s: the agent's message did not send: %s", call.id, exc)
-                return (
-                    "That did not send. Tell them it will follow shortly and "
-                    "do not promise it again."
-                )
-            log.info("call %s: the agent sent a WhatsApp message", call.id)
-            return "Sent. Tell them it is on its way."
-
+            return await _send_message(tenant, call, args, pending)
+        if name == "record_request":
+            return await _record_request(tenant, call, args, pending)
+        if name == "calculate":
+            return _calculate(args)
         if name == "end_call":
-            reason = str(args.get("reason") or "the agent ended the call")[:200]
-            session = _sessions.get(call.id)
-            if (session is not None and _claims_caller_gone(reason)
-                    and session.caller_spoke_within(CALLER_GONE_SECONDS)):
-                # The model said they had gone while their voice was still
-                # coming down the line: twice on real calls, it hung up on a
-                # caller who was talking. A caller who really rings off ends
-                # the call from the carrier's side; nothing needs deciding.
-                log.info("call %s: not ending the call: the agent said %r, but "
-                         "the caller was heard %.1fs ago", call.id, reason,
-                         time.time() - session.caller_spoke_at)
-                return (
-                    "Do not end the call: the caller is still on the line and "
-                    "has just been speaking. Listen to them and answer what "
-                    "they said."
-                )
-            log.info("call %s: the agent is ending the call (%s)", call.id, reason)
-            asyncio.create_task(_hang_up_after_goodbye(tenant, call, reason))
-            # Not "say your goodbye now": the goodbye was said before this was
-            # called, so that invited a second closing line, and the agent
-            # said "Allah hafiz" and then asked whether there was anything
-            # else. What happens if they speak again is said here, while the
-            # model is still listening.
-            return (
-                "The call is ending. Your goodbye has been said: say nothing "
-                "more. If the caller then asks something, answer it. If they "
-                "only say goodbye back, call end_call again without speaking."
-            )
-
+            return await _end_call(tenant, call, args)
         return "That is not something you can do on this call."
 
     return handle
+
+
+# What the tools tell the model. Written as instructions, because the model
+# reads a tool result as the next thing to act on.
+NOT_SENT = (
+    "NOT sent. Tell the caller plainly it could not be sent and give them the "
+    "information now, on the call. Do not promise to send it later."
+)
+NOT_ASKED = (
+    "NOT sent: the caller has not asked for this and has not said yes to an "
+    "offer. Give the information on the call. If they would like it on WhatsApp "
+    "as well, offer once and wait for a clear yes."
+)
+NOT_SPOKEN = (
+    "NOT sent: the caller has not said that number on this call. Ask them to "
+    "say the number, then call again."
+)
+NOT_SAME_NUMBER = (
+    "NOT sent: the caller has not said to use the number they are calling from. "
+    "Ask which number to send it to."
+)
+NO_SENDER = (
+    "NOT sent: this company has no WhatsApp number that can send right now. "
+    "Give the information on the call, and do not promise a message."
+)
+NOT_YET = (
+    "Do not end yet. If their request is finished, ask once whether there is "
+    "anything else and wait for the answer."
+)
+
+
+def _country(tenant: Tenant) -> str:
+    return (tenant.default_country_code or settings.default_country_code).strip()
+
+
+def _conversation(call_id: str) -> list[tuple[str, str]] | None:
+    """The call's turns so far, or None when there is no session to ask."""
+    session = _sessions.get(call_id)
+    if session is None:
+        return None
+    turns = getattr(session, "turns", None)
+    if callable(turns):
+        return turns()
+    transcript = getattr(session, "transcript", None)
+    if isinstance(transcript, list):
+        return turns_mod.turns(transcript)
+    return None
+
+
+async def _note_on_call(tenant: Tenant, call: Call, line: str) -> None:
+    """Append one line to the call's summary, which the call page shows.
+
+    Read fresh and written back, so a line added mid-call survives the
+    settling that happens when it ends. Never raises, and never waits long:
+    this runs inside a tool call.
+    """
+    try:
+        async with asyncio.timeout(TOOL_TIMEOUT_SECONDS):
+            fresh = await call_repo.get_call(tenant.phone_number_id, call.id)
+            target = fresh or call
+            target.summary = f"{target.summary}\n{line}" if target.summary else line
+            call.summary = target.summary
+            await call_repo.save_call(target)
+    except Exception:  # noqa: BLE001
+        log.exception("call %s: could not note %r on the call", call.id, line)
+
+
+async def _send_message(tenant: Tenant, call: Call, args: dict, pending: dict[str, str]) -> str:
+    """A WhatsApp message, only when the transcript says the caller wants it.
+
+    Five checks, in order: they asked or said yes; the number is a whole
+    number; it is a number they said on this call (or they said to use the
+    one they are calling from); it was read back and confirmed; and only
+    then is it sent, with five seconds on the request. "Sent." is said only
+    by the one path that sent.
+    """
+    from .. import lines
+    from ...services import whatsapp as whatsapp_service
+    from ...services.whatsapp import WhatsApp, mask
+
+    text = str(args.get("text") or "").strip()
+    if not text:
+        return "No message was sent: there was nothing to say."
+    conversation = _conversation(call.id) or []
+    if not turns_mod.consented_to_message(conversation):
+        return NOT_ASKED
+    to = str(args.get("to") or "").strip()
+    if not to:
+        return "NOT sent: ask which number to send it to, then call again with it."
+
+    if phones.normalise_digits(to).lower().replace(" ", "_") == phones.CALLING_NUMBER:
+        if not turns_mod.said_calling_number(conversation):
+            return NOT_SAME_NUMBER
+        destination = call.counterparty
+        if not destination:
+            return "NOT sent: the number they are calling from is not known. Ask which number to use."
+        spoken = f"the number ending {phones.ending(destination)}"
+        key = phones.CALLING_NUMBER
+    else:
+        parsed = phones.parse(to, _country(tenant))
+        if parsed is None:
+            return "Not sent: that number looks incomplete. Ask for it again."
+        destination, national = parsed
+        if not phones.said_on_call(turns_mod.caller_lines(conversation), national):
+            return NOT_SPOKEN
+        spoken = phones.grouped(national)
+        key = destination
+
+    confirmed = bool(args.get("number_confirmed"))
+    if (not confirmed or pending.get("number") != key
+            or not turns_mod.last_caller_affirmative(conversation)):
+        pending["number"] = key
+        return (f"Not sent yet. Read this back and ask the caller to confirm: {spoken}. "
+                "Only then call again with number_confirmed true.")
+
+    try:
+        sender = await asyncio.wait_for(lines.whatsapp_sender(tenant), TOOL_TIMEOUT_SECONDS)
+    except Exception:  # noqa: BLE001 — a slow lookup is a line that cannot send now
+        log.exception("call %s: could not find the WhatsApp sender in time", call.id)
+        sender = None
+    if sender is None:
+        return NO_SENDER
+    try:
+        await asyncio.wait_for(
+            WhatsApp(sender).send_text(destination, text, call_id=call.id,
+                                       timeout=TOOL_TIMEOUT_SECONDS),
+            TOOL_TIMEOUT_SECONDS + 1,
+        )
+    except Exception as exc:  # noqa: BLE001
+        rejected = whatsapp_service.auth_rejected(exc)
+        why = "token rejected" if rejected else "could not be sent"
+        log.warning("call %s: the agent's message to %s did not send (%s: %s)",
+                    call.id, mask(destination), why, type(exc).__name__)
+        if rejected:
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(lines.note_send_auth_failure(sender),
+                                       TOOL_TIMEOUT_SECONDS)
+        await _note_on_call(tenant, call, f"WhatsApp to …{phones.ending(destination)}: not sent ({why})")
+        return NOT_SENT
+    pending.pop("number", None)
+    log.info("call %s: the agent sent a WhatsApp message to %s", call.id, mask(destination))
+    await _note_on_call(tenant, call, f"WhatsApp to …{phones.ending(destination)}: sent")
+    return "Sent."
+
+
+def _read_back(kind, values: dict, grouped_mobile: str) -> str:
+    """One paragraph the agent reads to the caller before anything is stored."""
+    what = kind.value.replace("_", " ")
+    pieces = [f"A {what} request"]
+    if values.get("name"):
+        pieces.append(f"for {values['name']}")
+    if grouped_mobile:
+        pieces.append(f"mobile {grouped_mobile}")
+    if values.get("city"):
+        pieces.append(f"in {values['city']}")
+    if values.get("location"):
+        pieces.append(f"at {values['location']}")
+    if values.get("vehicle_model"):
+        pieces.append(f"for the {values['vehicle_model']}")
+    if values.get("registration"):
+        pieces.append(f"registration {values['registration']}")
+    if values.get("mileage"):
+        pieces.append(f"mileage {values['mileage']}")
+    if values.get("preferred_times"):
+        pieces.append("preferred " + " or ".join(values["preferred_times"]))
+    sentence = ", ".join(pieces) + "."
+    if values.get("details"):
+        sentence += f" Details: {values['details']}."
+    sentence += f" The team will reply by {values.get('reply_by', 'call')}."
+    return sentence
+
+
+async def _record_request(tenant: Tenant, call: Call, args: dict,
+                          pending: dict[str, str]) -> str:
+    """Record what the caller asked for, once it is complete and read back.
+
+    Nothing is stored until the required details are there, the mobile is a
+    whole number the caller said on this call, and the caller has heard the
+    read-back and said it is right. The reference comes from the repository:
+    the model never makes one up.
+    """
+    from ...models.request import ReplyBy, RequestType, missing_fields
+    from ...repositories import requests as request_repo
+
+    try:
+        kind = RequestType(str(args.get("type") or "other").strip().lower())
+    except ValueError:
+        kind = RequestType.OTHER
+    times = args.get("preferred_times") or []
+    if isinstance(times, str):
+        times = [times]
+    values = {
+        "name": str(args.get("name") or "").strip(),
+        "mobile": "",
+        "city": str(args.get("city") or "").strip(),
+        "location": str(args.get("location") or "").strip(),
+        "preferred_times": [str(t).strip() for t in list(times)[:2] if str(t).strip()],
+        "vehicle_model": str(args.get("vehicle_model") or "").strip(),
+        "registration": str(args.get("registration") or "").strip(),
+        "mileage": str(args.get("mileage") or "").strip(),
+        "details": str(args.get("details") or "").strip(),
+        "reply_by": ("whatsapp" if kind is RequestType.QUESTION
+                     else str(args.get("reply_by") or "call").strip().lower()),
+    }
+    if values["reply_by"] not in {r.value for r in ReplyBy}:
+        values["reply_by"] = "call"
+
+    conversation = _conversation(call.id) or []
+    grouped_mobile = ""
+    mobile = str(args.get("mobile") or "").strip()
+    if mobile:
+        parsed = phones.parse(mobile, _country(tenant))
+        if parsed is None:
+            return ("Not recorded yet: that mobile number looks incomplete. A Pakistani "
+                    "mobile has 11 digits starting 03. Ask for it again.")
+        e164, national = parsed
+        if not phones.said_on_call(turns_mod.caller_lines(conversation), national):
+            return ("Not recorded yet: the caller has not said that number on this "
+                    "call. Ask them to say the number, then call again.")
+        values["mobile"] = e164
+        grouped_mobile = phones.grouped(national)
+
+    missing = missing_fields(kind, values)
+    if missing:
+        return (f"Not recorded yet. Still needed: {', '.join(missing)}. "
+                "Ask for at most two at a time.")
+
+    fingerprint = json.dumps({**values, "type": kind.value}, sort_keys=True)
+    confirmed = bool(args.get("confirmed"))
+    if (not confirmed or pending.get("request") != fingerprint
+            or not turns_mod.last_caller_affirmative(conversation)):
+        pending["request"] = fingerprint
+        return ("Not recorded yet. Read this back; when the caller says it is right, "
+                "call again with confirmed true: " + _read_back(kind, values, grouped_mobile))
+
+    try:
+        record = await asyncio.wait_for(
+            request_repo.create(tenant, call, kind, values), TOOL_TIMEOUT_SECONDS)
+    except Exception:  # noqa: BLE001
+        log.exception("call %s: the request could not be stored", call.id)
+        return ("Not recorded: the request could not be saved just now. Tell the "
+                "caller the team will call them back, and do not give a reference.")
+    pending.pop("request", None)
+    await _note_on_call(tenant, call, "Request recorded: " + record.one_line())
+    if kind is RequestType.QUESTION:
+        return (f"Recorded. Reference {record.reference}. Say the team will send the "
+                "answer on WhatsApp. Do not say anything has been sent.")
+    return (f"Recorded. Reference {record.reference}. Tell the caller it is a request, "
+            "not a confirmation; the team will contact them.")
+
+
+def _calculate(args: dict) -> str:
+    try:
+        return calculator.evaluate(str(args.get("expression") or ""))
+    except calculator.CalculationError as exc:
+        return f"Could not calculate that: {exc}. Write the sum with numbers and + - * / only."
+
+
+#: Reasons for ending that are about the caller not taking part, which the
+#: transcript cannot confirm and only the line can: nobody there, or nobody
+#: worth talking to.
+_NOT_ENGAGING_WORDS = (
+    "not engaging", "abusive", "testing", "tester", "repeating", "repeat",
+    "going nowhere", "nowhere", "silent", "silence", "no response", "not respond",
+    "unresponsive", "prank", "time waster", "wasting time", "nobody there",
+    "no one there", "not there",
+)
+
+
+def _claims_not_engaging(reason: str) -> bool:
+    said = reason.lower()
+    return any(word in said for word in _NOT_ENGAGING_WORDS)
+
+
+def _may_end(conversation: list[tuple[str, str]], reason: str, session) -> bool:
+    """Whether the call may end now: the caller is done, or is not taking part."""
+    if turns_mod.may_end(conversation):
+        return True
+    spoke_within = getattr(session, "caller_spoke_within", None)
+    recently = bool(spoke_within(CALLER_GONE_SECONDS)) if callable(spoke_within) else False
+    return _claims_not_engaging(reason) and not recently
+
+
+async def _end_call(tenant: Tenant, call: Call, args: dict) -> str:
+    reason = str(args.get("reason") or "the agent ended the call")[:200]
+    session = _sessions.get(call.id)
+    if (session is not None and _claims_caller_gone(reason)
+            and session.caller_spoke_within(CALLER_GONE_SECONDS)):
+        # The model said they had gone while their voice was still
+        # coming down the line: twice on real calls, it hung up on a
+        # caller who was talking. A caller who really rings off ends
+        # the call from the carrier's side; nothing needs deciding.
+        log.info("call %s: not ending the call: the agent said %r, but "
+                 "the caller was heard %.1fs ago", call.id, reason,
+                 time.time() - session.caller_spoke_at)
+        return (
+            "Do not end the call: the caller is still on the line and "
+            "has just been speaking. Listen to them and answer what "
+            "they said."
+        )
+    # The transcript, not the model, says whether the caller is done. On
+    # real calls the agent hung up right after answering ("...Aur koi sawal?
+    # Allah Hafiz.") and asked whether it should hang up. Now it may end only
+    # after a goodbye, a "nothing else", or a no to "anything else?".
+    conversation = _conversation(call.id)
+    if conversation is not None and not _may_end(conversation, reason, session):
+        log.info("call %s: not ending the call yet (%r): the caller has not said "
+                 "they are done", call.id, reason)
+        return NOT_YET
+    log.info("call %s: the agent is ending the call (%s)", call.id, reason)
+    asyncio.create_task(_hang_up_after_goodbye(tenant, call, reason))
+    # Not "say your goodbye now": the goodbye was said before this was
+    # called, so that invited a second closing line, and the agent
+    # said "Allah hafiz" and then asked whether there was anything
+    # else. What happens if they speak again is said here, while the
+    # model is still listening.
+    return (
+        "The call is ending. Your goodbye has been said: say nothing "
+        "more. If the caller then asks something, answer it. If they "
+        "only say goodbye back, call end_call again without speaking."
+    )
 
 
 #: An agent that ends a call because the caller has gone is not believed if
@@ -849,12 +1161,15 @@ async def finish(tenant: Tenant, call_id: str, reason: str = "", *, error: str =
             await call_repo.save_call(call)
 
         reports.schedule_sync(tenant)
+        timing = getattr(session, "timing_summary", None)
+        measured = timing() if callable(timing) else ""
         log.info(
-            "call %s settled: %ds, %s, recording %s",
+            "call %s settled: %ds, %s, recording %s%s",
             call_id, call.duration_seconds, call.status.value,
             call.recording_state.value.lower(),
+            f"; {measured}" if measured else "",
         )
-        if script.has_devanagari(transcript):
+        if script.needs_respelling(transcript):
             task = asyncio.create_task(_respell_in_roman_urdu(tenant, call_id, transcript))
             _respelling.add(task)
             task.add_done_callback(_respelling.discard)
@@ -868,8 +1183,9 @@ _respelling: set[asyncio.Task] = set()
 
 
 async def _respell_in_roman_urdu(tenant: Tenant, call_id: str, transcript: str) -> None:
-    """Rewrite a finished call's Hindi-script lines as Roman Urdu with the text
-    model, which spells loanwords and Urdu words the way people write them.
+    """Rewrite a finished call's Hindi-script and Urdu-script lines as Roman
+    Urdu with the text model, which spells loanwords and Urdu words the way
+    people write them.
 
     After the call is settled rather than before, so a slow or missing model
     never holds up the call's own record — that already reads in Roman Urdu,
@@ -896,7 +1212,10 @@ async def _respell_in_roman_urdu(tenant: Tenant, call_id: str, transcript: str) 
         call = await call_repo.get_call(tenant.phone_number_id, call_id)
         if call is None:
             return
-        call.transcript = "\n".join(p + t for p, t in zip(speakers, respelled))
+        rewritten = "\n".join(p + t for p, t in zip(speakers, respelled))
+        if rewritten == call.transcript:
+            return                              # the model could not help
+        call.transcript = rewritten
         # Only the readable copy changes; the original stays as heard.
         call.transcript_original = call.transcript_original or transcript
         await call_repo.save_call(call)

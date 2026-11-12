@@ -183,7 +183,9 @@ async def test_the_turn_detector_is_deliberately_less_eager():
     detection = fake.sent("session.update")[0]["session"]["turn_detection"]
     assert detection["threshold"] > 0.5
     assert detection["prefix_padding_ms"] == 300
-    assert detection["silence_duration_ms"] == 700
+    # 500 ms since the BYD evaluation found the agent slow to answer; the
+    # value comes from `config.vad_silence_ms`, which the owner can tune.
+    assert detection["silence_duration_ms"] == 500
 
 
 @pytest.mark.asyncio

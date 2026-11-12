@@ -7,6 +7,7 @@ impossible rather than merely unlikely.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 
@@ -255,6 +256,12 @@ async def start_call(
     call.status = CallStatus.RINGING
     await call_repo.save_call(call)
     log.info("placed %s call %s to %s", payload.channel.value, call.id, mask(destination))
+    # The phone rings for seven to twelve seconds before anyone picks up,
+    # which is longer than the agent takes to get ready: warmed now, the
+    # greeting is waiting when they answer rather than three seconds after.
+    # Twilio only; an Infobip call warms when its audio leg is bridged.
+    if payload.channel == Channel.PHONE and carriers.is_twilio(tenant) and not payload.human:
+        asyncio.create_task(live.warm_up(tenant, call))
     return call.public()
 
 

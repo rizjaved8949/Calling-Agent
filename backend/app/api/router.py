@@ -13,7 +13,7 @@ from ..security.rate_limit import check_blanket, check_expensive
 from .routes import (
     agents, ask, auth, calls, campaigns, companies, exports, gaps, google, health,
     help as help_routes, knowledge, media, messaging, numbers, platform, recordings,
-    support, team, usage, webhooks,
+    requests as request_routes, support, team, usage, webhooks,
 )
 
 api_router = APIRouter(prefix="/api")
@@ -66,6 +66,8 @@ api_router.include_router(media.router)
 api_router.include_router(campaigns.router, dependencies=_limited)
 api_router.include_router(usage.router, dependencies=_limited)
 api_router.include_router(gaps.router, dependencies=_limited)
+# What callers asked the agent to record, for the team to work through.
+api_router.include_router(request_routes.router, dependencies=_limited)
 api_router.include_router(google.router, dependencies=_limited)
 api_router.include_router(exports.router, dependencies=_limited)
 # Webhooks are Meta/Infobip calling us, verified by signature rather than by

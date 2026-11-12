@@ -98,6 +98,11 @@ class Tenant(BaseModel):
     qa_api_key: str = Field(default="", alias="qaApiKey")
 
     default_country_code: str = Field(default="", alias="defaultCountryCode")
+    # Where the company's day starts and ends (an IANA name, "Asia/Karachi").
+    # Blank falls back to the default country code's zone. Used for the
+    # day in a request reference (CMP-20261111-01), so the counter rolls
+    # over at the company's midnight rather than UTC's.
+    timezone: str = ""
 
     # Set by the platform operator, never by the company: lets this company's
     # numbers run on the platform's own Meta/Infobip credentials from the
@@ -277,6 +282,7 @@ class TenantUpdate(BaseModel):
     qa_webhook_url: str | None = Field(default=None, alias="qaWebhookUrl")
     qa_api_key: str | None = Field(default=None, alias="qaApiKey")
     default_country_code: str | None = Field(default=None, alias="defaultCountryCode")
+    timezone: str | None = Field(default=None, max_length=64)
     allow_platform_credentials: bool | None = Field(default=None, alias="allowPlatformCredentials")
     suspended: bool | None = None
     suspended_reason: str | None = Field(default=None, alias="suspendedReason")

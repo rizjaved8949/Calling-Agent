@@ -138,9 +138,19 @@ async def resolve(
 
 
 async def context_for(tenant: Tenant, resolved: Resolved) -> str:
-    """The documents behind a resolution, as prompt text."""
+    """The documents behind a resolution, as prompt text.
+
+    With every rupee amount's spoken form written after it when the agent
+    speaks Urdu or the company is in Pakistan (`services/agent/amounts.py`).
+    """
+    from ..config import settings
+    from .agent import amounts
+
+    language = (resolved.agent.language if resolved.agent else "") or tenant.language
+    country = tenant.default_country_code or settings.default_country_code
     return await knowledge_repo.context_for(
-        tenant.phone_number_id, knowledge_base_id=resolved.knowledge_base_id
+        tenant.phone_number_id, knowledge_base_id=resolved.knowledge_base_id,
+        spoken_amounts=amounts.wants_spoken(language, country),
     )
 
 

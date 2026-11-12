@@ -114,7 +114,7 @@ async def test_the_companys_own_persona_still_leads(fake_db, no_whatsapp):
 @pytest.mark.asyncio
 async def test_messaging_is_offered_only_when_it_could_work(fake_db, no_whatsapp):
     persona = await live.persona_for(_tenant(), _call())
-    assert [t["name"] for t in persona.tools] == ["end_call"]
+    assert [t["name"] for t in persona.tools] == ["record_request", "calculate", "end_call"]
     assert "send_whatsapp_message" not in persona.instructions
 
 
@@ -122,14 +122,17 @@ async def test_messaging_is_offered_only_when_it_could_work(fake_db, no_whatsapp
 async def test_messaging_is_offered_when_a_whatsapp_number_exists(fake_db, with_whatsapp):
     persona = await live.persona_for(_tenant(), _call())
     names = [t["name"] for t in persona.tools]
-    assert names == ["send_whatsapp_message", "end_call"]
-    assert "never ask" in persona.instructions.lower()
+    assert names == ["send_whatsapp_message", "record_request", "calculate", "end_call"]
+    assert "Never assume the number they are calling from" in persona.instructions
 
 
-def test_the_message_tool_forbids_asking_for_the_number():
+def test_the_message_tool_asks_for_the_number_and_a_confirmation():
+    """It used to say "you already have their number"; on real calls that
+    became "I have your number and profession on file" to a stranger."""
     description = tools.SEND_WHATSAPP_MESSAGE["description"]
-    assert "Do NOT ask them for their number" in description
-    assert "already have it" in description
+    assert "already have" not in description
+    assert "which number to send it to" in description
+    assert "read the number back" in description.lower()
 
 
 def test_the_end_call_tool_covers_a_time_waster_and_forbids_an_escape():
@@ -143,15 +146,17 @@ def test_the_end_call_tool_covers_a_time_waster_and_forbids_an_escape():
 # Running the tools
 # ---------------------------------------------------------------------------
 
-def test_a_message_goes_to_the_caller_without_being_asked(monkeypatch):
-    """The number on the call is the default, which is the whole point."""
+def test_a_message_nobody_asked_for_is_not_sent(monkeypatch):
+    """The number on the call used to be the default and the send went out
+    unasked. Now nothing goes without a yes from the caller, read from the
+    transcript (tests/test_messaging_guards.py has the whole flow)."""
     sent: list[tuple[str, str]] = []
 
     class FakeWhatsApp:
         def __init__(self, tenant):
             self.tenant = tenant
 
-        async def send_text(self, to, body, call_id=""):
+        async def send_text(self, to, body, **kw):
             sent.append((to, body))
 
     monkeypatch.setattr("app.services.whatsapp.WhatsApp", FakeWhatsApp)
@@ -161,32 +166,17 @@ def test_a_message_goes_to_the_caller_without_being_asked(monkeypatch):
     monkeypatch.setattr("app.services.lines.whatsapp_sender", sender)
 
     handle = live._tool_handler(_tenant(), _call())
-    answer = asyncio.run(handle("send_whatsapp_message", {"text": "Fees are 50,000."}))
+    answer = asyncio.run(handle("send_whatsapp_message",
+                                {"text": "Fees are 50,000.", "to": "calling_number"}))
 
-    assert sent == [("+923191611020", "Fees are 50,000.")]
-    assert "Sent" in answer
-
-
-def test_a_message_to_a_different_number_is_allowed(monkeypatch):
-    sent: list[tuple[str, str]] = []
-
-    class FakeWhatsApp:
-        def __init__(self, tenant): ...
-        async def send_text(self, to, body, call_id=""):
-            sent.append((to, body))
-
-    monkeypatch.setattr("app.services.whatsapp.WhatsApp", FakeWhatsApp)
-
-    async def sender(tenant):
-        return tenant
-    monkeypatch.setattr("app.services.lines.whatsapp_sender", sender)
-
-    handle = live._tool_handler(_tenant(defaultCountryCode="92"), _call())
-    asyncio.run(handle("send_whatsapp_message", {"text": "hi", "to": "03001112222"}))
-    assert sent[0][0] == "+923001112222"
+    assert sent == []
+    assert answer == live.NOT_ASKED
+    assert "Sent" not in answer
 
 
-def test_a_failed_message_never_claims_it_was_sent(monkeypatch):
+def test_a_failed_message_never_claims_it_was_sent(fake_db, monkeypatch):
+    from tests.test_messaging_guards import READ_BACK_CONFIRMED, _Line
+
     class FakeWhatsApp:
         def __init__(self, tenant): ...
         async def send_text(self, *a, **kw):
@@ -198,19 +188,37 @@ def test_a_failed_message_never_claims_it_was_sent(monkeypatch):
         return tenant
     monkeypatch.setattr("app.services.lines.whatsapp_sender", sender)
 
-    handle = live._tool_handler(_tenant(), _call())
-    answer = asyncio.run(handle("send_whatsapp_message", {"text": "hi"}))
-    assert "did not send" in answer
-    assert "Sent" not in answer
+    call = _call()
+    live._sessions[call.id] = _Line(READ_BACK_CONFIRMED)
+    try:
+        handle = live._tool_handler(_tenant(defaultCountryCode="92"), call)
+        asyncio.run(handle("send_whatsapp_message", {"text": "hi", "to": "0300 123 4567"}))
+        answer = asyncio.run(handle("send_whatsapp_message",
+                                    {"text": "hi", "to": "0300 123 4567",
+                                     "number_confirmed": True}))
+    finally:
+        live._sessions.pop(call.id, None)
+    assert answer == live.NOT_SENT
+    assert "Sent" not in answer and "follow shortly" not in answer
 
 
 def test_no_whatsapp_number_is_said_plainly(monkeypatch):
+    from tests.test_messaging_guards import READ_BACK_CONFIRMED, _Line
+
     async def none(_tenant):
         return None
     monkeypatch.setattr("app.services.lines.whatsapp_sender", none)
 
-    handle = live._tool_handler(_tenant(), _call())
-    answer = asyncio.run(handle("send_whatsapp_message", {"text": "hi"}))
+    call = _call()
+    live._sessions[call.id] = _Line(READ_BACK_CONFIRMED)
+    try:
+        handle = live._tool_handler(_tenant(defaultCountryCode="92"), call)
+        asyncio.run(handle("send_whatsapp_message", {"text": "hi", "to": "0300 123 4567"}))
+        answer = asyncio.run(handle("send_whatsapp_message",
+                                    {"text": "hi", "to": "0300 123 4567",
+                                     "number_confirmed": True}))
+    finally:
+        live._sessions.pop(call.id, None)
     assert "no WhatsApp number" in answer
 
 

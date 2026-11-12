@@ -61,7 +61,28 @@ class Settings(BaseSettings):
     #
     # These are the defaults. An agent's pace setting adjusts them per agent.
     vad_prefix_ms: int = 300
-    vad_silence_ms: int = 700
+    vad_silence_ms: int = 500
+    # How eagerly the model decides the caller has started and stopped
+    # speaking: "low" or "high". Start stays low so the agent's own echo off
+    # the handset is not taken for the caller; end is high so a finished
+    # sentence is answered sooner rather than waited out.
+    vad_start_sensitivity: str = "low"
+    vad_end_sensitivity: str = "high"
+
+    # ---- The outbound greeting ------------------------------------------
+    # When somebody we rang picks up, the greeting waits for their "hello":
+    # this long for anyone to speak, this much quiet after they spoke before
+    # the greeting starts, and never longer than the last, whatever is on the
+    # line. See `services/agent/session.py`.
+    hello_wait_seconds: float = 0.8
+    hello_done_seconds: float = 0.4
+    hello_max_seconds: float = 4.0
+
+    # The live model's sampling temperature, or unset for the model's own
+    # default. Google advises keeping Gemini 3 models at their default, so this
+    # stays off unless a test on real calls shows a lower value answers more
+    # faithfully from the material.
+    gemini_temperature: float | None = None
 
     # ---- Capacity ---------------------------------------------------------
     # How many calls this process will carry at once. The eleventh is refused
@@ -81,6 +102,12 @@ class Settings(BaseSettings):
     # least recently used companies are dropped (and read again on their next
     # call), and the startup preload stops.
     document_cache_mb: int = 100
+    # How many characters of a company's documents reach the agent on one
+    # call. Past it the oldest documents are cut, with a warning in the log.
+    # Raise it only after scripts/knowledge_size.py has counted the tokens:
+    # the instructions plus the material should stay under about 60% of the
+    # model's 131,072-token window, leaving room for the conversation.
+    knowledge_max_chars: int = 120_000
 
     # How often to call our own /health, in seconds. Render's free plan stops
     # an instance after ~15 minutes without traffic, and the next webhook then
