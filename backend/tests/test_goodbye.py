@@ -108,14 +108,30 @@ async def test_a_caller_who_says_nothing_after_the_goodbye_is_hung_up(goodbye):
     assert hung_up == ["the caller said goodbye"]
 
 
-async def test_a_caller_who_speaks_after_the_goodbye_keeps_the_line(goodbye):
+async def test_a_caller_who_asks_something_after_the_goodbye_keeps_the_line(goodbye, monkeypatch):
+    monkeypatch.setattr(live, "TRANSCRIPT_WAIT_SECONDS", 0.2)
     tenant, call, session, hung_up = goodbye
     ending = asyncio.create_task(
         live._hang_up_after_goodbye(tenant, call, "the caller's question was answered"))
     await asyncio.sleep(0.1)
-    session.feed_caller(_voice())               # "wait, one more thing"
+    session.feed_caller(_voice())               # "wait, one more thing..."
+    session._note("caller", "ek minute, SEAL ki price kya hai?")
     await ending
-    assert hung_up == [], "hung up on a caller who was talking"
+    assert hung_up == [], "hung up on a caller who was asking something"
+
+
+async def test_a_voice_with_no_question_in_it_does_not_keep_the_line(goodbye, monkeypatch):
+    """Noise, or a goodbye back, after the agent's goodbye: the call ends.
+    On a real call a mis-transcribed "Good night, sis" held the line."""
+    monkeypatch.setattr(live, "TRANSCRIPT_WAIT_SECONDS", 0.2)
+    tenant, call, session, hung_up = goodbye
+    ending = asyncio.create_task(
+        live._hang_up_after_goodbye(tenant, call, "the caller said goodbye"))
+    await asyncio.sleep(0.1)
+    session.feed_caller(_voice())
+    session._note("caller", "ok bye")
+    await ending
+    assert hung_up == ["the caller said goodbye"]
 
 
 async def test_the_agents_own_goodbye_echoing_back_does_not_keep_the_line(goodbye):

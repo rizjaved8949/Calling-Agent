@@ -302,7 +302,10 @@ async def end_call(tenant: CurrentTenant, call_id: str) -> dict:
 
     tenant = await lines.tenant_for_call(tenant, call)
     if live.get(call_id) is not None:
-        await live.finish(tenant, call_id, "ended from the dashboard")
+        # Settled in the background: mixing, transcoding and uploading the
+        # recording took twenty seconds on a real call, all of it before the
+        # dashboard was answered. The row is marked ended below, now.
+        live.finish_later(tenant, call_id, "ended from the dashboard")
     if call.provider_call_id and call.channel == Channel.PHONE:
         try:
             await carriers.hang_up(tenant, call.provider_call_id)

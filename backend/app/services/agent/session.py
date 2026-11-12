@@ -551,6 +551,23 @@ class CallSession:
         """The conversation as turns, for the tool guards to read."""
         return turns_mod.turns(self.transcript)
 
+    def caller_said_since(self, index: int) -> str:
+        """What the caller has said from transcript position `index` on."""
+        return " ".join(text.strip() for who, text in self.transcript[index:]
+                        if who == "caller" and text.strip())
+
+    async def note_to_agent(self, text: str) -> None:
+        """Tell the model something for its next turn, without making it speak.
+        Never raises: a correction that cannot be delivered is logged."""
+        agent = self._agent
+        note = getattr(agent, "note", None)
+        if self._closed or agent is None or not callable(note):
+            return
+        try:
+            await note(text)
+        except Exception:  # noqa: BLE001
+            log.exception("call %s: could not pass a note to the model", self.call_id)
+
     def timing_summary(self) -> str:
         """How quickly the agent answered, for the settled log line."""
         parts: list[str] = []

@@ -18,6 +18,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import re
 import time
 from typing import Callable
 
@@ -820,6 +821,7 @@ async def _record_request(tenant: Tenant, call: Call, args: dict,
     pending.pop("request", None)
     if values["mobile"]:
         _confirmed_numbers(pending).add(values["mobile"])
+    _recorded.setdefault(call.id, []).append(record.reference)
     await _note_on_call(tenant, call, "Request recorded: " + record.one_line())
     if kind is RequestType.QUESTION:
         return (f"Recorded. Reference {record.reference}. Say the team will send the "
@@ -959,15 +961,18 @@ async def _hang_up_after_goodbye(tenant: Tenant, call: Call, reason: str) -> Non
     outgoing audio to drain — bounded, because a model that never stops
     talking must not hold the line open either.
 
-    And it does not hang up on somebody who is talking. A caller who speaks
-    after the goodbye ("wait, one more thing") keeps the line: the model
-    hears them and answers, and it ends the call again when they are done.
-    Only their own voice counts, not the agent's echo (see
-    `CallSession.agent_may_be_echoing`), and every call still ends at
-    `settings.max_call_seconds` whatever happens.
+    And it does not hang up on somebody who asks something. A caller who
+    speaks after the goodbye keeps the line only if what they said is a real
+    new request ("wait, what about the SEAL?"): the model hears them and
+    answers, and ends the call again when they are done. Noise, "ok", a
+    thank-you or a goodbye back do not keep it; on a real call a
+    mis-transcribed "Good night, sis" did. Only the caller's own voice
+    counts, not the agent's echo (`CallSession.agent_may_be_echoing`), and
+    every call still ends at `settings.max_call_seconds` whatever happens.
     """
     session = _sessions.get(call.id)
     asked_at = time.time()
+    since = len(getattr(session, "transcript", []) or [])
     deadline = asked_at + 12
     try:
         while session is not None and time.time() < deadline:
@@ -980,10 +985,162 @@ async def _hang_up_after_goodbye(tenant: Tenant, call: Call, reason: str) -> Non
         raise
     if (session is not None and _sessions.get(call.id) is session
             and session.caller_spoke_since(asked_at)):
-        log.info("call %s: the caller spoke after the goodbye; staying on the line",
-                 call.id)
-        return
+        await _let_transcription_land(session)
+        heard = _caller_said_since(session, since)
+        if turns_mod.is_new_request(heard):
+            log.info("call %s: the caller asked something after the goodbye (%r); "
+                     "staying on the line", call.id, turns_mod.judged(heard))
+            return
+        log.info("call %s: heard %r after the goodbye, not a new request; ending",
+                 call.id, turns_mod.judged(heard) or "nothing transcribed")
     await hang_up(tenant, call, reason)
+
+
+def _caller_said_since(session, index: int) -> str:
+    said = getattr(session, "caller_said_since", None)
+    if callable(said):
+        return said(index)
+    transcript = getattr(session, "transcript", None) or []
+    return " ".join(t.strip() for w, t in transcript[index:] if w == "caller" and t.strip())
+
+
+#: Tasks started and left to run: a reference keeps the loop from dropping
+#: them half way (asyncio only holds weak references to tasks).
+_background: set[asyncio.Task] = set()
+
+
+def _keep(task: asyncio.Task) -> asyncio.Task:
+    _background.add(task)
+    task.add_done_callback(_background.discard)
+    return task
+
+
+def finish_later(tenant: Tenant, call_id: str, reason: str = "") -> asyncio.Task:
+    """`finish`, in the background: for a caller who has to be answered now,
+    such as the dashboard's End button."""
+    return _keep(asyncio.create_task(finish(tenant, call_id, reason)))
+
+
+#: After the agent's closing line, how long the caller gets to say something
+#: new before the server ends the call itself.
+CLOSING_END_SECONDS = 4.0
+CLOSING_END_REASON = "the agent said its closing line and the caller was done"
+
+#: What the agent is told when it says a request is recorded and none is.
+NOT_RECORDED_CORRECTION = (
+    "You have NOT recorded anything. Say it is not recorded yet, ask for the "
+    "missing details, then call record_request."
+)
+_RECORDED_CLAIMS = turns_mod._phrases(
+    "record kar li", "record kar liya", "record kar diya", "record kar di", "record ho gayi",
+    "record ho gaya", "record kar lia", "darj kar", "darj ho", "request record", "recorded",
+    "noted", "note kar li", "note kar liya", "note kar lia", "submitted", "submit kar",
+    "booked", "book kar li", "book kar liya", "book kar lia", "register kar", "likh li",
+    "likh liya", "likh lia", "record ho chuki", "record ho chuka",
+)
+_RECORDED_CLAIMS_SCRIPT = ("ریکارڈ کر لی", "ریکارڈ کر لیا", "درج کر", "نوٹ کر لی", "بک کر لی")
+#: Words that make a sentence an offer, a plan or a denial rather than a
+#: claim: "record kar sakti hoon", "abhi record nahi hui".
+_NOT_A_CLAIM = turns_mod._phrases(
+    "sakti", "sakta", "sakte", "sakoon", "sakun", "sakon", "karungi", "karunga", "karenge",
+    "karun", "karoon", "doon", "dun", "loon", "lun", "nahi", "nahin", "not", "yet", "abhi",
+    "pehle", "pahle", "will", "can", "could", "shall", "agar", "chahte", "chahti", "chahta",
+    "would", "once", "jab", "baad",
+)
+_NOT_A_CLAIM_SCRIPT = ("نہیں", "سکتی", "سکتا", "سکتے", "ابھی", "پہلے")
+_SENTENCES = re.compile(r"[^.!?؟۔।]+[.!?؟۔।]*")
+
+#: References record_request has handed out on each live call, so a claim
+#: of "recorded" can be checked against what actually happened.
+_recorded: dict[str, list[str]] = {}
+
+
+def _claims_recorded(agent_text: str) -> bool:
+    """The agent said a request *was* recorded, noted, booked or submitted.
+
+    Judged sentence by sentence: an offer ("record kar sakti hoon"), a
+    question ("record kar loon?") or a denial ("abhi record nahi hui") is
+    not a claim, however many of the words it shares with one.
+    """
+    for sentence in _SENTENCES.findall(agent_text or ""):
+        if sentence.rstrip().endswith(("?", "؟")):
+            continue
+        if turns_mod._has_any(sentence, _RECORDED_CLAIMS):
+            if not turns_mod._has_any(sentence, _NOT_A_CLAIM):
+                return True
+        elif turns_mod._has_script(sentence, _RECORDED_CLAIMS_SCRIPT):
+            if not turns_mod._has_script(sentence, _NOT_A_CLAIM_SCRIPT):
+                return True
+    return False
+
+
+def _transcript_watch(tenant: Tenant, call: Call):
+    """What happens as the agent's own words arrive, fragment by fragment.
+
+    Two things a model cannot be trusted to do by itself:
+
+    * end the call: once the agent has said its closing line, the server
+      ends the call within `CLOSING_END_SECONDS` unless the caller asks
+      something new, whether or not the model ever calls end_call;
+    * tell the truth about requests: "request record kar li hai" with no
+      record_request behind it gets a correction in front of the model for
+      its next turn.
+    """
+    state: dict = {"armed_at": -1, "ending": None, "corrected": -1}
+
+    def watch(who: str, _text: str) -> None:
+        if who != "agent":
+            return
+        session = _sessions.get(call.id)
+        if session is None:
+            return
+        conversation = session.turns()
+        if not conversation or conversation[-1][0] != "agent":
+            return
+        turn_index = len(conversation) - 1
+        latest = conversation[-1][1]
+        if turns_mod.agent_said_closing(latest):
+            if state["armed_at"] != turn_index:
+                state["armed_at"] = turn_index
+                since = len(session.transcript)
+                state["ending"] = _keep(asyncio.create_task(
+                    _end_after_closing(tenant, call, session, since, state)))
+        elif _claims_recorded(latest) and not _recorded.get(call.id):
+            if state["corrected"] != turn_index:
+                state["corrected"] = turn_index
+                log.warning("call %s: the agent claimed a request was recorded, and none "
+                            "was: %r", call.id, turns_mod.judged(latest))
+                _keep(asyncio.create_task(session.note_to_agent(NOT_RECORDED_CORRECTION)))
+
+    return watch
+
+
+async def _end_after_closing(tenant: Tenant, call: Call, session: CallSession,
+                             since: int, state: dict) -> None:
+    """End the call from the server after the closing line, unless the caller
+    asks something new in the window."""
+    try:
+        deadline = time.time() + 12
+        while time.time() < deadline and session.speaking:
+            await asyncio.sleep(0.2)
+        await asyncio.sleep(CLOSING_END_SECONDS)
+        if _sessions.get(call.id) is not session or session.closed:
+            return                                   # ended already, or replaced
+        await _let_transcription_land(session)
+        heard = _caller_said_since(session, since)
+        if turns_mod.is_new_request(heard):
+            log.info("call %s: the caller asked something after the closing line (%r); "
+                     "the call goes on", call.id, turns_mod.judged(heard))
+            state["armed_at"] = -1
+            return
+        log.info("call %s: ending the call from the server: the agent said its closing "
+                 "line and the caller said %r", call.id,
+                 turns_mod.judged(heard) or "nothing")
+        await hang_up(tenant, call, CLOSING_END_REASON)
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001
+        log.exception("call %s: could not end the call after the closing line", call.id)
 
 
 async def hang_up(tenant: Tenant, call: Call, reason: str, *, error: str = "") -> None:
@@ -1109,7 +1266,7 @@ async def warm_up(tenant: Tenant, call: Call, *, keepalive: bool = True) -> None
             persona=persona,
             record=tenant.record_calls,
             keepalive=keepalive,
-            on_transcript=lambda who, text: None,
+            on_transcript=_transcript_watch(tenant, call),
             on_tool=_tool_handler(tenant, call),
         )
         session.attached = False
@@ -1216,7 +1373,7 @@ async def start(
         persona=persona,
         record=tenant.record_calls,
         keepalive=keepalive,
-        on_transcript=lambda who, text: None,
+        on_transcript=None if human else _transcript_watch(tenant, call),
         on_tool=None if human else _tool_handler(tenant, call),
         human=human,
     )
@@ -1314,6 +1471,7 @@ async def finish(tenant: Tenant, call_id: str, reason: str = "", *, error: str =
     limit = _time_limits.pop(call_id, None)
     if limit is not None and limit is not asyncio.current_task():
         limit.cancel()
+    _recorded.pop(call_id, None)
     session = _sessions.pop(call_id, None)
     if session is None:
         return
@@ -1352,6 +1510,16 @@ async def finish(tenant: Tenant, call_id: str, reason: str = "", *, error: str =
         if reason:
             call.metadata = {**call.metadata, "endedBecause": reason}
 
+        # Ended, now. Storing the recording takes ten seconds and more
+        # (transcode, upload), and until this save the dashboard showed the
+        # call as still running for all of it.
+        if audio:
+            if call.recording_state in (RecordingState.NONE, RecordingState.PENDING):
+                call.recording_state = RecordingState.PENDING
+        elif call.recording_state is RecordingState.PENDING:
+            call.recording_state = RecordingState.ABSENT
+        await call_repo.save_call(call)
+
         if audio:
             # Transcoded and stored by the same path a browser upload takes, so
             # there is one answer to "where do recordings go".
@@ -1369,10 +1537,6 @@ async def finish(tenant: Tenant, call_id: str, reason: str = "", *, error: str =
                 call.recording_error = "The recording could not be stored."
                 with contextlib.suppress(Exception):
                     await call_repo.save_call(call)
-        else:
-            if call.recording_state is RecordingState.PENDING:
-                call.recording_state = RecordingState.ABSENT
-            await call_repo.save_call(call)
 
         reports.schedule_sync(tenant)
         timing = getattr(session, "timing_summary", None)

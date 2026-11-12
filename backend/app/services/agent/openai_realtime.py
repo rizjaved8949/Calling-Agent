@@ -173,6 +173,18 @@ class OpenAIRealtimeSession:
             "response": {"instructions": text},
         })
 
+    async def note(self, text: str) -> None:
+        """Add to the conversation without asking for a reply; the model sees
+        it on its next turn. See `GeminiLiveSession.note`."""
+        socket = self._socket
+        if socket is None or self._closed:
+            return
+        await self._send(socket, {
+            "type": "conversation.item.create",
+            "item": {"type": "message", "role": "user",
+                     "content": [{"type": "input_text", "text": text}]},
+        })
+
     # ---- running ----------------------------------------------------------
 
     def _session_config(self) -> dict[str, Any]:

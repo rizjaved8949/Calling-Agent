@@ -196,6 +196,11 @@ async def infobip_media(socket: WebSocket):
 
 #: How long to wait for Twilio's `start` before giving up on the socket.
 TWILIO_START_TIMEOUT_SECONDS = 10.0
+#: Twilio streams the caller's audio continuously while the call is up,
+#: silence included. A socket that sends nothing for this long is a call that
+#: has ended without telling us, and it is closed and settled rather than
+#: left showing as running.
+TWILIO_IDLE_SECONDS = 30.0
 
 # Calls with a Twilio audio socket attached in this process. One per call: a
 # second socket for the same call (a replayed token, or Twilio retrying while
@@ -399,7 +404,13 @@ async def _twilio_stream(socket: WebSocket, session, out: _TwilioOutbound, strea
     frames = 0
     try:
         while not stop.is_set():
-            message = await socket.receive()
+            try:
+                message = await asyncio.wait_for(socket.receive(), timeout=TWILIO_IDLE_SECONDS)
+            except asyncio.TimeoutError:
+                log.warning("call %s: no audio from Twilio for %.0f seconds; closing the call",
+                            call_id, TWILIO_IDLE_SECONDS)
+                reason = f"no audio from Twilio for {TWILIO_IDLE_SECONDS:.0f} seconds"
+                break
             if message.get("type") == "websocket.disconnect":
                 break
             text = message.get("text")

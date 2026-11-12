@@ -195,18 +195,66 @@ _ANYTHING_ELSE = _phrases(
     "is ke alawa", "koi aur baat",
 )
 _ANYTHING_ELSE_SCRIPT = ("اور کوئی", "کوئی اور", "اور کچھ", "کچھ اور", "مزید", "اس کے علاوہ")
+#: Words that make a line a question or a request in themselves, in the
+#: languages of these calls. A line with none of these, and none of the
+#: topic words below, is not a new request, whatever punctuation the
+#: transcription hung on it: "And that's things?" was background noise, and
+#: it kept a call open.
 _QUESTION_WORDS = _phrases(
     "kya", "kia", "kitna", "kitni", "kitne", "kab", "kahan", "kahaan", "kaun",
     "kon", "kaise", "kese", "kyun", "kyu", "kis", "konsa", "konsi", "what", "how",
     "when", "where", "which", "who", "why", "can you", "could you", "tell me",
     "bata", "batao", "batayein", "batain", "batayen", "chahiye", "chahie", "want",
     "need", "possible", "ho sakta", "hoga", "milega", "milegi", "please tell",
-    "bata dein", "bata do", "batana",
+    "bata dein", "bata do", "batana", "chahta", "chahti", "karna hai", "karni hai",
+    "karun", "karoon", "sakte hain", "sakti hain", "sakta hoon", "sakti hoon",
 )
+_QUESTION_SCRIPT = ("کیا", "کتنا", "کتنی", "کب", "کہاں", "کون", "کیسے", "کیوں", "بتائیں",
+                    "چاہیے")
+#: Things people ring about. One of these makes a line a request unless the
+#: line is a thank-you or a goodbye: "thanks for the details, bye" is not
+#: asking for details.
+_TOPIC_WORDS = _phrases(
+    "price", "qeemat", "keemat", "rate", "range", "cost", "fee", "fees", "detail",
+    "details", "information", "maloomat", "jankari", "book", "booking", "test drive",
+    "test draiw", "timing", "address", "location", "model", "models", "hua", "help",
+    "madad", "problem", "masla", "complaint", "kamplent", "shikayat", "warranty",
+    "service", "charging", "charger", "battery", "delivery", "colour", "color",
+)
+_TOPIC_SCRIPT = ("قیمت", "ریٹ", "معلومات", "بکنگ", "مدد", "مسئلہ", "شکایت")
+
+
+def is_new_request(text: str) -> bool:
+    """Whether the caller's line asks for something, as opposed to noise.
+
+    Two words or more, with a question word, or a topic word outside a
+    thank-you or goodbye. Not a question mark: the transcription hangs those
+    on noise and on sentences in other languages ("Muito bela essa
+    maquiagem que ti, o que aconteceu?").
+    """
+    if len(_words(text)) < 2:
+        return False
+    if _has_any(text, _QUESTION_WORDS) or _has_script(text, _QUESTION_SCRIPT):
+        return True
+    if not (_has_any(text, _TOPIC_WORDS) or _has_script(text, _TOPIC_SCRIPT)):
+        return False
+    return not (is_goodbye(text) or is_thanks(text) or is_nothing_else(text))
 
 
 def looks_like_question(text: str) -> bool:
-    return "?" in (text or "") or "؟" in (text or "") or _has_any(text, _QUESTION_WORDS)
+    return is_new_request(text)
+
+
+def is_meaningful(text: str) -> bool:
+    """A caller line that says something the guard can act on: an answer, a
+    goodbye, a request. Anything else is noise and is skipped."""
+    return (is_new_request(text) or is_closing(text) or is_affirmative(text)
+            or is_negative(text) or is_thanks(text))
+
+
+def agent_asked(agent_text: str) -> bool:
+    """The agent's turn put a question to the caller."""
+    return "?" in (agent_text or "") or "؟" in (agent_text or "") or asked_anything_else(agent_text)
 
 
 def is_goodbye(text: str) -> bool:
@@ -255,43 +303,49 @@ def declined(text: str) -> bool:
     return is_negative(text) or is_nothing_else(text) or is_thanks(text)
 
 
+def last_meaningful_caller_turn(conversation: list[Turn]) -> tuple[int, str]:
+    """(index, text) of the caller's last line that says something, or (-1, "")."""
+    for index in range(len(conversation) - 1, -1, -1):
+        who, text = conversation[index]
+        if who == "caller" and is_meaningful(text):
+            return index, text
+    return -1, ""
+
+
 def may_end(conversation: list[Turn]) -> bool:
     """Whether the conversation itself says the call may end now.
 
-    (a) the caller's latest turn is a goodbye, a "nothing else", or asks
-        for the call to end, or
-    (b) the agent asked whether there was anything else and the caller
-        declined, or
-    (c) the agent has said its closing line, and the caller has not asked a
-        new question since.
+    Judged on the caller's last *meaningful* line, skipping noise: on a real
+    call the goodbye was followed by a mis-transcribed "And that's things?",
+    and the guard refused on that.
+
+    (a) that line is a goodbye, a "nothing else", or asks to end the call, or
+    (b) the agent's last real question was answered with a no, a "nothing
+        else" or a goodbye, or
+    (c) the agent has said its closing line, and the caller has asked
+        nothing new since.
     """
     if not conversation:
         return False
-    last_who, last_text = conversation[-1]
-    last_caller = ""
-    agent_before = ""
-    seen_caller = False
-    for who, text in reversed(conversation):
-        if who == "caller" and not seen_caller:
-            last_caller = text
-            seen_caller = True
-            continue
-        if who == "agent" and seen_caller:
-            agent_before = text
-            break
+    index, last_caller = last_meaningful_caller_turn(conversation)
+    agent_before = next((t for w, t in reversed(conversation[:index]) if w == "agent"), "") \
+        if index >= 0 else ""
     if last_caller and is_closing(last_caller):
         return True
-    if last_caller and asked_anything_else(agent_before) and declined(last_caller):
+    if last_caller and agent_asked(agent_before) and (declined(last_caller)
+                                                      or is_goodbye(last_caller)):
         return True
     # (c): after the agent's goodbye, nothing new has been asked. A goodbye
     # said in the same breath as the answer to a question does not count:
     # the caller has not had a chance to say whether they are done.
-    if (last_who == "agent" and agent_said_closing(last_text)
-            and not looks_like_question(last_caller)):
-        return True
-    if (last_who == "caller" and agent_said_closing(agent_before)
-            and not looks_like_question(last_caller)):
-        return True
+    last_agent_index = next((i for i in range(len(conversation) - 1, -1, -1)
+                             if conversation[i][0] == "agent"), -1)
+    if last_agent_index >= 0 and agent_said_closing(conversation[last_agent_index][1]):
+        asked_since = any(w == "caller" and is_new_request(t)
+                          for w, t in conversation[last_agent_index + 1:])
+        asked_before = index >= 0 and index < last_agent_index and is_new_request(last_caller)
+        if not asked_since and not asked_before:
+            return True
     return False
 
 
