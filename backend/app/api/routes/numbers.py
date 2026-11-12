@@ -92,11 +92,28 @@ async def add_number(tenant: CurrentTenant, payload: NumberCreate) -> dict:
     return _out(number)
 
 
+#: The fields that give a number an agent. Checked against the number *after*
+#: new credentials have been saved and verified, never before.
+ASSIGNMENT_FIELDS = ("inbound_agent_id", "outbound_agent_id", "message_agent_id")
+
+
 @router.patch("/{number_id}")
 async def update_number(tenant: CurrentTenant, number_id: str, payload: NumberUpdate) -> dict:
+    """Edit a number: credentials first, then whoever answers on it.
+
+    New credentials are saved and verified before anything is checked
+    against the number's status. The old order checked the assignment first,
+    so a failed number that already had an agent refused the very token
+    pasted to fix it, every time, with "verify this number before giving it
+    an agent" — and could never recover. Now only an assignment that is
+    being *added or changed* on an unverified number is refused; one that
+    was already there stays, and a token the provider refuses comes back as
+    the verify result, not as a 409.
+    """
     number = await _require(tenant, number_id)
     changes = payload.model_dump(exclude_unset=True)
     credentials_changed = False
+    assignments: dict[str, str] = {}
     for field, value in changes.items():
         if value is None:
             continue
@@ -104,6 +121,10 @@ async def update_number(tenant: CurrentTenant, number_id: str, payload: NumberUp
             value = value.strip()
         if field in SECRET_ATTRS and not value:
             continue  # the form never shows a secret back; blank means unchanged
+        if field in ASSIGNMENT_FIELDS:
+            if getattr(number, field) != value:
+                assignments[field] = value
+            continue  # applied once the number's status is known
         if field == "phone_number":
             value = to_e164(value, tenant)
         if field == "infobip_base_url":
@@ -115,14 +136,17 @@ async def update_number(tenant: CurrentTenant, number_id: str, payload: NumberUp
             credentials_changed = True
         setattr(number, field, value)
 
-    await _check_assignment(tenant, number)
     if credentials_changed:
         number.status = NumberStatus.PENDING
         number.status_detail = "Credentials changed — verify again."
         number.verified_at = None
-    await repo.save(number)
-    if credentials_changed:
+        await repo.save(number)
         number = await lines.verify(tenant, number)
+
+    for field, value in assignments.items():
+        setattr(number, field, value)
+    await _check_assignment(tenant, number, changed=set(assignments))
+    await repo.save(number)
     return _out(number)
 
 
@@ -146,20 +170,29 @@ async def _require(tenant: Tenant, number_id: str) -> PhoneNumber:
     return number
 
 
-async def _check_assignment(tenant: Tenant, number: PhoneNumber) -> None:
-    """An agent can only be put on a verified number, in a slot it fits."""
+async def _check_assignment(tenant: Tenant, number: PhoneNumber,
+                            *, changed: set[str] | None = None) -> None:
+    """An agent can only be put on a verified number, in a slot it fits.
+
+    `changed` names the slots this request is adding or changing. Only those
+    need the number verified: an agent assigned while the number was fine
+    stays through a bad spell, so the owner can paste a new token to end it.
+    Every filled slot is still checked against the number's mode and the
+    agent's abilities. None means every slot is being set.
+    """
     slots = (
-        (number.inbound_agent_id, "answer calls", AgentChannel.INBOUND_CALL,
+        ("inbound_agent_id", number.inbound_agent_id, "answer calls", AgentChannel.INBOUND_CALL,
          number.takes_inbound, "This number is not set up for inbound calls. Change its mode first."),
-        (number.outbound_agent_id, "make calls", AgentChannel.OUTBOUND_CALL,
+        ("outbound_agent_id", number.outbound_agent_id, "make calls", AgentChannel.OUTBOUND_CALL,
          number.makes_outbound, "This number is not set up for outbound calls. Change its mode first."),
-        (number.message_agent_id, "reply to WhatsApp messages", AgentChannel.WHATSAPP_MESSAGE,
-         number.kind is NumberKind.WHATSAPP, "Only a WhatsApp number can reply to messages."),
+        ("message_agent_id", number.message_agent_id, "reply to WhatsApp messages",
+         AgentChannel.WHATSAPP_MESSAGE, number.kind is NumberKind.WHATSAPP,
+         "Only a WhatsApp number can reply to messages."),
     )
-    for agent_id, job, needed, enabled, refusal in slots:
+    for slot, agent_id, job, needed, enabled, refusal in slots:
         if not agent_id:
             continue
-        if not number.verified:
+        if not number.verified and (changed is None or slot in changed):
             raise AppError(409, "Verify this number before giving it an agent.",
                            code="number_not_verified")
         if not enabled:

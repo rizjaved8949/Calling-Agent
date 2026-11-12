@@ -69,6 +69,66 @@ def test_an_unverified_number_cannot_get_an_agent(client, tenant_factory, auth, 
     assert resp.status_code == 409
 
 
+def test_a_failed_number_with_an_agent_accepts_a_new_token_and_recovers(
+        client, tenant_factory, auth, provider):
+    """Render showed the same PATCH refused with 409 again and again: the
+    assignment was checked before the new credentials were saved, so a number
+    whose token had died could never be given a live one."""
+    _, key = tenant_factory("507")
+    number = _sim(client, auth, key).json()
+    agent = _agent(client, auth, key)
+    assigned = client.patch(f"/api/numbers/{number['id']}", json={"inboundAgentId": agent["id"]},
+                            headers=auth(key))
+    assert assigned.status_code == 200
+
+    # The provider starts refusing the old key: the number fails but keeps
+    # its agent, and the answer is the verify result, not a 409.
+    provider["ok"] = False
+    failed = client.patch(f"/api/numbers/{number['id']}", json={"infobipApiKey": "dead-key-0000"},
+                          headers=auth(key))
+    assert failed.status_code == 200, failed.text
+    assert failed.json()["status"] == "failed"
+    assert "refused" in failed.json()["statusDetail"]
+    assert failed.json()["inboundAgentId"] == agent["id"], "the assignment was lost"
+
+    # A new key is accepted and verified; the agent is still there.
+    provider["ok"] = True
+    fixed = client.patch(f"/api/numbers/{number['id']}", json={"infobipApiKey": "new-key-9999"},
+                         headers=auth(key))
+    assert fixed.status_code == 200, fixed.text
+    assert fixed.json()["status"] == "verified"
+    assert fixed.json()["credentials"]["infobipApiKey"] == "…9999"
+    assert fixed.json()["inboundAgentId"] == agent["id"]
+
+
+def test_adding_an_agent_to_an_unverified_number_is_still_refused_but_the_token_is_kept(
+        client, tenant_factory, auth, provider):
+    _, key = tenant_factory("508")
+    provider["ok"] = False
+    number = _sim(client, auth, key).json()
+    agent = _agent(client, auth, key)
+    # Changing the assignment alone on a failed number: refused, as before.
+    resp = client.patch(f"/api/numbers/{number['id']}", json={"outboundAgentId": agent["id"]},
+                        headers=auth(key))
+    assert resp.status_code == 409 and resp.json()["error"]["code"] == "number_not_verified"
+    # A new key that still fails, with a new agent in the same request: the
+    # key is saved and verified (and refused), the agent is not put on.
+    resp = client.patch(f"/api/numbers/{number['id']}",
+                        json={"infobipApiKey": "another-key-4321", "outboundAgentId": agent["id"]},
+                        headers=auth(key))
+    assert resp.status_code == 409
+    shown = client.get(f"/api/numbers/{number['id']}", headers=auth(key)).json()
+    assert shown["credentials"]["infobipApiKey"] == "…4321"
+    assert shown["outboundAgentId"] is None
+    # Once the provider accepts the key, the same request goes through.
+    provider["ok"] = True
+    resp = client.patch(f"/api/numbers/{number['id']}",
+                        json={"infobipApiKey": "good-key-8765", "outboundAgentId": agent["id"]},
+                        headers=auth(key))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "verified" and resp.json()["outboundAgentId"] == agent["id"]
+
+
 def test_agent_mode_must_fit_the_slot(client, tenant_factory, auth, provider):
     _, key = tenant_factory("503")
     number = _sim(client, auth, key).json()

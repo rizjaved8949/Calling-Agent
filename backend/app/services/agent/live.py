@@ -540,15 +540,12 @@ async def _send_message(tenant: Tenant, call: Call, args: dict, pending: dict[st
     if sender is None:
         return NO_SENDER
     try:
-        await asyncio.wait_for(
-            WhatsApp(sender).send_text(destination, text, call_id=call.id,
-                                       timeout=TOOL_TIMEOUT_SECONDS),
-            TOOL_TIMEOUT_SECONDS + 1,
-        )
+        how = await asyncio.wait_for(
+            _deliver(sender, destination, text, call), TOOL_TIMEOUT_SECONDS + 1)
     except Exception as exc:  # noqa: BLE001
         rejected = whatsapp_service.auth_rejected(exc)
-        why = "token rejected" if rejected else "could not be sent"
-        log.warning("call %s: the agent's message to %s did not send (%s: %s)",
+        why = "token rejected" if rejected else _refusal_reason(exc)
+        log.warning("call %s: the agent's message to %s did not send (%s; %s)",
                     call.id, mask(destination), why, type(exc).__name__)
         if rejected:
             with contextlib.suppress(Exception):
@@ -558,9 +555,64 @@ async def _send_message(tenant: Tenant, call: Call, args: dict, pending: dict[st
         return NOT_SENT
     pending.pop("number", None)
     _confirmed_numbers(pending).add(key)
-    log.info("call %s: the agent sent a WhatsApp message to %s", call.id, mask(destination))
-    await _note_on_call(tenant, call, f"WhatsApp to …{phones.ending(destination)}: sent")
+    log.info("call %s: the agent sent a WhatsApp %s to %s", call.id, how, mask(destination))
+    await _note_on_call(tenant, call, f"WhatsApp to …{phones.ending(destination)}: sent ({how})")
     return "Sent."
+
+
+#: Meta's customer-service window: a plain text reaches only somebody who
+#: wrote to the business this recently. Everyone else needs a template.
+CUSTOMER_WINDOW_SECONDS = 24 * 3600
+
+
+async def _messaged_us_recently(sender: Tenant, destination: str) -> bool:
+    """Whether this number wrote to the company inside Meta's 24-hour window."""
+    from ...models.call import MessageDirection
+
+    try:
+        messages = await asyncio.wait_for(
+            call_repo.list_messages(sender.phone_number_id, counterparty=destination, limit=20),
+            TOOL_TIMEOUT_SECONDS,
+        )
+    except Exception:  # noqa: BLE001 — unknown is treated as "not recently"
+        log.exception("tenant %s: could not read recent messages", sender.phone_number_id)
+        return False
+    since = time.time() - CUSTOMER_WINDOW_SECONDS
+    return any(m.direction is MessageDirection.INBOUND and m.created_at >= since
+               for m in messages)
+
+
+async def _deliver(sender: Tenant, destination: str, text: str, call: Call) -> str:
+    """Send `text` the way Meta will deliver it, and say which way that was.
+
+    A plain text inside the 24-hour window; otherwise the approved follow-up
+    template, with the company's name in {{1}} and the message in {{2}}.
+    Sent as plain text, a phone caller's message was accepted by Meta and
+    never delivered, which is a worse failure than a refusal: the agent said
+    "sent" and meant it.
+    """
+    from ...services.whatsapp import WhatsApp, clean_parameter
+
+    client = WhatsApp(sender)
+    if await _messaged_us_recently(sender, destination):
+        await client.send_text(destination, text, call_id=call.id, timeout=TOOL_TIMEOUT_SECONDS)
+        return "text"
+    body = clean_parameter(text)
+    await client.send_template(
+        destination, settings.whatsapp_followup_template.strip() or "call_followup",
+        language=settings.whatsapp_followup_language.strip() or "en",
+        parameters=[(sender.name or "").strip() or "the team", body],
+        call_id=call.id, timeout=TOOL_TIMEOUT_SECONDS, body=body,
+    )
+    return "template"
+
+
+def _refusal_reason(exc: BaseException) -> str:
+    """Why a send failed, in the provider's own words where it gave any."""
+    detail = getattr(exc, "details", None)
+    text = str(detail or exc or type(exc).__name__).strip()
+    text = text.replace("\n", " ")[:160]
+    return f"could not be sent: {text}" if text else "could not be sent"
 
 
 def _read_back(kind, values: dict, grouped_mobile: str, *, mobile_confirmed: bool = False) -> str:

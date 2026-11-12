@@ -177,6 +177,15 @@ class Settings(BaseSettings):
     # Only read when no tenant row matches. Lets the pre-SaaS deployments keep
     # answering while their numbers are moved into the registry.
     meta_graph_api_version: str = "v23.0"
+    # The approved template a call's WhatsApp follow-up is sent with. Meta
+    # delivers a plain text only to somebody who messaged the business in the
+    # last 24 hours; a phone caller usually has not, so without this nothing
+    # promised on a call ever arrived. {{1}} is the company's name, {{2}} the
+    # message. Each company creates the template in its own Meta account
+    # (Utility category); Verify on the WhatsApp number says whether it is
+    # there and approved.
+    whatsapp_followup_template: str = "call_followup"
+    whatsapp_followup_language: str = "en"
     whatsapp_phone_number_id: str = ""
     whatsapp_business_account_id: str = ""
     whatsapp_access_token: str = ""

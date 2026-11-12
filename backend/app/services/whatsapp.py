@@ -167,10 +167,12 @@ class WhatsApp:
             )
         return response.json() or {}
 
-    async def _get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    async def _get(self, path: str, params: dict[str, Any] | None = None, *,
+                   timeout: float | None = None) -> dict[str, Any]:
         self._require()
+        total = timeout or 25.0
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(25.0, connect=10.0)) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(total, connect=min(10.0, total))) as client:
                 response = await client.get(
                     self._url(path), headers=self._headers, params=params
                 )
@@ -214,13 +216,21 @@ class WhatsApp:
         language: str = "en_US",
         parameters: list[str] | None = None,
         call_id: str = "",
+        timeout: float | None = None,
+        body: str | None = None,
     ) -> Message:
-        """Send an approved template — the only way to open a conversation."""
-        body_text = ""
-        with contextlib.suppress(Exception):
-            known = await self.template(template, language)
-            if known:
-                body_text = fill(known.get("body") or "", parameters or [])
+        """Send an approved template — the only way to open a conversation.
+
+        `body` is what the person will read, when the caller already knows
+        it; it saves a round trip to look the template up, which a send made
+        mid-call cannot afford.
+        """
+        body_text = (body or "").strip()
+        if not body_text:
+            with contextlib.suppress(Exception):
+                known = await self.template(template, language, timeout=timeout)
+                if known:
+                    body_text = fill(known.get("body") or "", parameters or [])
         components: list[dict[str, Any]] = []
         if parameters:
             components.append(
@@ -239,7 +249,8 @@ class WhatsApp:
                 **({"components": components} if components else {}),
             },
         }
-        result = await self._post(f"{self.tenant.graph_number_id}/messages", payload)
+        result = await self._post(f"{self.tenant.graph_number_id}/messages", payload,
+                                  timeout=timeout)
         # Stored as the words the person actually received, not as the list of
         # values we filled in. A log reading "482103" tells whoever reads it
         # back nothing; the resolved sentence tells them everything.
@@ -266,19 +277,21 @@ class WhatsApp:
         except (AppError, UpstreamError) as exc:
             log.debug("could not mark %s read: %s", provider_message_id, exc)
 
-    async def templates(self) -> list[dict[str, Any]]:
-        """The approved templates for this company's WABA."""
+    async def templates(self, *, timeout: float | None = None) -> list[dict[str, Any]]:
+        """The templates for this company's WABA, approved or not."""
         if not self.tenant.waba_id:
             return []
         body = await self._get(
             f"{self.tenant.waba_id}/message_templates",
             {"limit": 100, "fields": "name,status,category,language,components"},
+            timeout=timeout,
         )
         return [describe_template(t) for t in (body.get("data") or [])]
 
-    async def template(self, name: str, language: str = "") -> dict[str, Any] | None:
+    async def template(self, name: str, language: str = "", *,
+                       timeout: float | None = None) -> dict[str, Any] | None:
         """One template, by name and optionally language."""
-        for found in await self.templates():
+        for found in await self.templates(timeout=timeout):
             if found["name"] == name and (not language or found["language"] == language):
                 return found
         return None
@@ -389,6 +402,29 @@ class WhatsApp:
             lineId=self.tenant.line_id,
         )
         return await call_repo.save_message(message)
+
+
+#: Meta's limit for a template parameter is 1024; this leaves room for the
+#: template's own words around it.
+MAX_PARAMETER_CHARS = 900
+#: What goes in a parameter that cleaned down to nothing. Never empty: Meta
+#: refuses an empty parameter, and the send would fail for a blank line.
+EMPTY_PARAMETER = "Details from your call."
+
+
+def clean_parameter(text: str) -> str:
+    """`text` as a template parameter Meta will accept.
+
+    Meta refuses a parameter with a newline, a tab, or more than four spaces
+    in a row, so lines are joined with a middle dot, runs of spaces are cut
+    to four, and the whole is capped at `MAX_PARAMETER_CHARS`.
+    """
+    parts = [p.strip() for p in re.split(r"[\r\n\t]+", text or "") if p.strip()]
+    cleaned = " · ".join(parts)
+    cleaned = re.sub(r" {5,}", "    ", cleaned).strip()
+    if len(cleaned) > MAX_PARAMETER_CHARS:
+        cleaned = cleaned[:MAX_PARAMETER_CHARS - 1].rstrip() + "…"
+    return cleaned or EMPTY_PARAMETER
 
 
 PLACEHOLDER = re.compile(r"\{\{\s*(\d+)\s*\}\}")

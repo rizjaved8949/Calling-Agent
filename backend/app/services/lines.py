@@ -21,7 +21,7 @@ from ..errors import AppError
 from ..models.number import NumberKind, NumberStatus, PhoneNumber
 from ..models.tenant import Tenant
 from ..repositories import numbers as number_repo
-from .whatsapp import GRAPH, graph_version
+from .whatsapp import GRAPH, WhatsApp, graph_version
 
 log = logging.getLogger(__name__)
 
@@ -69,6 +69,15 @@ async def _verify_meta(t: Tenant) -> str:
     ]
     if missing:
         raise _Refused("Missing: " + ", ".join(missing) + ".")
+    detail = await _meta_number_detail(t)
+    # Said on the verify result, never a reason to fail it: the number works
+    # for calls and inbound messages without the template; only the agent's
+    # follow-ups from calls need it.
+    return detail + await _followup_template_note(t)
+
+
+async def _meta_number_detail(t: Tenant) -> str:
+    """Ask Meta about the number with the token; the sentence for the form."""
     url = f"{GRAPH}/{graph_version(t)}/{t.meta_phone_number_id}"
     try:
         async with httpx.AsyncClient(timeout=20) as client:
@@ -86,6 +95,42 @@ async def _verify_meta(t: Tenant) -> str:
     display = body.get("display_phone_number") or ""
     name = body.get("verified_name") or ""
     return f"Meta confirmed {display or 'the number'}" + (f" ({name})" if name else "") + "."
+
+
+def followup_template_advice(name: str) -> str:
+    """What to create in Meta so the agent can send follow-ups from calls."""
+    return (f"Create an approved Utility template named {name} with {{{{1}}}} and "
+            f"{{{{2}}}} so the agent can send WhatsApp follow-ups from calls.")
+
+
+async def _followup_template_note(t: Tenant) -> str:
+    """A note for the verify result when the call follow-up template is not
+    there, not approved, or not in the language the server sends it in.
+    Empty when all is well. Never raises.
+    """
+    name = settings.whatsapp_followup_template.strip()
+    language = settings.whatsapp_followup_language.strip()
+    if not name:
+        return ""
+    try:
+        found = await WhatsApp(t).templates(timeout=10.0)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("number: could not check the follow-up template (%s)", type(exc).__name__)
+        return f" The follow-up template {name!r} could not be checked just now."
+    matching = [x for x in found if x.get("name") == name]
+    approved = [x for x in matching if str(x.get("status") or "").upper() == "APPROVED"]
+    if any(x.get("language") == language for x in approved):
+        return ""
+    if approved:
+        languages = ", ".join(sorted(str(x.get("language")) for x in approved))
+        return (f" The follow-up template {name!r} is approved in {languages} but the "
+                f"server sends it in {language!r}: set WHATSAPP_FOLLOWUP_LANGUAGE to one of "
+                "those, or add that language to the template.")
+    if matching:
+        status = ", ".join(sorted({str(x.get("status") or "unknown") for x in matching}))
+        return (f" The follow-up template {name!r} exists but is not approved ({status}); "
+                "the agent cannot send WhatsApp follow-ups from calls until it is.")
+    return " " + followup_template_advice(name)
 
 
 async def _verify_infobip(t: Tenant) -> str:

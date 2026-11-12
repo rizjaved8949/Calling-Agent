@@ -159,6 +159,9 @@ def test_a_message_nobody_asked_for_is_not_sent(monkeypatch):
         async def send_text(self, to, body, **kw):
             sent.append((to, body))
 
+        async def send_template(self, to, template, *, parameters, **kw):
+            sent.append((to, parameters[1]))
+
     monkeypatch.setattr("app.services.whatsapp.WhatsApp", FakeWhatsApp)
 
     async def sender(tenant):
@@ -181,6 +184,8 @@ def test_a_failed_message_never_claims_it_was_sent(fake_db, monkeypatch):
         def __init__(self, tenant): ...
         async def send_text(self, *a, **kw):
             raise RuntimeError("Meta said no")
+
+        send_template = send_text
 
     monkeypatch.setattr("app.services.whatsapp.WhatsApp", FakeWhatsApp)
 

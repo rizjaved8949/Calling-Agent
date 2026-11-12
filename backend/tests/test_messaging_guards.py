@@ -57,7 +57,9 @@ def _no_sessions():
 
 @pytest.fixture
 def sending(monkeypatch):
-    """A WhatsApp sender that records what it was asked to send."""
+    """A WhatsApp sender that records what it was asked to send: a plain text
+    or the follow-up template. Each entry is (to, message, kwargs); kwargs
+    carries "kind" and, for a template, its name, language and parameters."""
     from app.services import lines
 
     sent: list[tuple[str, str, dict]] = []
@@ -67,7 +69,11 @@ def sending(monkeypatch):
             self.tenant = tenant
 
         async def send_text(self, to, body, **kwargs):
-            sent.append((to, body, kwargs))
+            sent.append((to, body, {**kwargs, "kind": "text"}))
+
+        async def send_template(self, to, template, *, language, parameters, **kwargs):
+            sent.append((to, parameters[1], {**kwargs, "kind": "template", "template": template,
+                                             "language": language, "parameters": parameters}))
 
     monkeypatch.setattr("app.services.whatsapp.WhatsApp", FakeWhatsApp)
 
@@ -149,7 +155,7 @@ async def test_a_confirmed_number_is_sent_to_and_the_summary_says_so(fake_db, se
     assert sending[0][2]["timeout"] == 5.0, "a send inside a call must not wait longer"
 
     saved = await call_repo.get_call("t-1", call.id)
-    assert "WhatsApp to …4567: sent" in saved.summary
+    assert "WhatsApp to …4567: sent (template)" in saved.summary
 
 
 async def test_number_confirmed_true_without_a_read_back_is_still_a_read_back(fake_db, sending):
@@ -225,6 +231,8 @@ async def test_a_failed_send_never_promises_it_later(fake_db, monkeypatch):
         async def send_text(self, *a, **kw):
             raise RuntimeError("Meta said no")
 
+        send_template = send_text
+
     monkeypatch.setattr("app.services.whatsapp.WhatsApp", FakeWhatsApp)
 
     async def sender(tenant):
@@ -240,7 +248,7 @@ async def test_a_failed_send_never_promises_it_later(fake_db, monkeypatch):
     assert answer == live.NOT_SENT
     assert "follow shortly" not in answer and "Sent" not in answer
     saved = await call_repo.get_call("t-1", call.id)
-    assert "WhatsApp to …4567: not sent (could not be sent)" in saved.summary
+    assert "WhatsApp to …4567: not sent (could not be sent: Meta said no)" in saved.summary
 
 
 async def test_no_whatsapp_number_is_said_plainly(fake_db, monkeypatch):
@@ -293,6 +301,8 @@ async def test_a_401_marks_the_line_failed_and_the_tool_disappears(fake_db, monk
             raise UpstreamError("WhatsApp refused the request: Error validating access token",
                                 http_status=401, provider_code=190)
 
+        send_template = send_text
+
     monkeypatch.setattr("app.services.whatsapp.WhatsApp", FakeWhatsApp)
     _on_the_line(call, READ_BACK_CONFIRMED)
     handle, _ = await _send(tenant, call, to="0300 123 4567")
@@ -342,6 +352,182 @@ def test_auth_rejected_reads_a_401_or_graph_error_190():
     assert whatsapp.auth_rejected(UpstreamError("x", http_status=400, provider_code=190))
     assert not whatsapp.auth_rejected(UpstreamError("x", http_status=400, provider_code=131026))
     assert not whatsapp.auth_rejected(RuntimeError("x"))
+
+
+# ---------------------------------------------------------------------------
+# How it reaches a phone caller: the approved template
+# ---------------------------------------------------------------------------
+#
+# Meta delivers a plain text only inside the 24-hour window after the person
+# messaged the business. A phone caller usually has not, so the send was
+# accepted and never delivered: "sent", and nothing arrived.
+
+
+async def _confirmed_send(tenant, call, sending_list, **args):
+    handle = live._tool_handler(tenant, call)
+    await handle("send_whatsapp_message", {"text": args.get("text", TEXT), "to": "0300 123 4567"})
+    return await handle("send_whatsapp_message",
+                        {"text": args.get("text", TEXT), "to": "0300 123 4567",
+                         "number_confirmed": True})
+
+
+async def test_a_caller_who_never_messaged_gets_the_approved_template(fake_db, sending):
+    call = _call()
+    _on_the_line(call, READ_BACK_CONFIRMED)
+    company = Tenant(phoneNumberId="t-1", name="Acme Motors", defaultCountryCode="92")
+    assert await _confirmed_send(company, call, sending) == "Sent."
+    [(to, body, how)] = sending
+    assert how["kind"] == "template"
+    assert how["template"] == "call_followup" and how["language"] == "en"
+    assert how["parameters"] == ["Acme Motors", TEXT]
+    assert how["body"] == TEXT and how["timeout"] == 5.0
+    assert to == "+923001234567"
+
+
+async def test_a_caller_inside_the_24_hour_window_gets_a_plain_text(fake_db, sending):
+    import time
+
+    from app.models.call import Message, MessageDirection
+    from app.repositories import calls as call_repo
+
+    await call_repo.save_message(Message(
+        tenantId="t-1", direction=MessageDirection.INBOUND, counterparty="+923001234567",
+        body="salam", createdAt=time.time() - 3600))
+    call = _call()
+    _on_the_line(call, READ_BACK_CONFIRMED)
+    assert await _confirmed_send(_tenant(), call, sending) == "Sent."
+    assert sending[0][2]["kind"] == "text"
+
+
+async def test_a_message_older_than_24_hours_does_not_open_the_window(fake_db, sending):
+    import time
+
+    from app.models.call import Message, MessageDirection
+    from app.repositories import calls as call_repo
+
+    await call_repo.save_message(Message(
+        tenantId="t-1", direction=MessageDirection.INBOUND, counterparty="+923001234567",
+        body="salam", createdAt=time.time() - 25 * 3600))
+    # And our own message to them does not count either.
+    await call_repo.save_message(Message(
+        tenantId="t-1", direction=MessageDirection.OUTBOUND, counterparty="+923001234567",
+        body="hello", createdAt=time.time() - 60))
+    call = _call()
+    _on_the_line(call, READ_BACK_CONFIRMED)
+    await _confirmed_send(_tenant(), call, sending)
+    assert sending[0][2]["kind"] == "template"
+
+
+def test_the_template_parameter_is_cleaned_for_meta():
+    from app.services.whatsapp import MAX_PARAMETER_CHARS, clean_parameter
+
+    assert clean_parameter("Line one\nLine two\t\tthree      spaced\r\n") == (
+        "Line one · Line two · three    spaced")
+    assert clean_parameter("a" * 2000).endswith("…")
+    assert len(clean_parameter("a" * 2000)) == MAX_PARAMETER_CHARS
+    assert clean_parameter("   \n\t ") == "Details from your call."
+    assert clean_parameter("fine as it is") == "fine as it is"
+
+
+async def test_a_message_with_newlines_is_cleaned_before_sending(fake_db, sending):
+    call = _call()
+    _on_the_line(call, READ_BACK_CONFIRMED)
+    text = "SEAL Premium\nPKR 16,990,000\nAdvance 3,350,000"
+    assert await _confirmed_send(_tenant(), call, sending, text=text) == "Sent."
+    assert sending[0][2]["parameters"][1] == "SEAL Premium · PKR 16,990,000 · Advance 3,350,000"
+
+
+async def test_metas_refusal_is_reported_with_its_reason(fake_db, monkeypatch, caplog):
+    import logging
+
+    from app.repositories import calls as call_repo
+    from app.services import lines
+
+    class FakeWhatsApp:
+        def __init__(self, tenant): ...
+
+        async def send_template(self, *a, **kw):
+            raise UpstreamError("WhatsApp refused the request: Template name does not exist in the translation",
+                                details="Template name does not exist in the translation",
+                                http_status=400, provider_code=132001)
+
+        async def send_text(self, *a, **kw):
+            raise AssertionError("a phone caller must get the template")
+
+    monkeypatch.setattr("app.services.whatsapp.WhatsApp", FakeWhatsApp)
+
+    async def sender(tenant):
+        return tenant
+
+    monkeypatch.setattr(lines, "whatsapp_sender", sender)
+    call = _call()
+    await call_repo.save_call(call)
+    _on_the_line(call, READ_BACK_CONFIRMED)
+    with caplog.at_level(logging.WARNING, logger="app.services.agent.live"):
+        answer = await _confirmed_send(_tenant(), call, [])
+    assert answer == live.NOT_SENT
+    saved = await call_repo.get_call("t-1", call.id)
+    assert ("WhatsApp to …4567: not sent (could not be sent: Template name does not exist "
+            "in the translation)") in saved.summary
+    [line] = [r.getMessage() for r in caplog.records if "did not send" in r.getMessage()]
+    assert "Template name does not exist" in line and "…4567" in line
+    assert "+923001234567" not in line and "03001234567" not in line
+
+
+def test_the_follow_up_settings_have_defaults():
+    from app.config import Settings
+
+    assert Settings.model_fields["whatsapp_followup_template"].default == "call_followup"
+    assert Settings.model_fields["whatsapp_followup_language"].default == "en"
+
+
+async def test_verify_reports_a_missing_or_unapproved_follow_up_template(fake_db, monkeypatch):
+    from app.services import lines, whatsapp
+
+    async def number_ok(_t):
+        return "Meta confirmed +923000000001 (Acme)."
+
+    monkeypatch.setattr(lines, "_meta_number_detail", number_ok)
+    tenant = _tenant()
+    advice = "Create an approved Utility template named call_followup with {{1}} and {{2}}"
+
+    async def none(self, *, timeout=None):
+        return []
+
+    monkeypatch.setattr(whatsapp.WhatsApp, "templates", none)
+    number = await lines.verify(tenant, _whatsapp_number())
+    assert number.verified, "a missing template must not fail the verify"
+    assert number.status_detail.startswith("Meta confirmed +923000000001 (Acme).")
+    assert advice in number.status_detail
+
+    async def pending(self, *, timeout=None):
+        return [{"name": "call_followup", "status": "PENDING", "language": "en"}]
+
+    monkeypatch.setattr(whatsapp.WhatsApp, "templates", pending)
+    number = await lines.verify(tenant, _whatsapp_number())
+    assert number.verified and "not approved (PENDING)" in number.status_detail
+
+    async def other_language(self, *, timeout=None):
+        return [{"name": "call_followup", "status": "APPROVED", "language": "ur"}]
+
+    monkeypatch.setattr(whatsapp.WhatsApp, "templates", other_language)
+    number = await lines.verify(tenant, _whatsapp_number())
+    assert number.verified and "approved in ur" in number.status_detail
+    assert "WHATSAPP_FOLLOWUP_LANGUAGE" in number.status_detail
+
+    async def approved(self, *, timeout=None):
+        return [{"name": "call_followup", "status": "APPROVED", "language": "en"}]
+
+    monkeypatch.setattr(whatsapp.WhatsApp, "templates", approved)
+    number = await lines.verify(tenant, _whatsapp_number())
+    assert number.verified and number.status_detail == "Meta confirmed +923000000001 (Acme)."
+
+    async def unreachable(self, *, timeout=None):
+        raise UpstreamError("WhatsApp did not respond")
+
+    monkeypatch.setattr(whatsapp.WhatsApp, "templates", unreachable)
+    number = await lines.verify(tenant, _whatsapp_number())
+    assert number.verified and "could not be checked" in number.status_detail
 
 
 # ---------------------------------------------------------------------------

@@ -82,10 +82,10 @@ def test_a_sent_template_is_logged_as_its_words(monkeypatch):
                     accessToken="tok", metaPhoneNumberId="m-1")
     client = WhatsApp(tenant)
 
-    async def fake_templates():
+    async def fake_templates(**_kw):
         return [describe_template(REAL)]
 
-    async def fake_post(path, payload):
+    async def fake_post(path, payload, **_kw):
         return {"messages": [{"id": "wamid.1"}]}
 
     recorded = {}

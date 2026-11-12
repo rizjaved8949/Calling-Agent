@@ -165,6 +165,9 @@ async def test_a_number_confirmed_for_a_request_is_not_read_back_again_for_a_mes
         async def send_text(self, to, body, **kw):
             sent.append(to)
 
+        async def send_template(self, to, template, **kw):
+            sent.append(to)
+
     monkeypatch.setattr("app.services.whatsapp.WhatsApp", FakeWhatsApp)
 
     async def sender(tenant):
@@ -194,6 +197,9 @@ async def test_a_number_confirmed_for_a_message_is_not_read_back_again_for_a_req
         def __init__(self, tenant): ...
 
         async def send_text(self, to, body, **kw):
+            pass
+
+        async def send_template(self, to, template, **kw):
             pass
 
     monkeypatch.setattr("app.services.whatsapp.WhatsApp", FakeWhatsApp)
