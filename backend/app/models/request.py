@@ -60,10 +60,14 @@ class ReplyBy(str, Enum):
 #: type needs the four common ones; a question needs only a number to answer
 #: to and the question itself, and nobody is pressed for a name over it.
 COMMON_FIELDS = ("name", "mobile", "city", "details")
-REQUIRED_FIELDS: dict[RequestType, tuple[str, ...]] = {
+#: In the order they are asked for. A tuple entry means any one of them.
+#: A complaint is the name and mobile, then the vehicle or its registration
+#: and what happened, and no city: a caller who has told you what went wrong
+#: with their car is not asked where they live before it is written down.
+REQUIRED_FIELDS: dict[RequestType, tuple[Any, ...]] = {
     RequestType.TEST_DRIVE: COMMON_FIELDS + ("vehicle_model", "preferred_times"),
     RequestType.SERVICE: COMMON_FIELDS + ("vehicle_model", "registration", "preferred_times"),
-    RequestType.COMPLAINT: COMMON_FIELDS,
+    RequestType.COMPLAINT: ("name", "mobile", ("vehicle_model", "registration"), "details"),
     RequestType.CALLBACK: COMMON_FIELDS,
     RequestType.QUESTION: ("mobile", "details"),
     RequestType.CANCELLATION: COMMON_FIELDS,
@@ -71,7 +75,6 @@ REQUIRED_FIELDS: dict[RequestType, tuple[str, ...]] = {
 }
 #: One of these must be present, per type, on top of the required fields.
 EITHER_OF: dict[RequestType, tuple[str, ...]] = {
-    RequestType.COMPLAINT: ("vehicle_model", "registration"),
     RequestType.CANCELLATION: ("registration", "booking_reference"),
 }
 
@@ -103,7 +106,13 @@ def missing_fields(kind: RequestType, values: dict[str, Any]) -> list[str]:
             return any(str(v).strip() for v in value)
         return bool(str(value or "").strip())
 
-    missing = [LABELS[f] for f in REQUIRED_FIELDS[kind] if not has(f)]
+    missing: list[str] = []
+    for field in REQUIRED_FIELDS[kind]:
+        if isinstance(field, tuple):
+            if not any(has(f) for f in field):
+                missing.append(" or ".join(LABELS[f] for f in field))
+        elif not has(field):
+            missing.append(LABELS[field])
     either = EITHER_OF.get(kind)
     if either and not any(has(f) for f in either):
         if kind is RequestType.CANCELLATION:

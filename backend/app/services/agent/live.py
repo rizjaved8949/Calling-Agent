@@ -1169,6 +1169,14 @@ RECORD_NOW_NOTE = (
     "record_request now with confirmed true and the same details. Do not read "
     "them back again, do not ask permission, do not add conditions."
 )
+MOBILE_LENGTH_NOTE = (
+    NOTE_PREFIX
+    + "The mobile number the caller just gave has {n} digits; a Pakistani mobile "
+    "has 11. Say so and ask for it again; do not read it back as complete."
+)
+#: How long after a caller's words arrive before the number in them is
+#: counted: the rest of a number said slowly may still be on its way.
+MOBILE_NOTE_DELAY_SECONDS = 1.5
 
 #: Only a claim that something *has been* recorded counts. "Record kar
 #: loongi" (I will record) and "record karne ke liye" (in order to record)
@@ -1186,6 +1194,13 @@ _RECORDED_CLAIMS = turns_mod._phrases(
     "recorded it", "is booked", "has been booked", "have booked", "booked it", "is noted",
     "has been noted", "have noted", "noted it", "is submitted", "has been submitted",
     "have submitted", "submitted it", "recorded", "booked", "noted", "submitted",
+    # Complaints, in the past tense: "shikayat darj karwayi thi", "darj hui
+    # thi", "complaint register ho gayi".
+    "darj karwayi", "darj karwai", "darj karvayi", "darj karvai", "darj karai",
+    "darj karaai", "darj karwa di", "darj karwa li", "darj ki thi", "darj ki hai",
+    "darj hui thi", "darj hui hai", "darj hui", "darj ho chuki", "darj ho chuka",
+    "darj hai", "register ho gayi", "register ho gai", "register hui", "register kar di",
+    "register karwa di", "registered", "logged", "lodged", "filed",
 )
 _RECORDED_CLAIMS_SCRIPT = ("ریکارڈ کر لی", "ریکارڈ کر لیا", "ریکارڈ ہو گئی", "ریکارڈ ہو گیا",
                            "درج کر لی", "درج ہو گئی", "نوٹ کر لی", "بک کر لی", "بک ہو گئی")
@@ -1199,12 +1214,13 @@ _NOT_A_CLAIM = turns_mod._phrases(
     "doonga", "dunga", "denge", "doon", "dun", "loon", "lun", "deti", "deta", "dete", "leti",
     "leta", "lete", "paungi", "paoongi", "paunga", "paoonga", "jaye", "jayegi", "jaayegi",
     "jaegi", "jayega", "jaayega", "jaega", "jayen", "jaen", "jaaye", "nahi", "nahin", "not",
-    "yet", "abhi", "pehle", "pahle", "will", "can", "could", "shall", "should", "would",
+    "yet", "abhi", "will", "can", "could", "shall", "should", "would", "karwana", "karwani",
+    "karwane", "karvana", "karvani", "karvane", "karwaun", "karwaoon", "karwa doon",
     "agar", "chahte", "chahti", "chahta", "once", "jab", "baad", "tabhi", "tab", "to be",
     "going to", "about to", "need", "needs", "before", "after", "when", "if", "unless",
     "zaroori", "zaruri",
 )
-_NOT_A_CLAIM_SCRIPT = ("نہیں", "سکتی", "سکتا", "سکتے", "ابھی", "پہلے", "گی", "گا", "گے",
+_NOT_A_CLAIM_SCRIPT = ("نہیں", "سکتی", "سکتا", "سکتے", "ابھی", "گی", "گا", "گے",
                        "جائے", "اگر", "جب")
 _SENTENCES = re.compile(r"[^.!?؟۔।]+[.!?؟۔।]*")
 
@@ -1267,7 +1283,8 @@ def _transcript_watch(tenant: Tenant, call: Call):
       the details is followed by a note to call record_request now, not a
       second read-back.
     """
-    state: dict = {"armed_at": -1, "ending": None, "corrected": -1, "nudged": -1}
+    state: dict = {"armed_at": -1, "ending": None, "corrected": -1, "nudged": -1,
+                   "counted": -1}
 
     def watch(who: str, _text: str) -> None:
         session = _sessions.get(call.id)
@@ -1279,6 +1296,11 @@ def _transcript_watch(tenant: Tenant, call: Call):
         turn_index = len(conversation) - 1
         latest = conversation[-1][1]
         if who == "caller":
+            if (state["counted"] != turn_index
+                    and phones.wrong_length_mobile(latest, _country(tenant)) is not None):
+                state["counted"] = turn_index
+                _keep(asyncio.create_task(
+                    _note_mobile_length(tenant, call, session, turn_index)))
             if state["nudged"] == turn_index or _recorded.get(call.id):
                 return
             if not turns_mod.is_affirmative(latest) or turns_mod.is_new_request(latest):
@@ -1312,6 +1334,29 @@ def _transcript_watch(tenant: Tenant, call: Call):
                 _keep(asyncio.create_task(session.note_to_agent(NOT_RECORDED_CORRECTION)))
 
     return watch
+
+
+async def _note_mobile_length(tenant: Tenant, call: Call, session: CallSession,
+                              turn_index: int) -> None:
+    """Tell the model a mobile number was the wrong length, once the caller's
+    turn has had time to finish arriving. Only the count is logged."""
+    try:
+        await asyncio.sleep(MOBILE_NOTE_DELAY_SECONDS)
+        if _sessions.get(call.id) is not session or session.closed:
+            return
+        conversation = session.turns()
+        if turn_index >= len(conversation) or conversation[turn_index][0] != "caller":
+            return
+        count = phones.wrong_length_mobile(conversation[turn_index][1], _country(tenant))
+        if count is None:
+            return                                   # the rest of it arrived
+        log.info("call %s: the caller gave a mobile number with %d digits; the agent "
+                 "is told to ask for it again", call.id, count)
+        await session.note_to_agent(MOBILE_LENGTH_NOTE.format(n=count))
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001
+        log.exception("call %s: could not pass the number length on", call.id)
 
 
 async def _end_after_closing(tenant: Tenant, call: Call, session: CallSession,

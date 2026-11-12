@@ -106,7 +106,9 @@ RECORD_REQUEST: dict[str, Any] = {
         "not a reason to skip recording. If the caller declines or skips an "
         "optional detail, never ask for it again. After the read-back and a yes, "
         "call this with confirmed true at once: no second read-back, no asking "
-        "permission to read back, no extra conditions."
+        "permission to read back, no extra conditions. For a complaint: the "
+        "name and mobile first, then the registration or model and what "
+        "happened, then read back and record it before anything else."
     ),
     "parameters": {
         "type": "object",

@@ -154,6 +154,42 @@ def spoken_digits(text: str) -> str:
     return _SPOKEN_RUN.sub(as_digits, text or "")
 
 
+#: How many digits a mobile has in its national form, by country code.
+MOBILE_DIGITS = {"92": 11}
+_DIGIT_RUN = re.compile(r"\+?\d(?:[\d\s\-()]*\d)?")
+
+
+def wrong_length_mobile(text: str, country: str = "") -> int | None:
+    """The digit count of a mobile number in `text` that is the wrong length
+    for the country, or None.
+
+    A Pakistani mobile is 11 digits starting 03. A caller who says ten is
+    read back as if complete unless somebody counts: on a real call the
+    agent read "0300 123456" back and asked whether it was right.
+    """
+    country = re.sub(r"\D", "", country or "") or "92"
+    expected = MOBILE_DIGITS.get(country)
+    if expected is None:
+        return None
+    for match in _DIGIT_RUN.finditer(spoken_digits(normalise_digits(text or ""))):
+        digits = digits_only(match.group(0))
+        if len(digits) < 8 or len(digits) > 14:
+            continue                               # not a number, or two run together
+        if digits.startswith("00"):
+            digits = digits[2:]
+        if digits.startswith(country) and len(digits) > len(country) + 6:
+            national = "0" + digits[len(country):]
+        elif digits.startswith("0"):
+            national = digits
+        elif digits.startswith("3") and 9 <= len(digits) <= 12:
+            national = "0" + digits
+        else:
+            continue
+        if national.startswith("03") and len(national) != expected:
+            return len(national)
+    return None
+
+
 def read_back_in(agent_text: str, number: str) -> bool:
     """Whether the agent's turn read this number back, in digits or in
     words: the whole number, or at least its last four digits."""
