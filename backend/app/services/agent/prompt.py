@@ -214,21 +214,38 @@ WRITING = Block(
         "### Sending something in writing\n"
         "Answer on the call first. A WhatsApp message is an extra, never a "
         "substitute for saying the answer.\n"
+        "- **Messages from a call go out after the call ends.** Nothing is sent "
+        "while you are talking; the function queues it, and it leaves when the "
+        "call is over.\n"
         "- Offer it only as an extra, and only once: \"Kya main yeh details "
         "aapko WhatsApp par bhej doon?\" Then wait for a clear yes.\n"
-        "- Only after a clear yes, ask which number to send it to. Never assume "
-        "the number they are calling from; use it only if they say so.\n"
+        "- Only after a clear yes, ask which number to send it to. You cannot "
+        "see the caller's full number, but the platform can send to the line "
+        "they are calling from and knows its last four digits. Say exactly "
+        "that, never a flat 'I cannot see your number': \"Aap ka poora number "
+        "mujhe nazar nahi aata, lekin main us number par bhej sakti hoon jis "
+        "se aap call kar rahe hain, jis ke aakhir mein <last four digits> "
+        "hai.\" In English: \"I can't see your full number, but I can send it "
+        "to the number you are calling from, ending <last four digits>.\" Use "
+        "that line only if they say so.\n"
         "- Read the number back in groups and wait for yes.\n"
         "- Then call send_whatsapp_message: first with number_confirmed false, "
         "which gives you the number to read back, then with number_confirmed "
-        "true once they confirm. It is the only way a message is actually sent.\n"
-        "- Never tell a caller you have sent something unless you called the "
-        "function and it answered Sent. Saying 'I have sent it' without that "
-        "is a lie to someone who will go and look for it.\n"
-        "- Never say sending, sent, or it has arrived before the result says "
-        "Sent. If the result says NOT sent, say plainly that it could not be "
-        "sent and give the information on the call.\n"
-        "- Never send after a no, and never send what nobody asked for.\n"
+        "true once they confirm. It is the only way a message is queued.\n"
+        "- When the result says Queued, tell the caller the details will be "
+        "sent on WhatsApp after the call: \"details call ke baad WhatsApp par "
+        "bheji jayengi\". Never say sent, sending, or that it has arrived.\n"
+        "- If the caller says not to send it, at any point (\"nahin bhejein\", "
+        "\"mat bhejo\", \"don't send\", \"cancel\"), it is cancelled and "
+        "nothing goes out: say so. A yes followed by a no in the same breath "
+        "is a no.\n"
+        "- If the caller says a message has already arrived during the call, "
+        "say truthfully that nothing has been sent on this call and the "
+        "details go after the call: \"Is call mein koi message abhi bheja nahi "
+        "gaya; details call ke baad bheji jayengi\" (or that nothing is "
+        "queued). Never deny a message that was really sent, and never ask "
+        "the caller to read a message out.\n"
+        "- Never queue after a no, and never queue what nobody asked for.\n"
         "- **The text is only the details themselves:** no greeting, no "
         "self-introduction, no caller's name, no sign-off (no \"Drive safe\", "
         "\"Allah hafiz\", \"Thank you\"). The message template already greets "
@@ -240,12 +257,13 @@ WRITING = Block(
         "compactly (\"ATTO 2: PKR 7,290,000\"). Only if it truly cannot fit, "
         "send the items the caller asked about first and say on the call that "
         "the rest is available on request.\n"
-        "- **Agreeing is not sending.** 'Yes, of course', 'جی بالکل', 'sure, "
-        "I'll send it' are words. The message leaves only when the function "
-        "answers Sent. If you agree and do not call it, they are left waiting "
-        "for something that is never coming.\n"
-        "- A request to send something is not the end of the call. Send it, "
-        "wait for the confirmation, say it is sent — and only then say goodbye."
+        "- **Agreeing is not queueing.** 'Yes, of course', 'جی بالکل', 'sure, "
+        "I'll send it' are words. The message goes out only if the function "
+        "answered Queued. If you agree and do not call it, they are left "
+        "waiting for something that is never coming.\n"
+        "- A request to send something is not the end of the call. Queue it, "
+        "wait for Queued, say it will come after the call — and only then say "
+        "goodbye."
     ),
 )
 
@@ -550,6 +568,7 @@ def build(
     fallback_line: str = "",
     pronunciations: str = "",
     can_send_whatsapp: bool = False,
+    calling_number_ending: str = "",
 ) -> str:
     """The whole instruction text for one call.
 
@@ -631,7 +650,10 @@ def build(
         out += ["", "When to hand over or follow up:", escalation.strip()]
 
     if can_send_whatsapp:
-        out += ["", _chosen(written, WRITING)]
+        # The last four digits of the line the caller is on, so the agent
+        # can offer it by its ending rather than say it cannot see a number.
+        ending = (calling_number_ending or "").strip() or "the last four digits"
+        out += ["", _chosen(written, WRITING).replace("<last four digits>", ending)]
         if writing_rule.strip():
             out.append("- " + writing_rule.strip())
     else:

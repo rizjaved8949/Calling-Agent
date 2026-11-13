@@ -179,5 +179,7 @@ async def test_a_dry_send_says_sent_without_sending(dry, fake_db):
     assert "Read this back" in first
     answer = await handle("send_whatsapp_message",
                           {"text": "SEAL: PKR 16,990,000", "to": "calling_number", "number_confirmed": True})
-    assert answer == "Sent."
+    assert answer == live.QUEUED
+    assert dry.sent == [], "sent during the call"
+    await live.flush_queued_messages(tenant, call, live._pending[call.id])
     assert dry.sent == [("+923001234567", "SEAL: PKR 16,990,000")]

@@ -123,7 +123,8 @@ async def test_messaging_is_offered_when_a_whatsapp_number_exists(fake_db, with_
     persona = await live.persona_for(_tenant(), _call())
     names = [t["name"] for t in persona.tools]
     assert names == ["send_whatsapp_message", "record_request", "calculate", "end_call"]
-    assert "Never assume the number they are calling from" in persona.instructions
+    assert ("You cannot see the caller's full number, but the platform can send to the line "
+            "they are calling from") in persona.instructions
 
 
 def test_the_message_tool_asks_for_the_number_and_a_confirmation():
@@ -201,10 +202,15 @@ def test_a_failed_message_never_claims_it_was_sent(fake_db, monkeypatch):
         answer = asyncio.run(handle("send_whatsapp_message",
                                     {"text": "hi", "to": "0300 123 4567",
                                      "number_confirmed": True}))
+        # Queued on the call; the failure comes when the call ends.
+        results = asyncio.run(live.flush_queued_messages(
+            _tenant(defaultCountryCode="92"), call, live._pending[call.id]))
     finally:
         live._sessions.pop(call.id, None)
-    assert answer == live.NOT_SENT
-    assert "Sent" not in answer and "follow shortly" not in answer
+        live._pending.pop(call.id, None)
+    assert answer == live.QUEUED
+    assert "has been sent" not in answer.replace("Do not say it has been sent", "")
+    assert results == ["not sent (could not be sent: Meta said no)"]
 
 
 def test_no_whatsapp_number_is_said_plainly(monkeypatch):
@@ -309,8 +315,9 @@ async def test_she_is_forbidden_from_claiming_an_unsent_message(fake_db, with_wh
     """The failure mode was not silence. It was saying "I have sent it on
     WhatsApp" to somebody who would then go and look for it."""
     text = (await live.persona_for(_tenant(), _call())).instructions
-    assert "Never tell a caller you have sent something unless you called" in text
-    assert "is a lie to someone who will go and look for it" in text
+    assert "Messages from a call go out after the call ends" in text
+    assert "Never say sent, sending, or that it has arrived" in text
+    assert "If you agree and do not call it, they are left waiting" in text
 
 
 @pytest.mark.asyncio

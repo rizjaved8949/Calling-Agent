@@ -199,6 +199,7 @@ async def persona_for(tenant: Tenant, call: Call | None = None,
         fallback_line=voice.get("fallbackLine") or "",
         pronunciations=voice.get("pronunciations") or "",
         can_send_whatsapp=can_message,
+        calling_number_ending=phones.ending(call.counterparty) if call else "",
     )
 
     # The agent's own "Opening line" field, word for word; without one, a
@@ -415,9 +416,17 @@ def _confirmed_numbers(pending: dict) -> set[str]:
 
 # What the tools tell the model. Written as instructions, because the model
 # reads a tool result as the next thing to act on.
-NOT_SENT = (
-    "NOT sent. Tell the caller plainly it could not be sent and give them the "
-    "information now, on the call. Do not promise to send it later."
+QUEUED = (
+    "Queued. Tell the caller the details will be sent on WhatsApp after the call. "
+    "Do not say it has been sent."
+)
+QUEUED_AGAIN = (
+    "Queued, replacing the message queued earlier for this number. Tell the caller "
+    "the details will be sent on WhatsApp after the call. Do not say it has been sent."
+)
+CANCELLED = (
+    "Cancelled: the caller said not to send it. Nothing is queued and nothing will be "
+    "sent. Say briefly that it will not be sent. Queue again only if they ask again."
 )
 NOT_ASKED = (
     "NOT sent: the caller has not asked for this and has not said yes to an "
@@ -490,22 +499,26 @@ async def _note_on_call(tenant: Tenant, call: Call, line: str) -> None:
 
 
 async def _send_message(tenant: Tenant, call: Call, args: dict, pending: dict[str, str]) -> str:
-    """A WhatsApp message, only when the transcript says the caller wants it.
+    """Queue a WhatsApp message, only when the transcript says the caller
+    wants it. It is sent when the call ends (`flush_queued_messages`).
 
     Five checks, in order: they asked or said yes; the number is a whole
     number; it is a number they said on this call (or they said to use the
     one they are calling from); it was read back and confirmed; and only
-    then is it sent, with five seconds on the request. "Sent." is said only
-    by the one path that sent.
+    then is it queued. Sending during the call was the problem: on a real
+    call the message left on "ji haan" while "balki nahin bheje" was still
+    being transcribed, and the agent then denied what the caller had in
+    their hand. Queued, a late no still cancels it.
     """
     from .. import lines
-    from ...services import whatsapp as whatsapp_service
-    from ...services.whatsapp import WhatsApp, mask
 
     text = str(args.get("text") or "").strip()
     if not text:
-        return "No message was sent: there was nothing to say."
+        return "No message was queued: there was nothing to say."
     conversation = _conversation(call.id) or []
+    last_caller = turns_mod.last_turn(conversation, "caller")
+    if turns_mod.last_word_on_sending(last_caller) == "no" and _cancel_queued(call, pending):
+        return CANCELLED
     if not turns_mod.consented_to_message(conversation):
         return NOT_ASKED
     to = str(args.get("to") or "").strip()
@@ -570,25 +583,80 @@ async def _send_message(tenant: Tenant, call: Call, args: dict, pending: dict[st
         sender = None
     if sender is None:
         return NO_SENDER
-    try:
-        how = await asyncio.wait_for(
-            _deliver(sender, destination, text, call), TOOL_TIMEOUT_SECONDS + 1)
-    except Exception as exc:  # noqa: BLE001
-        rejected = whatsapp_service.auth_rejected(exc)
-        why = "token rejected" if rejected else _refusal_reason(exc)
-        log.warning("call %s: the agent's message to %s did not send (%s; %s)",
-                    call.id, mask(destination), why, type(exc).__name__)
-        if rejected:
-            with contextlib.suppress(Exception):
-                await asyncio.wait_for(lines.note_send_auth_failure(sender),
-                                       TOOL_TIMEOUT_SECONDS)
-        await _note_on_call(tenant, call, f"WhatsApp to …{phones.ending(destination)}: not sent ({why})")
-        return NOT_SENT
     pending.pop("number", None)
     _confirmed_numbers(pending).add(key)
-    log.info("call %s: the agent sent a WhatsApp %s to %s", call.id, how, mask(destination))
-    await _note_on_call(tenant, call, f"WhatsApp to …{phones.ending(destination)}: sent ({how})")
-    return "Sent."
+    queue: list[dict] = pending.setdefault("queued", [])
+    replaced = False
+    for message in queue:
+        if message["to"] == destination and message["state"] == "queued":
+            message["text"] = text
+            message["queued_at"] = time.time()
+            replaced = True
+    if not replaced:
+        queue.append({"to": destination, "text": text, "state": "queued",
+                      "queued_at": time.time()})
+    log.info("call %s: a WhatsApp to %s is queued for after the call", call.id,
+             phones.ending(destination).rjust(5, "…"))
+    await _note_on_call(tenant, call, f"WhatsApp to …{phones.ending(destination)}: queued, "
+                                      "to be sent after the call")
+    return QUEUED_AGAIN if replaced else QUEUED
+
+
+def queued_messages(pending: dict | None) -> list[dict]:
+    """The messages waiting to go out after the call."""
+    return [m for m in (pending or {}).get("queued") or [] if m.get("state") == "queued"]
+
+
+def _cancel_queued(call: Call, pending: dict) -> bool:
+    """Drop every queued message: the caller said not to send. True if
+    there was anything to drop."""
+    waiting = queued_messages(pending)
+    for message in waiting:
+        message["state"] = "cancelled"
+    if waiting:
+        log.info("call %s: the caller cancelled the WhatsApp message (%d queued)",
+                 call.id, len(waiting))
+    return bool(waiting)
+
+
+async def flush_queued_messages(tenant: Tenant, call: Call, pending: dict | None) -> list[str]:
+    """Send what the call queued, now that it is over. Once each, never a
+    cancelled one. Each result goes into the call's summary and the log,
+    with the number masked. Never raises."""
+    from .. import lines
+    from ...services import whatsapp as whatsapp_service
+    from ...services.whatsapp import mask
+
+    results: list[str] = []
+    for message in queued_messages(pending):
+        message["state"] = "sending"
+        destination, text = message["to"], message["text"]
+        ending = phones.ending(destination)
+        try:
+            sender = await asyncio.wait_for(lines.whatsapp_sender(tenant), TOOL_TIMEOUT_SECONDS)
+            if sender is None:
+                raise RuntimeError("no WhatsApp number can send right now")
+            how = await asyncio.wait_for(
+                _deliver(sender, destination, text, call), TOOL_TIMEOUT_SECONDS + 1)
+        except Exception as exc:  # noqa: BLE001
+            message["state"] = "failed"
+            rejected = whatsapp_service.auth_rejected(exc)
+            why = "token rejected" if rejected else _refusal_reason(exc)
+            log.warning("call %s: the queued WhatsApp to %s did not send after the call "
+                        "(%s; %s)", call.id, mask(destination), why, type(exc).__name__)
+            if rejected:
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(lines.note_send_auth_failure(sender),
+                                           TOOL_TIMEOUT_SECONDS)
+            await _note_on_call(tenant, call, f"WhatsApp to …{ending}: not sent ({why})")
+            results.append(f"not sent ({why})")
+            continue
+        message["state"] = "sent"
+        log.info("call %s: sent the queued WhatsApp %s to %s after the call",
+                 call.id, how, mask(destination))
+        await _note_on_call(tenant, call, f"WhatsApp to …{ending}: sent after the call ({how})")
+        results.append(f"sent ({how})")
+    return results
 
 
 #: Meta's customer-service window: a plain text reaches only somebody who
@@ -1234,6 +1302,19 @@ NOTHING_SENT_CORRECTION = (
     + "Nothing has been recorded or sent. Ask for any missing details (mobile "
     "first), read back, then call record_request."
 )
+CANCELLED_NOTE = (
+    NOTE_PREFIX
+    + "The caller said not to send the WhatsApp message. It is cancelled: nothing is "
+    "queued and nothing has been sent. Confirm briefly that it will not be sent, and "
+    "do not queue it again unless they ask again."
+)
+RECEIVED_NOTE = (
+    NOTE_PREFIX
+    + "No WhatsApp message has been sent on this call{state}. Say so truthfully: 'Is "
+    "call mein koi message abhi bheja nahi gaya; details call ke baad bheji jayengi' "
+    "(or that nothing is queued). Never deny a message that was really sent, and "
+    "never ask the caller to read a message out."
+)
 AMOUNT_CORRECTION = (
     NOTE_PREFIX
     + "You just said {wrong}; the correct figure is {right}. Correct yourself briefly "
@@ -1415,6 +1496,7 @@ def _transcript_watch(tenant: Tenant, call: Call):
         turn_index = len(conversation) - 1
         latest = conversation[-1][1]
         if who == "caller":
+            _watch_sending(tenant, call, session, conversation, turn_index, latest, state)
             if (turn_index not in state["counted"]
                     and phones.wrong_length_mobile(latest, _country(tenant)) is not None):
                 _keep(asyncio.create_task(
@@ -1484,6 +1566,42 @@ async def _note_mobile_length(tenant: Tenant, call: Call, session: CallSession,
         raise
     except Exception:  # noqa: BLE001
         log.exception("call %s: could not pass the number length on", call.id)
+
+
+def _watch_sending(tenant: Tenant, call: Call, session, conversation: list[tuple[str, str]],
+                   turn_index: int, latest: str, state: dict) -> None:
+    """The caller's say over a queued message, read from their whole turn.
+
+    A no, said plainly ("nahin bhejein") or as the answer to the agent's
+    offer, cancels what is queued, however the turn started: "ji haan.
+    balki nahin bheje" is a no. And a caller who says a message has already
+    arrived is answered with the truth about this call, not a denial.
+    """
+    pending = _pending.get(call.id) or {}
+    agent_before = next((t for w, t in reversed(conversation[:turn_index]) if w == "agent"), "")
+    verdict = turns_mod.last_word_on_sending(latest)
+    plain_no = turns_mod.wants_not_sent(latest)
+    about_sending = plain_no or turns_mod.offered_messaging(agent_before)
+    if (verdict == "no" and about_sending and queued_messages(pending)
+            and state.get("cancelled_at") != turn_index):
+        state["cancelled_at"] = turn_index
+        _cancel_queued(call, pending)
+        for message in pending.get("queued") or []:
+            if message.get("state") == "cancelled" and not message.get("noted"):
+                message["noted"] = True
+                _keep(asyncio.create_task(_note_on_call(
+                    tenant, call, f"WhatsApp to …{phones.ending(message['to'])}: cancelled by "
+                                  "the caller")))
+        _keep(asyncio.create_task(session.note_to_agent(CANCELLED_NOTE)))
+    if turns_mod.claims_message_received(latest) and state.get("received_at") != turn_index:
+        state["received_at"] = turn_index
+        waiting = len(queued_messages(pending))
+        shape = ("; one message is queued to be sent after the call" if waiting == 1
+                 else f"; {waiting} messages are queued to be sent after the call" if waiting
+                 else "; nothing is queued")
+        log.info("call %s: the caller says a message arrived; the agent is told nothing "
+                 "has been sent on this call", call.id)
+        _keep(asyncio.create_task(session.note_to_agent(RECEIVED_NOTE.format(state=shape))))
 
 
 def _allowed_amounts(call_id: str, session, conversation: list[tuple[str, str]],
@@ -1921,10 +2039,15 @@ async def finish(tenant: Tenant, call_id: str, reason: str = "", *, error: str =
     if limit is not None and limit is not asyncio.current_task():
         limit.cancel()
     _recorded.pop(call_id, None)
-    _pending.pop(call_id, None)
+    pending = _pending.pop(call_id, None) or {}
     _calculated.pop(call_id, None)
     session = _sessions.pop(call_id, None)
     if session is None:
+        if queued_messages(pending):
+            # A queue with no session to settle: still owed to the caller.
+            call = await call_repo.get_call(tenant.phone_number_id, call_id)
+            if call is not None:
+                await flush_queued_messages(tenant, call, pending)
         return
     try:
         audio = await session.end(reason)
@@ -1970,6 +2093,11 @@ async def finish(tenant: Tenant, call_id: str, reason: str = "", *, error: str =
         elif call.recording_state is RecordingState.PENDING:
             call.recording_state = RecordingState.ABSENT
         await call_repo.save_call(call)
+
+        # What the call promised in writing goes now: before the recording,
+        # which can take ten seconds and more, and only once.
+        if queued_messages(pending):
+            await flush_queued_messages(tenant, call, pending)
 
         if audio:
             # Transcoded and stored by the same path a browser upload takes, so

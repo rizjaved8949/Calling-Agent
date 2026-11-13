@@ -600,6 +600,9 @@ async def converse(scenario: Scenario, index: int, tenant: Tenant, persona: Agen
         # The goodbye's grace period and the server-side end run after the
         # last line; give them the time they take on a call.
         await asyncio.sleep(live.GOODBYE_GRACE_SECONDS + 1.0)
+        # And what the call queued in writing goes out now, as it does when
+        # a call is settled.
+        await live.flush_queued_messages(tenant, call, live._pending.get(call.id))
     except Exception as exc:  # noqa: BLE001
         run.error = f"{type(exc).__name__}: {exc}"
         tell(f"{RED}error{OFF}  {run.error}")

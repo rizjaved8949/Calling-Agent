@@ -382,6 +382,71 @@ _SAME_NUMBER_SCRIPT = ("اسی نمبر", "اس نمبر", "یہی نمبر", "�
 #: How far back an offer and its yes are looked for: three exchanges.
 RECENT_TURNS = 6
 
+#: "Don't send it", in every form it arrives in. Said at any point before the
+#: call ends, it cancels a queued message.
+_DONT_SEND = _phrases(
+    "nahin bhejein", "nahi bhejein", "nahin bhejen", "nahi bhejen", "nahin bheje",
+    "nahi bheje", "na bhejein", "na bheje", "na bhejen", "mat bhejo", "mat bhejein",
+    "mat bhejen", "mat bhej", "nahi bhejna", "nahin bhejna", "bhejne ki zaroorat nahi",
+    "bhejne ki zarurat nahi", "bhejna nahi", "bhejna nahin", "dont send", "don't send",
+    "do not send", "no need to send", "cancel", "cancel kar", "cancel kar dein",
+    "cancel kardo", "cancel kar do", "rehne dein", "rehne do", "rehne den", "chhod dein",
+    "chor dein", "message nahi chahiye", "whatsapp nahi chahiye", "nahi chahiye message",
+    "send mat", "send na karein", "send nahi karna", "send mat karein", "bhej mat",
+    "nahi bhejo", "nahin bhejo", "mat bhejiye", "na bhejiye",
+)
+_DONT_SEND_SCRIPT = ("نہ بھیجیں", "مت بھیجیں", "نہیں بھیجیں", "نہ بھیجو", "مت بھیجو", "کینسل",
+                     "رہنے دیں", "بھیجنے کی ضرورت نہیں")
+#: Where one instruction ends and the next begins inside a caller's turn:
+#: "ji haan. balki nahin bheje" is a yes and then a no.
+_INSTRUCTION_BREAK = re.compile(
+    r"[.!?؟۔।,;]|\b(?:balki|lekin|magar|but|actually|wese|waise|bas|nahi nahi|nahin nahin)\b",
+    re.I)
+#: The caller saying a message has reached them.
+_RECEIVED = _phrases(
+    "message aa gaya", "message aaya", "message a gaya", "message aa gya", "msg aa gaya",
+    "whatsapp aa gaya", "whatsapp aaya", "message mil gaya", "mil gaya hai", "mil gaya message",
+    "receive ho gaya", "received", "i got the message", "got your message", "got it on whatsapp",
+    "message pohnch gaya", "message pahunch gaya", "message pohanch gaya", "aa gaya hai message",
+    "message aa chuka", "message mila", "msg mila", "message receive",
+)
+_RECEIVED_SCRIPT = ("میسج آ گیا", "میسج مل گیا", "پیغام آ گیا", "پیغام مل گیا")
+
+
+def wants_not_sent(text: str) -> bool:
+    """The caller saying not to send the message, in so many words."""
+    return _has_any(text, _DONT_SEND) or _has_script(text, _DONT_SEND_SCRIPT)
+
+
+_DIGITS_IN = re.compile(r"\d")
+
+
+def last_word_on_sending(text: str) -> str:
+    """"yes", "no" or "" for the caller's whole turn, the last instruction
+    winning: "ji haan. balki nahin bheje" is a no, and "nahi, 0300 123 4568"
+    is a yes with a different number."""
+    from .phones import normalise_digits
+
+    verdict = ""
+    for clause in _INSTRUCTION_BREAK.split(text or ""):
+        if not clause or not clause.strip():
+            continue
+        digits = len(_DIGITS_IN.findall(normalise_digits(romanize(clause))))
+        if wants_not_sent(clause):
+            verdict = "no"                       # "mat bhejo" names sending to refuse it
+        elif digits >= 7 or mentions_calling_number(clause) or caller_asked_for_message(clause):
+            verdict = "yes"
+        elif is_negative(clause):
+            verdict = "no"
+        elif is_affirmative(clause):
+            verdict = "yes"
+    return verdict
+
+
+def claims_message_received(text: str) -> bool:
+    """The caller saying a message has already reached them."""
+    return _has_any(text, _RECEIVED) or _has_script(text, _RECEIVED_SCRIPT)
+
 
 def offered_messaging(agent_text: str) -> bool:
     return _has_any(agent_text, _MESSAGING) or _has_script(agent_text, _MESSAGING_SCRIPT)
@@ -394,8 +459,12 @@ def caller_asked_for_message(caller_text: str) -> bool:
 
 def consented_to_message(conversation: list[Turn]) -> bool:
     """Whether the caller wants a message: they asked for one, or said yes
-    to the agent's offer. A no after the latest offer is a no."""
+    to the agent's offer. A no after the latest offer is a no, and so is a
+    yes that ends in a no ("ji haan. balki nahin bheje")."""
     recent = conversation[-RECENT_TURNS:]
+    last_caller = next((t for w, t in reversed(recent) if w == "caller"), "")
+    if last_word_on_sending(last_caller) == "no":
+        return False
     for who, text in recent:
         if who == "caller" and caller_asked_for_message(text) and not is_negative(text):
             return True

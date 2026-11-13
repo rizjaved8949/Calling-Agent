@@ -186,7 +186,9 @@ async def test_a_number_confirmed_for_a_request_is_not_read_back_again_for_a_mes
         ("agent", "Kya main yeh details aapko WhatsApp par bhej doon?"), ("caller", "ji")]
     answer = await handle("send_whatsapp_message",
                           {"text": "Test drive details", "to": "0300 123 4567"})
-    assert answer == "Sent." and sent == ["+923001234567"]
+    assert answer == live.QUEUED and sent == []
+    await live.flush_queued_messages(_tenant(), call, live._pending[call.id])
+    assert sent == ["+923001234567"]
 
 
 async def test_a_number_confirmed_for_a_message_is_not_read_back_again_for_a_request(
@@ -215,7 +217,7 @@ async def test_a_number_confirmed_for_a_message_is_not_read_back_again_for_a_req
     handle = live._tool_handler(_tenant(), call)
     await handle("send_whatsapp_message", {"text": "x", "to": "0300 123 4567"})
     assert await handle("send_whatsapp_message",
-                        {"text": "x", "to": "0300 123 4567", "number_confirmed": True}) == "Sent."
+                        {"text": "x", "to": "0300 123 4567", "number_confirmed": True}) == live.QUEUED
 
     read_back = await handle("record_request", {**DETAILS})
     assert "the mobile ending 4567 they already confirmed" in read_back

@@ -287,7 +287,7 @@ def test_the_agent_is_told_not_to_hang_up_on_an_unsent_promise():
     text = prompt.build(persona="You answer calls.", context="Fees are 50,000.",
                         can_send_whatsapp=True)
 
-    assert "Agreeing is not sending" in text
+    assert "Agreeing is not queueing" in text
     assert "still undone" in " ".join(text.split())
     assert "only then say goodbye" in text
 
@@ -299,7 +299,7 @@ def test_the_end_call_tool_itself_carries_the_same_warning():
 
     assert "unsent" in tools.END_CALL["description"]
     assert "send_whatsapp_message" in tools.END_CALL["description"]
-    assert "Saying yes is not sending" in tools.SEND_WHATSAPP_MESSAGE["description"]
+    assert "Saying yes is not queueing" in tools.SEND_WHATSAPP_MESSAGE["description"]
 
 
 def test_the_ending_rule_never_names_a_tool_the_caller_may_not_have():

@@ -151,12 +151,20 @@ async def test_a_confirmed_number_is_sent_to_and_the_summary_says_so(fake_db, se
     assert "Read this back" in first
     answer = await handle("send_whatsapp_message",
                           {"text": TEXT, "to": "0300 123 4567", "number_confirmed": True})
-    assert answer == "Sent."
-    assert [(to, body) for to, body, _ in sending] == [("+923001234567", TEXT)]
-    assert sending[0][2]["timeout"] == 5.0, "a send inside a call must not wait longer"
-
+    assert answer == live.QUEUED
+    assert sending == [], "sent during the call"
     saved = await call_repo.get_call("t-1", call.id)
-    assert "WhatsApp to …4567: sent (template)" in saved.summary
+    assert "WhatsApp to …4567: queued, to be sent after the call" in saved.summary
+
+    # When the call ends, it goes: once.
+    results = await live.flush_queued_messages(_tenant(), call, live._pending[call.id])
+    assert results == ["sent (template)"]
+    assert [(to, body) for to, body, _ in sending] == [("+923001234567", TEXT)]
+    assert sending[0][2]["timeout"] == 5.0
+    assert await live.flush_queued_messages(_tenant(), call, live._pending[call.id]) == []
+    assert len(sending) == 1
+    saved = await call_repo.get_call("t-1", call.id)
+    assert "WhatsApp to …4567: sent after the call (template)" in saved.summary
 
 
 async def test_number_confirmed_true_without_a_read_back_is_still_a_read_back(fake_db, sending):
@@ -223,8 +231,8 @@ async def test_calling_number_the_caller_asked_for_is_read_back_then_sent(fake_d
     assert "the number ending 1020" in first and sending == []
     answer = await handle("send_whatsapp_message",
                           {"text": TEXT, "to": "calling_number", "number_confirmed": True})
-    assert answer == "Sent."
-    assert sending[0][0] == "+923191611020"
+    assert answer == live.QUEUED
+    assert live.queued_messages(live._pending[call.id])[0]["to"] == "+923191611020"
 
 
 # ---------------------------------------------------------------------------
@@ -279,7 +287,9 @@ async def test_the_calling_number_the_caller_chose_is_read_back_not_the_earlier_
                                            ("caller", "ji")]
     answer = await handle("send_whatsapp_message",
                           {"text": TEXT, "to": "calling_number", "number_confirmed": True})
-    assert answer == "Sent."
+    assert answer == live.QUEUED
+    assert sending == []
+    await live.flush_queued_messages(_tenant(), call, live._pending[call.id])
     assert [to for to, _, _ in sending] == ["+923011114604"]
 
 
@@ -362,10 +372,12 @@ async def test_a_failed_send_never_promises_it_later(fake_db, monkeypatch):
     handle, _ = await _send(_tenant(), call, to="0300 123 4567")
     answer = await handle("send_whatsapp_message",
                           {"text": TEXT, "to": "0300 123 4567", "number_confirmed": True})
-    assert answer == live.NOT_SENT
-    assert "follow shortly" not in answer and "Sent" not in answer
+    assert answer == live.QUEUED
+    results = await live.flush_queued_messages(_tenant(), call, live._pending[call.id])
+    assert results == ["not sent (could not be sent: Meta said no)"]
     saved = await call_repo.get_call("t-1", call.id)
     assert "WhatsApp to …4567: not sent (could not be sent: Meta said no)" in saved.summary
+    assert "Sent" not in saved.summary
 
 
 async def test_no_whatsapp_number_is_said_plainly(fake_db, monkeypatch):
@@ -425,7 +437,9 @@ async def test_a_401_marks_the_line_failed_and_the_tool_disappears(fake_db, monk
     handle, _ = await _send(tenant, call, to="0300 123 4567")
     answer = await handle("send_whatsapp_message",
                           {"text": TEXT, "to": "0300 123 4567", "number_confirmed": True})
-    assert answer == live.NOT_SENT
+    assert answer == live.QUEUED
+    assert await live.flush_queued_messages(tenant, call, live._pending[call.id]) == [
+        "not sent (token rejected)"]
 
     number = await number_repo.get("t-1", "wa1")
     assert number.status is NumberStatus.FAILED
@@ -481,18 +495,23 @@ def test_auth_rejected_reads_a_401_or_graph_error_190():
 
 
 async def _confirmed_send(tenant, call, sending_list, **args):
+    """Queue through the tool as a call does, then send as the call's end
+    does, so `sending_list` holds what reached the provider."""
     handle = live._tool_handler(tenant, call)
     await handle("send_whatsapp_message", {"text": args.get("text", TEXT), "to": "0300 123 4567"})
-    return await handle("send_whatsapp_message",
-                        {"text": args.get("text", TEXT), "to": "0300 123 4567",
-                         "number_confirmed": True})
+    answer = await handle("send_whatsapp_message",
+                          {"text": args.get("text", TEXT), "to": "0300 123 4567",
+                           "number_confirmed": True})
+    if answer == live.QUEUED:
+        await live.flush_queued_messages(tenant, call, live._pending[call.id])
+    return answer
 
 
 async def test_a_caller_who_never_messaged_gets_the_approved_template(fake_db, sending):
     call = _call()
     _on_the_line(call, READ_BACK_CONFIRMED)
     company = Tenant(phoneNumberId="t-1", name="Acme Motors", defaultCountryCode="92")
-    assert await _confirmed_send(company, call, sending) == "Sent."
+    assert await _confirmed_send(company, call, sending) == live.QUEUED
     [(to, body, how)] = sending
     assert how["kind"] == "template"
     assert how["template"] == "call_followup" and how["language"] == "en"
@@ -512,7 +531,7 @@ async def test_a_caller_inside_the_24_hour_window_gets_a_plain_text(fake_db, sen
         body="salam", createdAt=time.time() - 3600))
     call = _call()
     _on_the_line(call, READ_BACK_CONFIRMED)
-    assert await _confirmed_send(_tenant(), call, sending) == "Sent."
+    assert await _confirmed_send(_tenant(), call, sending) == live.QUEUED
     assert sending[0][2]["kind"] == "text"
 
 
@@ -545,7 +564,7 @@ async def test_the_template_is_signed_with_the_agents_name(fake_db, sending):
     call = _call(agentId=agent.id)
     _on_the_line(call, READ_BACK_CONFIRMED)
     company = Tenant(phoneNumberId="t-1", name="Calling Agent", defaultCountryCode="92")
-    assert await _confirmed_send(company, call, sending) == "Sent."
+    assert await _confirmed_send(company, call, sending) == live.QUEUED
     assert sending[0][2]["parameters"][0] == "BYD Pakistan"
 
 
@@ -614,7 +633,7 @@ def test_a_text_that_is_only_pleasantries_is_left_alone():
 async def test_the_sent_parameter_is_the_details_only(fake_db, sending):
     call = _call()
     _on_the_line(call, READ_BACK_CONFIRMED)
-    assert await _confirmed_send(_tenant(), call, sending, text=REAL_FOLLOW_UP) == "Sent."
+    assert await _confirmed_send(_tenant(), call, sending, text=REAL_FOLLOW_UP) == live.QUEUED
     assert sending[0][2]["parameters"][1] == (
         "Here are some details on our models: · ATTO 3: PKR 8,990,000 · "
         "SEAL Dynamic: PKR 14,790,000 · SEAL Premium: PKR 16,990,000")
@@ -650,7 +669,7 @@ async def test_a_message_with_newlines_is_cleaned_before_sending(fake_db, sendin
     call = _call()
     _on_the_line(call, READ_BACK_CONFIRMED)
     text = "SEAL Premium\nPKR 16,990,000\nAdvance 3,350,000"
-    assert await _confirmed_send(_tenant(), call, sending, text=text) == "Sent."
+    assert await _confirmed_send(_tenant(), call, sending, text=text) == live.QUEUED
     assert sending[0][2]["parameters"][1] == "SEAL Premium · PKR 16,990,000 · Advance 3,350,000"
 
 
@@ -682,7 +701,7 @@ async def test_metas_refusal_is_reported_with_its_reason(fake_db, monkeypatch, c
     _on_the_line(call, READ_BACK_CONFIRMED)
     with caplog.at_level(logging.WARNING, logger="app.services.agent.live"):
         answer = await _confirmed_send(_tenant(), call, [])
-    assert answer == live.NOT_SENT
+    assert answer == live.QUEUED
     saved = await call_repo.get_call("t-1", call.id)
     assert ("WhatsApp to …4567: not sent (could not be sent: Template name does not exist "
             "in the translation)") in saved.summary
@@ -756,7 +775,7 @@ def test_the_tool_no_longer_says_it_has_the_number():
     assert "already have" not in description
     assert "Do NOT ask them for their number" not in description
     assert "number_confirmed" in description
-    assert "Saying yes is not sending" in description
+    assert "Saying yes is not queueing" in description
     assert set(tools.SEND_WHATSAPP_MESSAGE["parameters"]["required"]) == {"text", "to"}
     assert "number_confirmed" in tools.SEND_WHATSAPP_MESSAGE["parameters"]["properties"]
 
@@ -768,7 +787,7 @@ def test_the_writing_rules_follow_the_five_step_flow():
     assert "Kya main yeh details aapko WhatsApp par bhej doon?" in text
     assert "ask which number to send it to" in text
     assert "Read the number back in groups" in text
-    assert "never send after a no" in text.lower()
+    assert "never queue after a no" in text.lower()
     assert "You already have the number" not in text
     assert "never ask which number to use" not in text
     # The "cannot answer: send it on WhatsApp" paragraph is gone; an
