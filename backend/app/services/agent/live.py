@@ -516,8 +516,7 @@ async def _send_message(tenant: Tenant, call: Call, args: dict, pending: dict[st
     if not text:
         return "No message was queued: there was nothing to say."
     conversation = _conversation(call.id) or []
-    last_caller = turns_mod.last_turn(conversation, "caller")
-    if turns_mod.last_word_on_sending(last_caller) == "no" and _cancel_queued(call, pending):
+    if _caller_cancelled(conversation, pending) and _cancel_queued(call, pending):
         return CANCELLED
     if not turns_mod.consented_to_message(conversation):
         return NOT_ASKED
@@ -570,8 +569,14 @@ async def _send_message(tenant: Tenant, call: Call, args: dict, pending: dict[st
 
     confirmed = bool(args.get("number_confirmed"))
     already = key in _confirmed_numbers(pending)
-    if not already and (not confirmed or pending.get("number") != key
-                        or not turns_mod.last_caller_affirmative(conversation)):
+    # The agent has already named this number (the line by its last four
+    # digits, or a dictated number read back) and the caller said yes: one
+    # offer, one yes, done. On a real call the tool asked for its own
+    # read-back after that and the agent told the caller it "could not
+    # confirm" the number they had just agreed to, twice.
+    agreed = _heard_and_agreed(conversation, call, destination)
+    if not already and not agreed and (not confirmed or pending.get("number") != key
+                                       or not turns_mod.last_caller_affirmative(conversation)):
         pending["number"] = key
         return (f"Not sent yet. Read this back and ask the caller to confirm: {spoken}. "
                 "Only then call again with number_confirmed true.")
@@ -586,15 +591,18 @@ async def _send_message(tenant: Tenant, call: Call, args: dict, pending: dict[st
     pending.pop("number", None)
     _confirmed_numbers(pending).add(key)
     queue: list[dict] = pending.setdefault("queued", [])
-    replaced = False
+    replaced = same = False
     for message in queue:
         if message["to"] == destination and message["state"] == "queued":
+            if message["text"] == text:
+                same = True                      # asked twice for the same thing: once
+                continue
             message["text"] = text
             message["queued_at"] = time.time()
             replaced = True
-    if not replaced:
+    if not replaced and not same:
         queue.append({"to": destination, "text": text, "state": "queued",
-                      "queued_at": time.time()})
+                      "queued_at": time.time(), "turns_at_queue": len(conversation)})
     log.info("call %s: a WhatsApp to %s is queued for after the call", call.id,
              phones.ending(destination).rjust(5, "…"))
     await _note_on_call(tenant, call, f"WhatsApp to …{phones.ending(destination)}: queued, "
@@ -605,6 +613,34 @@ async def _send_message(tenant: Tenant, call: Call, args: dict, pending: dict[st
 def queued_messages(pending: dict | None) -> list[dict]:
     """The messages waiting to go out after the call."""
     return [m for m in (pending or {}).get("queued") or [] if m.get("state") == "queued"]
+
+
+def _caller_cancelled(conversation: list[tuple[str, str]], pending: dict) -> str:
+    """Why the caller's last words cancel the message, or "" if they do not.
+
+    Only an explicit "don't send" ("mat bhejein", "rehne dein", "cancel")
+    cancels on its own. A bare "nahi" cancels only when the agent's last
+    question was specifically "shall I send it?", and nothing has been
+    queued since that question. A no to "anything else?", a "nahi shukriya",
+    a "bas", a goodbye, or a no to any other question never cancels: on a
+    real call "Nahin, woh chukriya. Allah Hafiz." after "...Kya main aapki
+    kisi aur tarah se madad kar sakti hoon?" was read as a cancel, and the
+    message the caller had asked for was never sent.
+    """
+    index = next((i for i in range(len(conversation) - 1, -1, -1)
+                  if conversation[i][0] == "caller"), -1)
+    if index < 0:
+        return ""
+    said = conversation[index][1]
+    if turns_mod.last_word_on_sending(said) == "no" and turns_mod.wants_not_sent(said):
+        return "said not to send"
+    agent_index = next((i for i in range(index - 1, -1, -1) if conversation[i][0] == "agent"), -1)
+    agent_before = conversation[agent_index][1] if agent_index >= 0 else ""
+    if turns_mod.is_bare_no(said) and turns_mod.question_about_sending(agent_before):
+        if any(m.get("turns_at_queue", 0) > agent_index for m in queued_messages(pending)):
+            return ""                                # queued since the question was asked
+        return "said no to sending"
+    return ""
 
 
 def _cancel_queued(call: Call, pending: dict) -> bool:
@@ -758,12 +794,41 @@ def _said_line_ending(text: str, call: Call) -> bool:
 
 
 def _chose_calling_line(conversation: list[tuple[str, str]], call: Call) -> bool:
-    """The caller chose the line they are calling on: in words, or by its
-    last four digits."""
+    """The caller chose the line they are calling on: in words, by its last
+    four digits, or by saying yes when the agent offered it by them."""
     if turns_mod.said_calling_number(conversation):
         return True
-    return any(who == "caller" and _said_line_ending(text, call)
-               for who, text in conversation[-turns_mod.RECENT_TURNS - 2:])
+    if any(who == "caller" and _said_line_ending(text, call)
+           for who, text in conversation[-turns_mod.RECENT_TURNS - 2:]):
+        return True
+    return _heard_and_agreed(conversation, call, call.counterparty or "")
+
+
+def _agent_named(agent_text: str, call: Call, destination: str) -> bool:
+    """The agent's turn named this destination: the calling line by its last
+    four digits or as "the number you are calling from", or a dictated
+    number read back."""
+    if not destination:
+        return False
+    if destination == (call.counterparty or ""):
+        ending = phones.ending(destination)
+        return ((len(ending) == 4 and ending in phones.spoken_digits(agent_text or ""))
+                or turns_mod._has_any(agent_text, _LINE_OFFERS))
+    return phones.read_back_in(agent_text, destination)
+
+
+def _heard_and_agreed(conversation: list[tuple[str, str]], call: Call, destination: str) -> bool:
+    """The agent named the destination in its last turn and the caller's
+    answer was a yes."""
+    index = next((i for i in range(len(conversation) - 1, -1, -1)
+                  if conversation[i][0] == "caller"), -1)
+    if index < 0:
+        return False
+    said = conversation[index][1]
+    if not (turns_mod.last_word_on_sending(said) == "yes" or turns_mod.is_affirmative(said)):
+        return False
+    agent_before = next((t for w, t in reversed(conversation[:index]) if w == "agent"), "")
+    return _agent_named(agent_before, call, destination)
 
 
 def _caller_chose(conversation: list[tuple[str, str]], call: Call,
@@ -1637,13 +1702,11 @@ def _watch_sending(tenant: Tenant, call: Call, session, conversation: list[tuple
     arrived is answered with the truth about this call, not a denial.
     """
     pending = _pending.get(call.id) or {}
-    agent_before = next((t for w, t in reversed(conversation[:turn_index]) if w == "agent"), "")
-    verdict = turns_mod.last_word_on_sending(latest)
-    plain_no = turns_mod.wants_not_sent(latest)
-    about_sending = plain_no or turns_mod.offered_messaging(agent_before)
-    if (verdict == "no" and about_sending and queued_messages(pending)
-            and state.get("cancelled_at") != turn_index):
+    why = _caller_cancelled(conversation, pending)
+    if why and queued_messages(pending) and state.get("cancelled_at") != turn_index:
         state["cancelled_at"] = turn_index
+        log.info("call %s: the caller %s; their words were %r", call.id, why,
+                 turns_mod.judged(latest))
         _cancel_queued(call, pending)
         for message in pending.get("queued") or []:
             if message.get("state") == "cancelled" and not message.get("noted"):

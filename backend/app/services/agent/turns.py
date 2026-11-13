@@ -446,6 +446,32 @@ def last_word_on_sending(text: str) -> str:
     return verdict
 
 
+_QUESTION_SPLIT = re.compile(r"[^.!?؟۔।]+[.!?؟۔।]*")
+
+
+def last_question(agent_text: str) -> str:
+    """The last question in the agent's turn, or "" if it asked none."""
+    questions = [s.strip() for s in _QUESTION_SPLIT.findall(agent_text or "")
+                 if s.rstrip().endswith(("?", "؟"))]
+    return questions[-1] if questions else ""
+
+
+def question_about_sending(agent_text: str) -> bool:
+    """Whether the agent's last question was specifically about sending the
+    message ("Kya us par bhej doon?"), and not "anything else?". A turn that
+    says the message will come and then asks whether there is anything else
+    is asking about anything else."""
+    question = last_question(agent_text)
+    return bool(question) and offered_messaging(question) and not asked_anything_else(question)
+
+
+def is_bare_no(text: str) -> bool:
+    """A plain no, and nothing more: not "nahi shukriya", not "bas", not a
+    goodbye. The only no that can answer "shall I send it?"."""
+    return (last_word_on_sending(text) == "no" and not wants_not_sent(text)
+            and not is_thanks(text) and not is_goodbye(text) and not is_nothing_else(text))
+
+
 def claims_message_received(text: str) -> bool:
     """The caller saying a message has already reached them."""
     return _has_any(text, _RECEIVED) or _has_script(text, _RECEIVED_SCRIPT)
@@ -466,8 +492,18 @@ def consented_to_message(conversation: list[Turn]) -> bool:
     yes that ends in a no ("ji haan. balki nahin bheje")."""
     recent = conversation[-RECENT_TURNS:]
     last_caller = next((t for w, t in reversed(recent) if w == "caller"), "")
-    if last_word_on_sending(last_caller) == "no":
-        return False
+    agent_before = ""
+    seen_caller = False
+    for who, text in reversed(recent):
+        if who == "caller" and not seen_caller:
+            seen_caller = True
+        elif who == "agent" and seen_caller:
+            agent_before = text
+            break
+    if last_word_on_sending(last_caller) == "no" and wants_not_sent(last_caller):
+        return False                                 # "mat bhejein": said in so many words
+    if is_bare_no(last_caller) and question_about_sending(agent_before):
+        return False                                 # "nahi" to "shall I send it?"
     for who, text in recent:
         if who == "caller" and caller_asked_for_message(text) and not is_negative(text):
             return True

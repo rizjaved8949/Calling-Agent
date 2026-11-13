@@ -147,11 +147,14 @@ async def test_a_confirmed_number_is_sent_to_and_the_summary_says_so(fake_db, se
     call = _call()
     await call_repo.save_call(call)
     _on_the_line(call, READ_BACK_CONFIRMED)
+    # The agent read the number back and the caller agreed: queued at once,
+    # and asked again for the same thing, still one message.
     handle, first = await _send(_tenant(), call, to="0300 123 4567", number_confirmed=False)
-    assert "Read this back" in first
+    assert first == live.QUEUED
     answer = await handle("send_whatsapp_message",
                           {"text": TEXT, "to": "0300 123 4567", "number_confirmed": True})
     assert answer == live.QUEUED
+    assert len(live.queued_messages(live._pending[call.id])) == 1
     assert sending == [], "sent during the call"
     saved = await call_repo.get_call("t-1", call.id)
     assert "WhatsApp to …4567: queued, to be sent after the call" in saved.summary
@@ -167,9 +170,19 @@ async def test_a_confirmed_number_is_sent_to_and_the_summary_says_so(fake_db, se
     assert "WhatsApp to …4567: sent after the call (template)" in saved.summary
 
 
-async def test_number_confirmed_true_without_a_read_back_is_still_a_read_back(fake_db, sending):
+async def test_the_agents_own_read_back_and_a_yes_are_enough(fake_db, sending):
+    """READ_BACK_CONFIRMED ends with the agent reading the number back and the
+    caller agreeing: that is the confirmation, whatever the tool was told."""
     call = _call()
     _on_the_line(call, READ_BACK_CONFIRMED)
+    _, answer = await _send(_tenant(), call, to="0300 123 4567", number_confirmed=True)
+    assert answer == live.QUEUED and sending == []
+    assert live.queued_messages(live._pending[call.id])[0]["to"] == "+923001234567"
+
+
+async def test_without_the_agents_read_back_the_tool_still_asks_for_one(fake_db, sending):
+    call = _call()
+    _on_the_line(call, OFFER_AND_YES + [("agent", "Theek hai."), ("caller", "ji")])
     _, answer = await _send(_tenant(), call, to="0300 123 4567", number_confirmed=True)
     assert "Read this back" in answer and sending == []
 
@@ -227,11 +240,10 @@ async def test_calling_number_the_caller_asked_for_is_read_back_then_sent(fake_d
     _on_the_line(call, OFFER_AND_YES[:4] + [("caller", "isi number par bhej dein"),
                                             ("agent", "1020 par khatam hone wale number par?"),
                                             ("caller", "ji")])
+    # The agent has named the line by its ending and the caller said ji:
+    # queued on the first call, no second read-back.
     handle, first = await _send(_tenant(), call, to="calling_number")
-    assert "the number ending 1020" in first and sending == []
-    answer = await handle("send_whatsapp_message",
-                          {"text": TEXT, "to": "calling_number", "number_confirmed": True})
-    assert answer == live.QUEUED
+    assert first == live.QUEUED and sending == []
     assert live.queued_messages(live._pending[call.id])[0]["to"] == "+923191611020"
 
 

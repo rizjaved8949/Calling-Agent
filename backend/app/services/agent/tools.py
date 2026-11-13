@@ -29,7 +29,10 @@ SEND_WHATSAPP_MESSAGE: dict[str, Any] = {
     "description": (
         "Queue a WhatsApp message for the caller; it is sent after the call ends, "
         "never during it. Give the information on the call first; a message is "
-        "an extra, never a substitute. Use this only after "
+        "an extra, never a substitute, and an unclear model or item name is "
+        "confirmed before anything is answered or queued. Once you have named "
+        "the caller's line by its last four digits and they said yes, call this "
+        "with to calling_number and number_confirmed true at once. Use this only after "
         "this exact sequence: (1) you offered to send the details on WhatsApp and "
         "the caller clearly said yes, or the caller asked for it in writing "
         "themselves; (2) you asked which number to send it to and they said it, "

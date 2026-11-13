@@ -176,7 +176,7 @@ async def test_a_dry_send_says_sent_without_sending(dry, fake_db):
         session._note(who, text)
     handle = live._tool_handler(tenant, call)
     first = await handle("send_whatsapp_message", {"text": "SEAL: PKR 16,990,000", "to": "calling_number"})
-    assert "Read this back" in first
+    assert first == live.QUEUED                      # the line was named and agreed to
     answer = await handle("send_whatsapp_message",
                           {"text": "SEAL: PKR 16,990,000", "to": "calling_number", "number_confirmed": True})
     assert answer == live.QUEUED
