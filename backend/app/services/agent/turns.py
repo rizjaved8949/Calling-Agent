@@ -366,6 +366,9 @@ _CALLER_ASKS = _phrases(
     "likh ke", "likhkar", "in writing", "written", "text me", "text kar",
     "send me", "bhej do", "bhej dein", "bhej den", "bhejo", "bhej dijiye", "likh do",
     "likh dein", "likh dijiye", "likh kar bhej", "send kar", "send kar dein",
+    "bhej sakte", "bhej sakti", "bhej de", "bhej dena", "bhej dijiyega", "bhej dijie",
+    "number par bhej", "number pe bhej", "number par send", "send it", "send them",
+    "can you send", "could you send", "send karein", "send kar do",
 )
 _CALLER_ASKS_SCRIPT = ("واٹس", "میسج", "پیغام", "لکھ", "بھیج")
 _SAME_NUMBER = _phrases(

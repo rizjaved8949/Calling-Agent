@@ -272,3 +272,112 @@ def material_values(text: str) -> set[int]:
     for _phrase, value in spoken_amounts(text or ""):
         found.add(value)
     return found
+
+
+# ---------------------------------------------------------------------------
+# Budgets and priced items
+# ---------------------------------------------------------------------------
+
+_BUDGET_WORDS = ("budget", "bajat", "bajet", "bajut", "بجٹ", "बजट")
+_PRICE_LABEL_NOISE = re.compile(
+    r"^(?:the\s+)?(?:price|prices|qeemat|keemat|cost|rate|ex[- ]showroom|starting)\s+(?:of|for)?\s*"
+    r"|\s+(?:is|hai|at|from|starts?|starting|se|par|:|-|–|—)+\s*$", re.I)
+
+
+def stated_budget(text: str) -> int | None:
+    """The budget a caller states: the largest amount in a line that says
+    "budget" (or "bajat"), when it is at least a lakh. None otherwise."""
+    lowered = (text or "").lower()
+    if not any(word in lowered for word in _BUDGET_WORDS):
+        return None
+    amounts_said = [int(round(v)) for v in values_in(text) if v >= 100_000]
+    return max(amounts_said) if amounts_said else None
+
+
+def priced_items(text: str) -> list[tuple[str, int]]:
+    """Each thing the material prices, with its price: ("SEALION 7 Premium",
+    15490000). Read line by line from whatever names the amount on its left:
+    a label before a colon, a table cell, "the price of X is". Nothing is
+    assumed about the company's products."""
+    items: list[tuple[str, int]] = []
+    for line in (text or "").splitlines():
+        for pattern in (_PREFIXED, _SUFFIXED):
+            for match in pattern.finditer(line):
+                value = _value(match.group("num"), match.group("scale"))
+                if value is None or value < 1_000:
+                    continue
+                before = line[:match.start()]
+                # The nearest cell or clause with words in it, left of the amount.
+                for separator in ("|", ";", "•", " - ", " – ", " — "):
+                    if separator in before:
+                        cells = [c for c in before.split(separator) if c.strip(" \t-*#•|:–—")]
+                        before = cells[-1] if cells else ""
+                if ":" in before:
+                    before = before.rsplit(":", 1)[0] if before.rstrip().endswith(":") \
+                        else before.rsplit(":", 1)[-1]
+                label = _PRICE_LABEL_NOISE.sub("", before.strip(" \t-*#•|:–—"))
+                label = _PRICE_LABEL_NOISE.sub("", label.strip(" \t-*#•|:–—")).strip()
+                words = label.split()
+                if not words or len(words) > 6 or not any(w[0].isalpha() for w in words):
+                    continue
+                items.append((" ".join(words), int(round(value))))
+    return items
+
+
+#: Labels that price a charge, not a product; not held against a budget.
+_NOT_A_PRODUCT = {
+    "booking", "advance", "registration", "token", "insurance", "delivery", "service",
+    "charger", "installation", "fee", "fees", "deposit", "down", "price", "total",
+    "monthly", "instalment", "installment", "tax", "taxes", "duty", "discount", "refund",
+    "cancellation", "transfer", "number", "plate", "maintenance", "warranty", "charging",
+}
+
+
+def _is_model_word(word: str) -> bool:
+    return word.isdigit() or (len(word) <= 2 and any(c.isdigit() for c in word))
+
+
+def families_of(label: str) -> list[str]:
+    """The product a priced label names, as the words a caller or agent would
+    use for it: "SEALION 7 Premium" is "sealion 7", "SEAL Dynamic" is "seal",
+    and "BYD SEAL Dynamic" is both "byd seal" and "seal", so a brand prefix
+    in the material does not hide the model."""
+    words = label.lower().split()
+    if not words or words[0] in _NOT_A_PRODUCT:
+        return []
+
+    def family(ws: list[str]) -> str:
+        if len(ws) > 1 and _is_model_word(ws[1]):
+            return " ".join(ws[:2])
+        return ws[0]
+
+    keys = []
+    if len(words) >= 3 and not _is_model_word(words[1]):
+        keys.append(" ".join(words[:2]))
+        if words[1] not in _NOT_A_PRODUCT:
+            keys.append(family(words[1:]))
+    else:
+        keys.append(family(words))
+    return [k for k in dict.fromkeys(keys) if len(k) >= 3]
+
+
+def family_of(label: str) -> str:
+    """The first family a label names, or ""."""
+    keys = families_of(label)
+    return keys[0] if keys else ""
+
+
+def family_prices(text: str) -> dict[str, list[int]]:
+    """Every product family the material prices, with all its prices."""
+    found: dict[str, list[int]] = {}
+    for label, price in priced_items(text):
+        for key in families_of(label):
+            found.setdefault(key, []).append(price)
+    return found
+
+
+def families_named(spoken: str, families: dict[str, list[int]]) -> list[str]:
+    """Which priced families the agent's words name, as whole words."""
+    lowered = " " + re.sub(r"[^\w\s]", " ", (spoken or "").lower()) + " "
+    lowered = re.sub(r"\s+", " ", lowered)
+    return [key for key in families if f" {key} " in lowered]

@@ -522,6 +522,25 @@ def _chosen(written: dict[str, str], block: Block) -> str:
     return (written.get(block.id) or "").strip() or block.default
 
 
+#: The line the caller is on, said outside the editable writing block so a
+#: company's own wording cannot lose it. On a real inbound call the agent
+#: said "mere paas aap ka number nahi hai" four times while the server knew
+#: the number, and the caller gave up.
+CALLING_LINE_KNOWN = (
+    "- The caller is on a line ending {ending}. You cannot see the full number, "
+    "but you can send to that line. When they ask whether you have their "
+    "number, say to use the number they are calling from, or say its last "
+    "four digits, offer it as 'the number ending {ending}' (Urdu: 'jis ke "
+    "aakhir mein {ending} hai') and, on their yes, call send_whatsapp_message "
+    "with to set to calling_number. Never say you do not have their number."
+)
+CALLING_LINE_UNKNOWN = (
+    "- The caller's number is not available on this call (withheld or missing). "
+    "Say so once: 'Is call par aap ka number mujhe nahi mil raha, please number "
+    "bata dein' (English: 'Your number is not showing on this call; please tell "
+    "me the number'). Then only ask for a number; never repeat the same refusal."
+)
+
 #: Given in place of the writing block on a call that cannot send a message:
 #: no WhatsApp number, a token the provider refused, or the number unverified.
 NO_WHATSAPP_RULE = (
@@ -652,8 +671,10 @@ def build(
     if can_send_whatsapp:
         # The last four digits of the line the caller is on, so the agent
         # can offer it by its ending rather than say it cannot see a number.
-        ending = (calling_number_ending or "").strip() or "the last four digits"
-        out += ["", _chosen(written, WRITING).replace("<last four digits>", ending)]
+        ending = (calling_number_ending or "").strip()
+        out += ["", _chosen(written, WRITING).replace(
+            "<last four digits>", ending or "the last four digits")]
+        out.append(CALLING_LINE_KNOWN.format(ending=ending) if ending else CALLING_LINE_UNKNOWN)
         if writing_rule.strip():
             out.append("- " + writing_rule.strip())
     else:

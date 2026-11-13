@@ -541,7 +541,7 @@ async def _send_message(tenant: Tenant, call: Call, args: dict, pending: dict[st
             return (f"Not sent yet: the caller last gave {theirs}, not the number they are "
                     f"calling from. Read this back and ask them to confirm: {theirs}. Only "
                     "then call again with that number and number_confirmed true.")
-        if not turns_mod.said_calling_number(conversation):
+        if not _chose_calling_line(conversation, call):
             return NOT_SAME_NUMBER
         if not destination:
             return "NOT sent: the number they are calling from is not known. Ask which number to use."
@@ -742,6 +742,30 @@ def _spoken_number(e164: str, country: str) -> str:
     return phones.grouped(parsed[1]) if parsed else e164
 
 
+_ENDING_DIGITS = re.compile(r"(?<!\d)(\d{4})(?!\d)")
+
+
+def _said_line_ending(text: str, call: Call) -> bool:
+    """The caller said the last four digits of the line they are on, and no
+    whole number: "Number ends with 4604, ispe bhej de"."""
+    ending = phones.ending(call.counterparty or "")
+    if len(ending) != 4:
+        return False
+    plain = phones.normalise_digits(phones.spoken_digits(text or ""))
+    if phones.find_number(plain) is not None:
+        return False
+    return ending in _ENDING_DIGITS.findall(plain)
+
+
+def _chose_calling_line(conversation: list[tuple[str, str]], call: Call) -> bool:
+    """The caller chose the line they are calling on: in words, or by its
+    last four digits."""
+    if turns_mod.said_calling_number(conversation):
+        return True
+    return any(who == "caller" and _said_line_ending(text, call)
+               for who, text in conversation[-turns_mod.RECENT_TURNS - 2:])
+
+
 def _caller_chose(conversation: list[tuple[str, str]], call: Call,
                   country: str) -> tuple[str, str] | None:
     """The number the caller most recently chose, from their own words.
@@ -759,6 +783,8 @@ def _caller_chose(conversation: list[tuple[str, str]], call: Call,
         found = phones.find_number(text, country)
         if found is not None:
             return ("number", found[0])
+        if call.counterparty and _said_line_ending(text, call):
+            return ("calling", call.counterparty)
         if turns_mod.mentions_calling_number(text):
             # "Ji, yahi number hai" straight after the agent read a number
             # back is "yes, that one", not "the number I am calling from".
@@ -1308,6 +1334,35 @@ CANCELLED_NOTE = (
     "queued and nothing has been sent. Confirm briefly that it will not be sent, and "
     "do not queue it again unless they ask again."
 )
+CALLING_LINE_NOTE = (
+    NOTE_PREFIX
+    + "The caller chose the number they are calling from, which ends in {ending}. You "
+    "can send to it: say 'the number ending {ending}' (Urdu: 'jis ke aakhir mein "
+    "{ending} hai'), and on their yes call send_whatsapp_message with to set to "
+    "calling_number and number_confirmed true. Never say you do not have their number."
+)
+LINE_UNKNOWN_NOTE = (
+    NOTE_PREFIX
+    + "The caller's number is not available on this call. Say so once: 'Is call par "
+    "aap ka number mujhe nahi mil raha, please number bata dein', then ask for a number."
+)
+LINE_UNKNOWN_AGAIN_NOTE = (
+    NOTE_PREFIX
+    + "You have already said the number is not available on this call. Do not say it "
+    "again; just ask for the number to send to."
+)
+BUDGET_NOTE = (
+    NOTE_PREFIX
+    + "The caller's budget is {budget}. Before naming any model, compare each model's "
+    "price with it using calculate; recommend only models within budget, or say "
+    "clearly by how much a model is over."
+)
+BUDGET_CORRECTION = (
+    NOTE_PREFIX
+    + "You named {model}, priced {price} in your material, which is above the caller's "
+    "budget of {budget} by {over}. Correct yourself briefly: say it is over budget by "
+    "that much, or recommend a model within the budget."
+)
 RECEIVED_NOTE = (
     NOTE_PREFIX
     + "No WhatsApp message has been sent on this call{state}. Say so truthfully: 'Is "
@@ -1497,6 +1552,8 @@ def _transcript_watch(tenant: Tenant, call: Call):
         latest = conversation[-1][1]
         if who == "caller":
             _watch_sending(tenant, call, session, conversation, turn_index, latest, state)
+            _watch_calling_line(call, session, turn_index, latest, state)
+            _watch_budget(call, session, turn_index, latest, state)
             if (turn_index not in state["counted"]
                     and phones.wrong_length_mobile(latest, _country(tenant)) is not None):
                 _keep(asyncio.create_task(
@@ -1521,6 +1578,8 @@ def _transcript_watch(tenant: Tenant, call: Call):
         if who != "agent":
             return
         _check_amounts(call, session, conversation, turn_index, latest, state)
+        _check_number_denial(call, session, turn_index, latest, state)
+        _check_budget(call, session, turn_index, latest, state)
         if turns_mod.agent_said_closing(latest):
             if state["armed_at"] != turn_index:
                 state["armed_at"] = turn_index
@@ -1602,6 +1661,137 @@ def _watch_sending(tenant: Tenant, call: Call, session, conversation: list[tuple
         log.info("call %s: the caller says a message arrived; the agent is told nothing "
                  "has been sent on this call", call.id)
         _keep(asyncio.create_task(session.note_to_agent(RECEIVED_NOTE.format(state=shape))))
+
+
+#: The agent saying it has no number for the caller.
+_NUMBER_DENIALS = turns_mod._phrases(
+    "number nahi hai", "number nahin hai", "number nahi dikh", "number nahin dikh",
+    "number nahi mil", "number nahin mil", "number nahi pata", "number nahin pata",
+    "number nahi dikhta", "number nahin dikhta", "nahi dekh sakti", "nahi dekh sakta",
+    "nahin dekh sakti", "nahin dekh sakta", "number nazar nahi", "number nazar nahin",
+    "number nahi aa raha", "cannot see your number", "can't see your number",
+    "cant see your number", "do not have your number", "don't have your number",
+    "dont have your number", "not have your number", "number is not visible",
+    "no number on this call", "woh number nahi", "woh number nahin", "number nahi hai mere",
+)
+#: The same turn also offering the line: not a denial.
+_LINE_OFFERS = turns_mod._phrases(
+    "jis se aap call", "jis se aap kol", "number you are calling from", "calling from",
+    "aakhir mein", "ending", "us number par bhej", "is line", "isi line",
+)
+#: The agent saying a model is over the budget.
+_OVER_BUDGET = turns_mod._phrases(
+    "budget se zyada", "budget se zaida", "budget se ziada", "budget se bahar",
+    "budget se upar", "budget ke bahar", "budget se bahir", "zyada hai", "zaida hai",
+    "ziada hai", "se zyada", "se zaida", "over budget", "over your budget",
+    "above your budget", "above the budget", "exceeds", "exceed", "beyond your budget",
+    "budget cross", "upar hai", "se upar", "mehnga", "mehngi", "zara zyada", "thori zyada",
+    "thora zyada", "outside your budget", "more than your budget", "budget se bahr",
+)
+
+
+_DENIAL_SHAPE = re.compile(
+    r"\bnumber\b(?:\W+\w+){0,3}?\W+(?:nahi|nahin|nai|nhi)\W+(?:hai|dikh\w*|mil\w*|pata|aa|nazar|dekh\w*)",
+    re.I)
+
+
+def _denies_number(agent_text: str) -> bool:
+    """The agent saying it has, or sees, no number for the caller."""
+    folded = turns_mod.normalise(agent_text)
+    return (turns_mod._has_any(agent_text, _NUMBER_DENIALS)
+            or _DENIAL_SHAPE.search(folded) is not None)
+
+
+def _can_message(session) -> bool:
+    persona = getattr(session, "persona", None)
+    tools = getattr(persona, "tools", None) or []
+    return any(t.get("name") == "send_whatsapp_message" for t in tools if isinstance(t, dict))
+
+
+def _watch_calling_line(call: Call, session, turn_index: int, latest: str, state: dict) -> None:
+    """The caller choosing the line they are on, in words or by its last four
+    digits: the agent is told it can send there, with the digits to say."""
+    if not _can_message(session) or state.get("line_noted") == turn_index:
+        return
+    chose = turns_mod.mentions_calling_number(latest) or _said_line_ending(latest, call)
+    if not chose:
+        return
+    state["line_noted"] = turn_index
+    ending = phones.ending(call.counterparty or "")
+    if len(ending) == 4:
+        log.info("call %s: the caller chose the line they are calling from; the agent is "
+                 "told it ends in %s", call.id, ending)
+        note = CALLING_LINE_NOTE.format(ending=ending)
+    else:
+        log.info("call %s: the caller chose the line they are calling from, which is not "
+                 "known on this call", call.id)
+        note = LINE_UNKNOWN_AGAIN_NOTE if state.get("denied") else LINE_UNKNOWN_NOTE
+    _keep(asyncio.create_task(session.note_to_agent(note)))
+
+
+def _check_number_denial(call: Call, session, turn_index: int, latest: str, state: dict) -> None:
+    """"Mere paas aap ka number nahi hai": wrong when the line is known, and
+    said once at most when it is not."""
+    if not _can_message(session) or state.get("denial_noted") == turn_index:
+        return
+    if not _denies_number(latest) or turns_mod._has_any(latest, _LINE_OFFERS):
+        return
+    ending = phones.ending(call.counterparty or "")
+    if len(ending) == 4 and ending in latest:
+        return
+    state["denial_noted"] = turn_index
+    if len(ending) == 4:
+        log.warning("call %s: the agent said it has no number for the caller, but the line "
+                    "ending %s is known", call.id, ending)
+        note = CALLING_LINE_NOTE.format(ending=ending)
+    else:
+        denied_before = state.get("denied", 0)
+        state["denied"] = denied_before + 1
+        if not denied_before:
+            return                                   # said once: allowed
+        log.info("call %s: the agent repeated that the number is not available", call.id)
+        note = LINE_UNKNOWN_AGAIN_NOTE
+    _keep(asyncio.create_task(session.note_to_agent(note)))
+
+
+def _watch_budget(call: Call, session, turn_index: int, latest: str, state: dict) -> None:
+    """A budget the caller states is remembered, and the agent is told to
+    compare before it recommends."""
+    budget = amounts.stated_budget(latest)
+    if budget is None or state.get("budget_noted") == turn_index:
+        return
+    state["budget"] = budget
+    state["budget_noted"] = turn_index
+    log.info("call %s: the caller stated a budget of %d", call.id, budget)
+    _keep(asyncio.create_task(session.note_to_agent(BUDGET_NOTE.format(
+        budget=f"{amounts.spoken_pkr(budget)} rupay ({budget:,})"))))
+
+
+def _check_budget(call: Call, session, turn_index: int, latest: str, state: dict) -> None:
+    """A model named above the caller's budget, without saying so, is logged
+    and corrected on the next turn. Prices come from the agent's material."""
+    budget = state.get("budget")
+    if not budget:
+        return
+    if "families" not in state:
+        persona = getattr(session, "persona", None)
+        state["families"] = amounts.family_prices(getattr(persona, "instructions", "") or "")
+    families = state["families"]
+    if not families or turns_mod._has_any(latest, _OVER_BUDGET):
+        return
+    judged: set = state.setdefault("budget_judged", set())
+    for family in amounts.families_named(latest, families):
+        cheapest = min(families[family])
+        if cheapest <= budget or (turn_index, family) in judged:
+            continue
+        judged.add((turn_index, family))
+        over = cheapest - budget
+        log.warning("call %s: the agent named %s (from %d) above the caller's budget of %d "
+                    "without saying so", call.id, family, cheapest, budget)
+        _keep(asyncio.create_task(session.note_to_agent(BUDGET_CORRECTION.format(
+            model=family.upper(), price=f"{amounts.spoken_pkr(cheapest)} rupay",
+            budget=f"{amounts.spoken_pkr(budget)} rupay",
+            over=f"{amounts.spoken_pkr(over)} rupay"))))
 
 
 def _allowed_amounts(call_id: str, session, conversation: list[tuple[str, str]],
