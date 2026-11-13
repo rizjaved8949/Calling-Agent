@@ -391,7 +391,7 @@ def _tool_handler(tenant: Tenant, call: Call):
         if name == "record_request":
             return await _record_request(tenant, call, args, pending)
         if name == "calculate":
-            return _calculate(args)
+            return _calculate(call.id, args)
         if name == "end_call":
             return await _end_call(tenant, call, args, pending)
         return "That is not something you can do on this call."
@@ -888,11 +888,34 @@ async def _record_request(tenant: Tenant, call: Call, args: dict,
             "contact them and by when, and the customer-care route if it has one.")
 
 
-def _calculate(args: dict) -> str:
+#: Every figure the calculator was given or gave on each live call, so what
+#: the agent then says can be checked against it.
+_calculated: dict[str, list[float]] = {}
+
+
+def _calculate(call_id: str, args: dict) -> str:
+    """The sum, and the exact words to say it in.
+
+    On a real call the agent was given 210000 and said "20 lakh 10 hazar":
+    the figure was right and the reading of it was not. The reply now says
+    the words, so there is nothing left to read.
+    """
+    expression = str(args.get("expression") or "")
     try:
-        return calculator.evaluate(str(args.get("expression") or ""))
+        result = calculator.evaluate(expression)
     except calculator.CalculationError as exc:
         return f"Could not calculate that: {exc}. Write the sum with numbers and + - * / only."
+    known = _calculated.setdefault(call_id, [])
+    known.extend(amounts.values_in(expression))
+    try:
+        value = float(result)
+    except ValueError:
+        return result
+    known.append(value)
+    if abs(value) >= 1_000 and value.is_integer():
+        return (f"{result}. Say exactly: {amounts.spoken_pkr(value)} rupay. Never re-word "
+                "or round it.")
+    return f"{result}. Say exactly: {result}. Never re-word or round it."
 
 
 #: Reasons for ending that are about the caller not taking part, which the
@@ -1211,6 +1234,14 @@ NOTHING_SENT_CORRECTION = (
     + "Nothing has been recorded or sent. Ask for any missing details (mobile "
     "first), read back, then call record_request."
 )
+AMOUNT_CORRECTION = (
+    NOTE_PREFIX
+    + "You just said {wrong}; the correct figure is {right}. Correct yourself briefly "
+    "now: 'Maazrat, sahi raqam {right} hai.'"
+)
+#: How alike a wrong amount and a known one must look, digit for digit, for
+#: the known one to be offered as the correction: 2010000 and 210000 do.
+AMOUNT_LIKENESS = 0.6
 #: How long after a caller's words arrive before the number in them is
 #: counted, when the recogniser has not said the turn is finished: the rest
 #: of a number said slowly may still be on its way. A finished turn is
@@ -1407,6 +1438,7 @@ def _transcript_watch(tenant: Tenant, call: Call):
             return
         if who != "agent":
             return
+        _check_amounts(call, session, conversation, turn_index, latest, state)
         if turns_mod.agent_said_closing(latest):
             if state["armed_at"] != turn_index:
                 state["armed_at"] = turn_index
@@ -1452,6 +1484,72 @@ async def _note_mobile_length(tenant: Tenant, call: Call, session: CallSession,
         raise
     except Exception:  # noqa: BLE001
         log.exception("call %s: could not pass the number length on", call.id)
+
+
+def _allowed_amounts(call_id: str, session, conversation: list[tuple[str, str]],
+                     state: dict) -> set[int]:
+    """The figures the agent may say: the material's, the calculator's, and
+    the caller's own."""
+    if "material_amounts" not in state:
+        persona = getattr(session, "persona", None)
+        state["material_amounts"] = amounts.material_values(
+            getattr(persona, "instructions", "") or "")
+    allowed: set[int] = set(state["material_amounts"])
+    allowed.update(int(round(v)) for v in _calculated.get(call_id, []))
+    for who, text in conversation:
+        if who == "caller":
+            allowed.update(int(round(v)) for v in amounts.values_in(text) if v >= 1_000)
+    return allowed
+
+
+def _check_amounts(call: Call, session, conversation: list[tuple[str, str]], turn_index: int,
+                   latest: str, state: dict) -> None:
+    """Every amount the agent says is checked against what it was given.
+
+    On a real call it said "20 lakh 10 hazar" for a difference the calculator
+    had given as 210000, and nobody knew until the recording was played. One
+    not in the material, the calculator's figures or the caller's own words
+    is logged (the number only) and, when a known figure looks like what was
+    meant, corrected with a silent note before the agent's next turn.
+    """
+    judged: set = state.setdefault("amounts_judged", set())
+    said = amounts.spoken_amounts(latest)
+    if not said:
+        return
+    allowed = _allowed_amounts(call.id, session, conversation, state)
+    for phrase, value in said:
+        if latest.rstrip().endswith(phrase.strip()):
+            continue                             # the rest of it may still be coming
+        if value in allowed or (turn_index, phrase) in judged:
+            continue
+        judged.add((turn_index, phrase))
+        right = _closest_amount(value, call.id, state)
+        log.warning("call %s: the agent said an amount that is in neither the material nor "
+                    "a calculation: %d%s", call.id, value,
+                    f" (the nearest known figure is {right})" if right is not None else "")
+        if right is None:
+            continue
+        note = AMOUNT_CORRECTION.format(wrong=f"{amounts.spoken_pkr(value)} rupay",
+                                        right=f"{amounts.spoken_pkr(right)} rupay")
+        _keep(asyncio.create_task(session.note_to_agent(note)))
+
+
+def _closest_amount(value: int, call_id: str, state: dict) -> int | None:
+    """The known figure that looks most like `value`, digit for digit: the
+    calculator's latest results first, then the material's."""
+    import difflib
+
+    candidates: list[int] = [int(round(v)) for v in reversed(_calculated.get(call_id, []))
+                             if abs(v) >= 1_000]
+    candidates += sorted(state.get("material_amounts") or ())
+    best, best_score = None, 0.0
+    for candidate in candidates:
+        if candidate == value:
+            continue
+        score = difflib.SequenceMatcher(None, str(value), str(candidate)).ratio()
+        if score > best_score:
+            best, best_score = candidate, score
+    return best if best is not None and best_score >= AMOUNT_LIKENESS else None
 
 
 async def _end_after_closing(tenant: Tenant, call: Call, session: CallSession,
@@ -1824,6 +1922,7 @@ async def finish(tenant: Tenant, call_id: str, reason: str = "", *, error: str =
         limit.cancel()
     _recorded.pop(call_id, None)
     _pending.pop(call_id, None)
+    _calculated.pop(call_id, None)
     session = _sessions.pop(call_id, None)
     if session is None:
         return

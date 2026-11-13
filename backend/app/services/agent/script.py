@@ -367,7 +367,7 @@ MIN_SIMILARITY_URDU_SCRIPT = 0.6
 def _faithful_urdu_script(original: str, candidate: str) -> bool:
     """`faithful` for an Urdu-script original: no letter-by-letter yardstick,
     so digits, Latin words, length and the consonant skeleton carry it."""
-    if _digits(original) != _digits(candidate):
+    if _digits(original) != _digits(candidate) or not _same_numbers(original, candidate):
         return False
     if any(original.count(m) != candidate.count(m) for m in _KEPT_MARKS):
         return False
@@ -438,6 +438,14 @@ _URDU_DIGITS = {chr(0x06F0 + i): str(i) for i in range(10)}
 _URDU_DIGITS.update({chr(0x0660 + i): str(i) for i in range(10)})
 
 
+def _same_numbers(original: str, candidate: str) -> bool:
+    """Whether both say the same numbers, read as values: digits, Roman,
+    Devanagari and Urdu number words alike."""
+    from . import amounts
+
+    return sorted(amounts.values_in(original)) == sorted(amounts.values_in(candidate))
+
+
 def _digits(text: str) -> list[str]:
     plain = "".join(_DIGITS.get(ch, _URDU_DIGITS.get(ch, ch)) for ch in text)
     return sorted(_DIGIT_RUN.findall(plain))
@@ -456,8 +464,13 @@ def faithful(original: str, candidate: str) -> bool:
         return _faithful_urdu_script(original, candidate)
     plain = romanize(original)
 
-    # Numbers: the same figures, and no new ones ("paanch sau" is not "500").
+    # Numbers: the same figures, and no new ones ("paanch sau" is not "500")...
     if _digits(original) != _digits(candidate):
+        return False
+    # ...and the same values, whichever way they are written. "बीस लाख दस
+    # हज़ार" has no digits, and a model that writes "2 lakh 10 hazar" for it
+    # has changed the number; so has one that writes "bees" for "2".
+    if not _same_numbers(original, candidate):
         return False
     # Marks that carry meaning: a question stays a question, and "%", "₹"
     # and the like stay.

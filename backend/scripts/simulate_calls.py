@@ -213,6 +213,7 @@ class SimSession:
         self.holding = False
         self.held: list[str] = []
         self.frames_out = 1
+        self.persona: AgentPersona | None = None
         self.handler = type("H", (), {"value": "agent"})()
 
     def turns(self) -> list[tuple[str, str]]:
@@ -560,6 +561,7 @@ async def converse(scenario: Scenario, index: int, tenant: Tenant, persona: Agen
     call = Call(tenantId=tenant.phone_number_id, channel=Channel.PHONE,
                 direction=Direction.INBOUND, counterparty="+923001234567")
     session = SimSession(call.id, model)
+    session.persona = persona
     session.on_transcript = live._transcript_watch(tenant, call)
     live._sessions[call.id] = session
     model.on_tool = live._tool_handler(tenant, call)
@@ -648,7 +650,6 @@ _FEMALE_ADDRESS = turns_mod._phrases(
     "chahti hain", "sakti hain", "karti hain", "rakhti hain", "batati hain", "chahengi",
     "batayengi", "karengi", "kahengi", "sahiba",
 )
-_SPOKEN_AMOUNT = re.compile(r"\b(\d+(?:\.\d+)?)\s*(crore|lakh|hazar)\b", re.I)
 #: A rupee amount said as digits: with thousands commas and no unit after it
 #: ("8,990,000"), or digits followed by a currency word ("8990000 rupay").
 #: A registration number, a mileage in kilometres or a reference is neither.
@@ -663,21 +664,7 @@ _SHORT_SAID = turns_mod._phrases("11", "gyarah", "gyara", "digits", "digit", "do
 
 def spoken_amounts(text: str) -> list[str]:
     """Each rupee amount said in words: "1 crore 47 lakh 90 hazar"."""
-    found: list[str] = []
-    current: list[str] = []
-    last_end = -1
-    for match in _SPOKEN_AMOUNT.finditer(text or ""):
-        between = text[last_end:match.start()] if last_end >= 0 else ""
-        if last_end >= 0 and between.strip() in ("", "aur", ","):
-            current.append(f"{match.group(1)} {match.group(2).lower()}")
-        else:
-            if current:
-                found.append(" ".join(current))
-            current = [f"{match.group(1)} {match.group(2).lower()}"]
-        last_end = match.end()
-    if current:
-        found.append(" ".join(current))
-    return found
+    return [phrase.strip() for phrase, _value in amounts.spoken_amounts(text)]
 
 
 def check(run: Run, material: str) -> list[str]:
@@ -703,13 +690,14 @@ def check(run: Run, material: str) -> list[str]:
             break
 
     # Only the material's facts, in words.
-    allowed = " ".join(material.split()).lower()
-    computed = " ".join(amounts.spoken_pkr(float(v)) for v in run.calculated
-                        if re.fullmatch(r"-?\d+(?:\.\d+)?", v.strip()))
+    allowed = amounts.material_values(material)
+    for result in run.calculated:
+        allowed.update(int(round(v)) for v in amounts.values_in(result))
+    allowed.update(int(round(v)) for v in amounts.values_in(run.caller_text()) if v >= 1_000)
     for turn in spoken:
-        for amount in spoken_amounts(turn.text):
-            if amount.lower() not in allowed and amount.lower() not in computed:
-                failures.append(f"an amount not in the material: {amount!r}")
+        for amount, value in amounts.spoken_amounts(turn.text):
+            if value not in allowed:
+                failures.append(f"an amount not in the material: {amount.strip()!r}")
         for digits in _DIGIT_AMOUNT.findall(turn.text):
             if phones.find_number(digits) is None and not digits.startswith("0"):
                 failures.append(f"an amount said in digits, not words: {digits!r}")

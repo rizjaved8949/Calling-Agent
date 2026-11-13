@@ -75,6 +75,7 @@ async def test_the_tool_answers_with_a_plain_number():
         Call(tenantId="t-1", channel=Channel.PHONE, direction=Direction.INBOUND,
              counterparty="+923001112222"),
     )
-    assert await handle("calculate", {"expression": "8,990,000-1,750,000"}) == "7240000"
+    assert await handle("calculate", {"expression": "8,990,000-1,750,000"}) == (
+        "7240000. Say exactly: 72 lakh 40 hazar rupay. Never re-word or round it.")
     answer = await handle("calculate", {"expression": "open('x')"})
     assert answer.startswith("Could not calculate that:")

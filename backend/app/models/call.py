@@ -175,6 +175,9 @@ class Call(BaseModel):
             # Hindi script as Roman Urdu, for rows saved before calls were
             # converted when they ended. See services/agent/script.py.
             "transcript": readable(self.transcript) or None,
+            # As the speech model wrote it, when the readable copy was rewritten
+            # from it; what to compare a recording against.
+            "transcriptOriginal": self.transcript_original or None,
             "summary": self.summary or None,
             "topic": self.topic or None,
             "language": self.language or None,

@@ -112,3 +112,163 @@ def wants_spoken(language: str, country_code: str) -> bool:
     keeps its figures as they are."""
     spoken = (language or "").strip().lower().startswith("ur")
     return spoken or re.sub(r"\D", "", country_code or "") == "92"
+
+
+# ---------------------------------------------------------------------------
+# Numbers as people say them
+# ---------------------------------------------------------------------------
+#
+# "bees lakh das hazar", "बीस लाख दस हज़ार", "بیس لاکھ دس ہزار" and "20 lakh 10
+# hazar" are the same number. Read as values, so a transcript rewritten by a
+# model can be checked for a changed number whichever way each side writes
+# it, and so what the agent says can be checked against what the material
+# and the calculator gave it.
+
+_UNIT_WORDS: dict[str, float] = {}
+
+
+def _unit(value: float, *words: str) -> None:
+    for word in words:
+        _UNIT_WORDS[word] = value
+
+
+_unit(0.5, "aadha", "adha", "आधा", "آدھا")
+_unit(1, "ek", "aik", "एक", "ایک")
+_unit(1.25, "sawa", "सवा", "سوا")
+_unit(1.5, "dedh", "derh", "डेढ़", "डेढ", "ڈیڑھ")
+_unit(2, "do", "दो", "دو")
+_unit(2.5, "dhai", "dhaai", "ढाई", "ڈھائی")
+_unit(3, "teen", "tin", "तीन", "تین")
+_unit(4, "chaar", "char", "चार", "چار")
+_unit(5, "paanch", "panch", "pach", "पांच", "पाँच", "پانچ")
+_unit(6, "chhe", "che", "chay", "chhay", "chha", "छह", "छः", "छे", "چھ", "چھے")
+_unit(7, "saat", "sat", "सात", "سات")
+_unit(8, "aath", "ath", "आठ", "آٹھ")
+_unit(9, "nau", "nou", "नौ", "نو")
+_unit(10, "das", "dus", "दस", "دس")
+_unit(11, "gyarah", "gyara", "ग्यारह", "گیارہ")
+_unit(12, "barah", "bara", "बारह", "بارہ")
+_unit(13, "terah", "tera", "तेरह", "تیرہ")
+_unit(14, "chaudah", "chauda", "चौदह", "چودہ")
+_unit(15, "pandrah", "pandra", "पंद्रह", "पन्द्रह", "پندرہ")
+_unit(16, "solah", "sola", "सोलह", "سولہ")
+_unit(17, "satrah", "satra", "सत्रह", "سترہ")
+_unit(18, "atharah", "athara", "अठारह", "اٹھارہ")
+_unit(19, "unnis", "unees", "उन्नीस", "انیس")
+_unit(20, "bees", "bis", "बीस", "بیس")
+_unit(21, "ikkis", "ekkis", "इक्कीस", "اکیس")
+_unit(22, "bais", "bayees", "बाईस", "بائیس")
+_unit(23, "teis", "tayees", "तेईस", "تئیس")
+_unit(24, "chaubis", "chobis", "चौबीस", "چوبیس")
+_unit(25, "pachis", "pachees", "पच्चीस", "پچیس")
+_unit(26, "chhabbis", "chabbis", "छब्बीस", "چھبیس")
+_unit(27, "sattais", "satais", "सत्ताईस", "ستائیس")
+_unit(28, "athais", "atthais", "अट्ठाईस", "اٹھائیس")
+_unit(29, "untis", "untees", "उनतीस", "انتیس")
+_unit(30, "tees", "tis", "तीस", "تیس")
+_unit(40, "chalis", "chaalis", "चालीस", "چالیس")
+_unit(50, "pachas", "pachaas", "पचास", "پچاس")
+_unit(60, "saath", "sath", "साठ", "ساٹھ")
+_unit(70, "sattar", "satter", "सत्तर", "ستر")
+_unit(80, "assi", "asi", "अस्सी", "اسی")
+_unit(90, "nabbe", "navve", "नब्बे", "نوے")
+
+_SCALE_WORDS: dict[str, int] = {}
+for _multiplier, _names in ((100, ("sau", "sao", "सौ", "سو")),
+                            (1_000, ("hazar", "hazaar", "hajar", "हज़ार", "हजार", "ہزار")),
+                            (100_000, ("lakh", "laakh", "lac", "lakhs", "लाख", "لاکھ")),
+                            (10_000_000, ("crore", "crores", "karod", "karor", "करोड़", "करोड", "کروڑ"))):
+    for _name in _names:
+        _SCALE_WORDS[_name] = _multiplier
+
+_DEVANAGARI_DIGITS = {chr(0x0966 + i): str(i) for i in range(10)}
+_URDU_DIGITS = {chr(0x06F0 + i): str(i) for i in range(10)}
+_URDU_DIGITS.update({chr(0x0660 + i): str(i) for i in range(10)})
+#: A number with its commas and decimals, or a word. `\w` alone drops the
+#: vowel signs and nuktas of Devanagari and Urdu, so "बीस" would come apart
+#: into "ब" and "स"; the letter blocks are named, without their punctuation.
+_TOKEN = re.compile(
+    r"\d[\d,]*\d(?:\.\d+)?|\d(?:\.\d+)?"
+    r"|[\wऀ-ॣ०-ॿ؀-؋؍-؞ؠ-ۓە-ۿ]+")
+
+
+def _western_digits(text: str) -> str:
+    return "".join(_DEVANAGARI_DIGITS.get(ch, _URDU_DIGITS.get(ch, ch)) for ch in text or "")
+
+
+def _spoken_groups(text: str) -> list[tuple[int, int, float, bool]]:
+    """Each number in `text`: (start, end, value, said with a scale of a
+    thousand or more). Digits and words alike, with hazar, lakh and crore
+    multiplying what comes before them: "1 crore 47 lakh 90 hazar"."""
+    plain = _western_digits(text)
+    groups: list[tuple[int, int, float, bool]] = []
+    total = 0.0
+    pending: float | None = None
+    start = end = -1
+    big = False
+    in_number = False
+
+    def flush() -> None:
+        nonlocal total, pending, start, end, big, in_number
+        if in_number:
+            groups.append((start, end, total + (pending or 0.0), big))
+        total, pending, start, end, big, in_number = 0.0, None, -1, -1, False, False
+
+    for match in _TOKEN.finditer(plain):
+        token = match.group(0)
+        lowered = token.lower()
+        if lowered in _SCALE_WORDS:
+            scale = _SCALE_WORDS[lowered]
+            if not in_number:
+                start = match.start()
+            total += (pending if pending is not None else 1.0) * scale
+            pending = None
+            end = match.end()
+            big = big or scale >= 1_000
+            in_number = True
+            continue
+        value: float | None = None
+        if token[0].isdigit():
+            try:
+                value = float(token.replace(",", ""))
+            except ValueError:
+                value = None
+        elif lowered in _UNIT_WORDS:
+            value = _UNIT_WORDS[lowered]
+        if value is None:
+            flush()
+            continue
+        if pending is not None:
+            flush()                                   # "do teen": two numbers
+        if not in_number:
+            start = match.start()
+        pending = value
+        end = match.end()
+        in_number = True
+    flush()
+    return groups
+
+
+def values_in(text: str) -> list[float]:
+    """Every number said in `text`, digits or words, as values."""
+    return [round(value, 2) for _s, _e, value, _big in _spoken_groups(text)]
+
+
+def spoken_amounts(text: str) -> list[tuple[str, int]]:
+    """Each amount said with hazar, lakh or crore: ("20 lakh 10 hazar", 2010000)."""
+    return [(text[s:e], int(round(value))) for s, e, value, big in _spoken_groups(text)
+            if big and value >= 1_000]
+
+
+def material_values(text: str) -> set[int]:
+    """Every rupee amount the material states: marked with a currency, or
+    said in hazar, lakh or crore."""
+    found: set[int] = set()
+    for pattern in (_PREFIXED, _SUFFIXED):
+        for match in pattern.finditer(text or ""):
+            value = _value(match.group("num"), match.group("scale"))
+            if value is not None:
+                found.add(int(round(value)))
+    for _phrase, value in spoken_amounts(text or ""):
+        found.add(value)
+    return found
